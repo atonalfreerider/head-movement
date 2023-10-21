@@ -21,14 +21,33 @@ public class SqliteInput : MonoBehaviour
     int FRAME_MAX = -1;
     int MAX_DANCERS = -1;
 
-    List<string> jointLabels = new()
+    enum Joints
     {
-        "Head_top", "Thorax", "R_Shoulder", "R_Elbow", "R_Wrist", "L_Shoulder", "L_Elbow", "L_Wrist", "R_Hip", "R_Knee",
-        "R_Ankle", "L_Hip", "L_Knee", "L_Ankle", "Pelvis", "Spine", "Head", "R_Hand", "L_Hand", "R_Toe", "L_Toe"
-    };
+        Head_top = 0,
+        Thorax = 1,
+        R_Shoulder = 2,
+        R_Elbow = 3,
+        R_Wrist = 4,
+        L_Shoulder = 5,
+        L_Elbow = 6,
+        L_Wrist = 7,
+        R_Hip = 8,
+        R_Knee = 9,
+        R_Ankle = 10,
+        L_Hip = 11,
+        L_Knee = 12,
+        L_Ankle = 13,
+        Pelvis = 14,
+        Spine = 15,
+        Head = 16,
+        R_Hand = 17,
+        L_Hand = 18,
+        R_Toe = 19,
+        L_Toe = 20
+    }
 
-    Dictionary<int, Dictionary<int, List<Vector3>>> DancersByFrame;
-    readonly Dictionary<int, List<Polygon>> JointsByDancer = new();
+    Dancer Lead;
+    Dancer Follow;
     readonly List<StaticLink> AllLinks = new();
 
     void Start()
@@ -42,55 +61,55 @@ public class SqliteInput : MonoBehaviour
             }
         }
 
-        DancersByFrame = ReadFrameFromDb(DbPath);
+        Lead = ReadFrameFromDb(DbPath, "lead");
+        Follow = ReadFrameFromDb(DbPath, "follow");
 
         // initiate dance skeletons
-        for (int i = 0; i <= MAX_DANCERS; i++)
+        for (int i = 0; i < 2; i++)
         {
-            List<Polygon> joints = new List<Polygon>();
-            JointsByDancer.Add(i, joints);
+            Dancer dancer = i == 0 ? Lead : Follow;
+
             for (int j = 0; j < 21; j++)
             {
                 Polygon tetra = Instantiate(PolygonFactory.Instance.tetra);
                 tetra.gameObject.SetActive(true);
                 tetra.transform.SetParent(transform, false);
                 tetra.transform.localScale = Vector3.one * .2f;
-                joints.Add(tetra);
+                dancer.Joints.Add(tetra);
             }
-
-
-            AllLinks.Add(LinkFromTo(0, 16, joints));
-            AllLinks.Add(LinkFromTo(16, 1, joints));
-            AllLinks.Add(LinkFromTo(1, 15, joints));
-            AllLinks.Add(LinkFromTo(15, 14, joints));
-            AllLinks.Add(LinkFromTo(14, 8, joints));
-            AllLinks.Add(LinkFromTo(14, 11, joints));
-            AllLinks.Add(LinkFromTo(8, 9, joints));
-            AllLinks.Add(LinkFromTo(9, 10, joints));
-            AllLinks.Add(LinkFromTo(10, 19, joints));
-            AllLinks.Add(LinkFromTo(11, 12, joints));
-            AllLinks.Add(LinkFromTo(12, 13, joints));
-            AllLinks.Add(LinkFromTo(13, 20, joints));
-            AllLinks.Add(LinkFromTo(1, 2, joints));
-            AllLinks.Add(LinkFromTo(2, 3, joints));
-            AllLinks.Add(LinkFromTo(3, 4, joints));
-            AllLinks.Add(LinkFromTo(4, 17, joints));
-            AllLinks.Add(LinkFromTo(1, 5, joints));
-            AllLinks.Add(LinkFromTo(5, 6, joints));
-            AllLinks.Add(LinkFromTo(6, 7, joints));
-            AllLinks.Add(LinkFromTo(7, 18, joints));
+            
+            AllLinks.Add(LinkFromTo((int)Joints.Head_top, (int)Joints.Head, dancer));
+            AllLinks.Add(LinkFromTo((int)Joints.Head, (int)Joints.Thorax, dancer));
+            AllLinks.Add(LinkFromTo((int)Joints.Thorax, (int)Joints.Spine, dancer));
+            AllLinks.Add(LinkFromTo((int)Joints.Spine, (int)Joints.Pelvis, dancer));
+            AllLinks.Add(LinkFromTo((int)Joints.Pelvis, (int)Joints.R_Hip, dancer));
+            AllLinks.Add(LinkFromTo((int)Joints.Pelvis, (int)Joints.L_Hip, dancer));
+            AllLinks.Add(LinkFromTo((int)Joints.R_Hip, (int)Joints.R_Knee, dancer));
+            AllLinks.Add(LinkFromTo((int)Joints.R_Knee, (int)Joints.R_Ankle, dancer));
+            AllLinks.Add(LinkFromTo((int)Joints.R_Ankle, (int)Joints.R_Toe, dancer));
+            AllLinks.Add(LinkFromTo((int)Joints.L_Hip, (int)Joints.L_Knee, dancer));
+            AllLinks.Add(LinkFromTo((int)Joints.L_Knee, (int)Joints.L_Ankle, dancer));
+            AllLinks.Add(LinkFromTo((int)Joints.L_Ankle, (int)Joints.L_Toe, dancer));
+            AllLinks.Add(LinkFromTo((int)Joints.Thorax, (int)Joints.R_Shoulder, dancer));
+            AllLinks.Add(LinkFromTo((int)Joints.R_Shoulder, (int)Joints.R_Elbow, dancer));
+            AllLinks.Add(LinkFromTo((int)Joints.R_Elbow, (int)Joints.R_Wrist, dancer));
+            AllLinks.Add(LinkFromTo((int)Joints.R_Wrist, (int)Joints.R_Hand, dancer));
+            AllLinks.Add(LinkFromTo((int)Joints.Thorax, (int)Joints.L_Shoulder, dancer));
+            AllLinks.Add(LinkFromTo((int)Joints.L_Shoulder, (int)Joints.L_Elbow, dancer));
+            AllLinks.Add(LinkFromTo((int)Joints.L_Elbow, (int)Joints.L_Wrist, dancer));
+            AllLinks.Add(LinkFromTo((int)Joints.L_Wrist, (int)Joints.L_Hand, dancer));
         }
 
         StartCoroutine(Iterate(0));
     }
 
-    StaticLink LinkFromTo(int index1, int index2, IReadOnlyList<Polygon> joints)
+    StaticLink LinkFromTo(int index1, int index2, Dancer dancer)
     {
         StaticLink staticLink = Instantiate(StaticLink.prototypeStaticLink);
         staticLink.gameObject.SetActive(true);
+        staticLink.SetColor(dancer.Role == Role.Lead ? Viridis.ViridisColor(0) : Viridis.ViridisColor(1));
         staticLink.transform.SetParent(transform, false);
-        staticLink.from = joints[0].transform;
-        staticLink.LinkFromTo(joints[index1].transform, joints[index2].transform);
+        staticLink.LinkFromTo(dancer.Joints[index1].transform, dancer.Joints[index2].transform);
         return staticLink;
     }
 
@@ -101,15 +120,7 @@ public class SqliteInput : MonoBehaviour
             frameNumber = 0;
         }
 
-        Dictionary<int, List<Vector3>> dancersInFrame = DancersByFrame[frameNumber];
-        foreach ((int dancerId, List<Vector3> dancer) in dancersInFrame)
-        {
-            List<Polygon> joints = JointsByDancer[dancerId];
-            for (int i = 0; i < dancer.Count; i++)
-            {
-                joints[i].transform.localPosition = dancer[i];
-            }
-        }
+        Lead.SetPoseToFrame(frameNumber);
 
         foreach (StaticLink staticLink in AllLinks)
         {
@@ -122,9 +133,9 @@ public class SqliteInput : MonoBehaviour
         StartCoroutine(Iterate(frameNumber));
     }
 
-    Dictionary<int, Dictionary<int, List<Vector3>>> ReadFrameFromDb(string dbPath)
+    Dancer ReadFrameFromDb(string dbPath, string role)
     {
-        Dictionary<int, Dictionary<int, List<Vector3>>> dancersByFrame = new();
+        Dancer dancer = new(role == "lead" ? Role.Lead : Role.Follow);
         string connectionString = "URI=file:" + dbPath;
 
         using (IDbConnection conn = new SqliteConnection(connectionString))
@@ -133,12 +144,12 @@ public class SqliteInput : MonoBehaviour
 
             List<string> columnNames = new List<string>
             {
-                "id", "frame_id", "dancer_id", "position_x", "position_y", "position_z"
+                "id", "frame_id", "position_x", "position_y", "position_z"
             };
 
             using (IDbCommand cmd = conn.CreateCommand())
             {
-                cmd.CommandText = CommandString(columnNames, "frames");
+                cmd.CommandText = CommandString(columnNames, role);
 
                 using (IDataReader reader = cmd.ExecuteReader())
                 {
@@ -151,38 +162,24 @@ public class SqliteInput : MonoBehaviour
                             FRAME_MAX = frameId;
                         }
 
-                        int dancerId = reader.GetInt32(indexes["dancer_id"]);
-                        if (dancerId > MAX_DANCERS)
-                        {
-                            MAX_DANCERS = frameId;
-                        }
-
                         Vector3 position = new(
                             reader.GetFloat(indexes["position_x"]),
                             reader.GetFloat(indexes["position_y"]),
                             reader.GetFloat(indexes["position_z"]));
 
-                        dancersByFrame.TryGetValue(frameId, out Dictionary<int, List<Vector3>> dancersInFrame);
-                        if (dancersInFrame == null)
+                        dancer.PosesByFrame.TryGetValue(frameId, out List<Vector3> pose);
+                        if (pose == null)
                         {
-                            dancersInFrame = new();
-                            dancersByFrame.Add(frameId, dancersInFrame);
+                            pose = new List<Vector3>();
+                            dancer.PosesByFrame.Add(frameId, pose);
                         }
-
-                        dancersInFrame.TryGetValue(dancerId, out List<Vector3> dancer);
-                        if (dancer == null)
-                        {
-                            dancer = new();
-                            dancersInFrame.Add(dancerId, dancer);
-                        }
-
-                        dancer.Add(position);
+                        pose.Add(position);
                     }
                 }
             }
         }
 
-        return dancersByFrame;
+        return dancer;
     }
 
     static string CommandString(IEnumerable<string> columnNames, string tableName)
