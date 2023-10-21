@@ -9,7 +9,7 @@ namespace Shapes.Lines
         public Transform to;
 
         // Calibration Vars
-        public float LW = .1f;
+        public float LW = .01f;
         float length;
         public bool needsGlobalScale = false;
 
