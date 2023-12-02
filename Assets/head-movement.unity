@@ -477,8 +477,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 4966719baa26e4b0e8231a24d9bd491a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  m_FocusMode: 1
-  m_LightEstimationMode: 0
+  m_FocusMode: -1
+  m_LightEstimationMode: -1
   m_AutoFocus: 1
   m_LightEstimation: 0
   m_FacingDirection: 1
@@ -606,8 +606,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: cf10bc54174c4483802f2fbb17bca0be, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  Figure1JsonPath: C:\Users\john\Desktop\figure1.json
-  Figure2JsonPath: C:\Users\john\Desktop\figure2.json
 --- !u!1 &1260088892
 GameObject:
   m_ObjectHideFlags: 0

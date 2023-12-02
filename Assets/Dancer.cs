@@ -43,11 +43,12 @@ public class Dancer : MonoBehaviour
     {
         for (int j = 0; j < Enum.GetNames(typeof(Joints)).Length; j++)
         {
-            Polygon tetra = Instantiate(PolygonFactory.Instance.icosahedron0);
-            tetra.gameObject.SetActive(true);
-            tetra.transform.SetParent(transform, false);
-            tetra.transform.localScale = Vector3.one * .02f;
-            jointPolys.Add(tetra);
+            Polygon joint = Instantiate(PolygonFactory.Instance.icosahedron0);
+            joint.gameObject.SetActive(true);
+            joint.transform.SetParent(transform, false);
+            joint.transform.localScale = Vector3.one * .02f;
+            joint.SetColor(Cividis.CividisColor(.7f));
+            jointPolys.Add(joint);
         }
 
         jointLinks.Add(LinkFromTo((int)Joints.Nose, (int)Joints.L_Eye));
@@ -75,7 +76,7 @@ public class Dancer : MonoBehaviour
     {
         StaticLink staticLink = Instantiate(StaticLink.prototypeStaticLink);
         staticLink.gameObject.SetActive(true);
-        staticLink.SetColor(Cividis.CividisColor(.1f));
+        staticLink.SetColor(Cividis.CividisColor(.8f));
         staticLink.transform.SetParent(transform, false);
         staticLink.LinkFromTo(jointPolys[index1].transform, jointPolys[index2].transform);
         return staticLink;

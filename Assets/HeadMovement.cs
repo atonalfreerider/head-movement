@@ -8,8 +8,6 @@ using UnityEngine;
 
 public class HeadMovement : MonoBehaviour
 {
-    [Header("Input")] public string Figure1JsonPath, Figure2JsonPath;
-
     static readonly string assetPath = Application.streamingAssetsPath;
 
     int FRAME_MAX = -1;
@@ -19,8 +17,8 @@ public class HeadMovement : MonoBehaviour
 
     void Awake()
     {
-        Lead = ReadAllPosesFrom(Figure1JsonPath, "lead");
-        Follow = ReadAllPosesFrom(Figure2JsonPath, "follow");
+        Lead = ReadAllPosesFrom(Path.Combine(assetPath, "figure1.json"), "lead");
+        Follow = ReadAllPosesFrom(Path.Combine(assetPath, "figure2.json"), "follow");
     }
 
     void Start()
