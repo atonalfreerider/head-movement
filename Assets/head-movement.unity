@@ -553,7 +553,7 @@ GameObject:
   - component: {fileID: 1133368077}
   - component: {fileID: 1133368080}
   m_Layer: 0
-  m_Name: dance-flow
+  m_Name: HeadMovement
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -618,7 +618,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: cf10bc54174c4483802f2fbb17bca0be, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  DbPath: C:\Users\john\Desktop\merge.db
+  Figure1JsonPath: C:\Users\john\Desktop\figure1.json
+  Figure2JsonPath: C:\Users\john\Desktop\figure2.json
 --- !u!1 &1260088892
 GameObject:
   m_ObjectHideFlags: 0
@@ -747,8 +748,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: b6319273b4654e5bac65b4cffe00479f, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  RightControllerEvents: {fileID: 0}
-  LeftControllerEvents: {fileID: 0}
+  RightControllerEvents: {fileID: 1774969080}
+  LeftControllerEvents: {fileID: 1260088895}
 --- !u!1 &1774969077
 GameObject:
   m_ObjectHideFlags: 0

@@ -4,17 +4,14 @@ using System.Collections.Generic;
 using System.Data;
 using System.IO;
 using System.Linq;
-using Mono.Data.Sqlite;
+using Newtonsoft.Json;
 using Shapes;
 using Shapes.Lines;
 using UnityEngine;
 
-/// <summary>
-/// Sqlite db needs to have a frames table
-/// </summary>
-public class SqliteInput : MonoBehaviour
+public class HeadMovement : MonoBehaviour
 {
-    [Header("Input")] public string DbPath;
+    [Header("Input")] public string Figure1JsonPath, Figure2JsonPath;
 
     static readonly string assetPath = Application.streamingAssetsPath;
 
@@ -48,17 +45,8 @@ public class SqliteInput : MonoBehaviour
 
     void Start()
     {
-        if (string.IsNullOrEmpty(DbPath))
-        {
-            DbPath = AssetPathFor("align.db");
-            if (!File.Exists(DbPath))
-            {
-                return;
-            }
-        }
-
-        Lead = ReadFrameFromDb(DbPath, "lead");
-        Follow = ReadFrameFromDb(DbPath, "follow");
+        Lead = ReadAllPosesFrom(Figure1JsonPath, "lead");
+        Follow = ReadAllPosesFrom(Figure2JsonPath, "follow");
 
         // initiate dance skeletons
         for (int i = 0; i < 2; i++)
@@ -67,7 +55,7 @@ public class SqliteInput : MonoBehaviour
 
             for (int j = 0; j < 17; j++)
             {
-                Polygon tetra = Instantiate(PolygonFactory.Instance.tetra);
+                Polygon tetra = Instantiate(PolygonFactory.Instance.icosahedron0);
                 tetra.gameObject.SetActive(true);
                 tetra.transform.SetParent(transform, false);
                 tetra.transform.localScale = Vector3.one * .02f;
@@ -110,7 +98,7 @@ public class SqliteInput : MonoBehaviour
 
     IEnumerator Iterate(int frameNumber)
     {
-        if (frameNumber > FRAME_MAX)
+        if (frameNumber >= FRAME_MAX)
         {
             frameNumber = 0;
         }
@@ -129,91 +117,25 @@ public class SqliteInput : MonoBehaviour
         StartCoroutine(Iterate(frameNumber));
     }
 
-    Dancer ReadFrameFromDb(string dbPath, string role)
+    Dancer ReadAllPosesFrom(string jsonPath, string role)
     {
         Dancer dancer = new(role == "lead" ? Role.Lead : Role.Follow);
-        string connectionString = "URI=file:" + dbPath;
 
-        using (IDbConnection conn = new SqliteConnection(connectionString))
-        {
-            conn.Open();
+        string jsonString = File.ReadAllText(jsonPath);
+        List<List<Float3>> allPoses = JsonConvert.DeserializeObject<List<List<Float3>>>(jsonString);
+        List<List<Vector3>> allPosesVector3 = allPoses.Select(pose => pose.Select(float3 => new Vector3(float3.x, float3.y, float3.z)).ToList()).ToList();
+        dancer.PosesByFrame = allPosesVector3;
 
-            List<string> columnNames = new List<string>
-            {
-                "id", "frame_id", "position_x", "position_y", "position_z"
-            };
-
-            using (IDbCommand cmd = conn.CreateCommand())
-            {
-                cmd.CommandText = CommandString(columnNames, role);
-
-                using (IDataReader reader = cmd.ExecuteReader())
-                {
-                    Dictionary<string, int> indexes = ColumnIndexes(reader, columnNames);
-                    while (reader.Read())
-                    {
-                        int frameId = reader.GetInt32(indexes["frame_id"]);
-                        if (frameId > FRAME_MAX)
-                        {
-                            FRAME_MAX = frameId;
-                        }
-
-                        Vector3 position = new(
-                            reader.GetFloat(indexes["position_x"]),
-                            reader.GetFloat(indexes["position_y"]),
-                            reader.GetFloat(indexes["position_z"]));
-                        
-
-                        dancer.PosesByFrame.TryGetValue(frameId, out List<Vector3> pose);
-                        if (pose == null)
-                        {
-                            pose = new List<Vector3>();
-                            dancer.PosesByFrame.Add(frameId, pose);
-                        }
-                        pose.Add(position);
-                    }
-                }
-            }
-        }
+        FRAME_MAX = allPosesVector3.Count;
 
         return dancer;
     }
-
-    static string CommandString(IEnumerable<string> columnNames, string tableName)
+    
+    [Serializable]
+    class Float3
     {
-        string cmd = columnNames.Aggregate(
-            "SELECT ",
-            (current, columnName) => current + $"{columnName}, ");
-
-        // remove last comma
-        cmd = cmd.Substring(0, cmd.Length - 2) + " ";
-        cmd += $"FROM {tableName}";
-
-        return cmd;
-    }
-
-    static Dictionary<string, int> ColumnIndexes(IDataRecord reader, IEnumerable<string> columnNames)
-    {
-        return columnNames
-            .ToDictionary(
-                columnName => columnName,
-                reader.GetOrdinal);
-    }
-
-    static string AssetPathFor(string asset)
-    {
-        return NormalizedPath(Path.Combine(assetPath, asset));
-    }
-
-    static string NormalizedPath(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path)) return "";
-
-        Uri uri = new(path, UriKind.RelativeOrAbsolute);
-        string returnUri = uri.IsAbsoluteUri
-            ? uri.LocalPath
-            : Path.GetFullPath(new Uri(Path.Combine(Application.dataPath, path)).AbsolutePath);
-        returnUri = Uri.UnescapeDataString(returnUri);
-        return returnUri;
+        public float x;
+        public float y;
+        public float z;
     }
 }

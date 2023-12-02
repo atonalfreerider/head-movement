@@ -10,7 +10,7 @@ public enum Role
 
 public class Dancer
 {
-    public readonly Dictionary<int, List<Vector3>> PosesByFrame = new();
+    public List<List<Vector3>> PosesByFrame = new();
     public readonly List<Polygon> Joints = new();
     public readonly Role Role;
     
@@ -21,7 +21,7 @@ public class Dancer
         
     public void SetPoseToFrame(int frameNumber)
     {
-        if (!PosesByFrame.TryGetValue(frameNumber, out List<Vector3> pose)) return;
+        List<Vector3> pose = PosesByFrame[frameNumber];
         
         for (int i = 0; i < pose.Count; i++)
         {
