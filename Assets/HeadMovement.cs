@@ -6,6 +6,7 @@ using System.Linq;
 using Newtonsoft.Json;
 using UnityEngine;
 
+[RequireComponent(typeof(ContactDetection))]
 public class HeadMovement : MonoBehaviour
 {
     static readonly string assetPath = Application.streamingAssetsPath;
@@ -15,10 +16,15 @@ public class HeadMovement : MonoBehaviour
     Dancer Lead;
     Dancer Follow;
 
+    ContactDetection contactDetection;
+
     void Awake()
     {
         Lead = ReadAllPosesFrom(Path.Combine(assetPath, "figure1.json"), "lead");
         Follow = ReadAllPosesFrom(Path.Combine(assetPath, "figure2.json"), "follow");
+        
+        contactDetection = GetComponent<ContactDetection>();
+        contactDetection.Init(Lead, Follow);
     }
 
     void Start()
@@ -35,6 +41,8 @@ public class HeadMovement : MonoBehaviour
 
         Lead.SetPoseToFrame(frameNumber);
         Follow.SetPoseToFrame(frameNumber);
+        
+        contactDetection.DetectContact(Lead.GetPoseAtFrame(frameNumber), Follow.GetPoseAtFrame(frameNumber));
 
         yield return new WaitForSeconds(.03f);
 
@@ -45,13 +53,12 @@ public class HeadMovement : MonoBehaviour
     Dancer ReadAllPosesFrom(string jsonPath, string role)
     {
         Dancer dancer = new GameObject(role).AddComponent<Dancer>();
-        dancer.Role = role == "lead" ? Role.Lead : Role.Follow;
 
         string jsonString = File.ReadAllText(jsonPath);
         List<List<Float3>> allPoses = JsonConvert.DeserializeObject<List<List<Float3>>>(jsonString);
         List<List<Vector3>> allPosesVector3 = allPoses
             .Select(pose => pose.Select(float3 => new Vector3(float3.x, float3.y, float3.z)).ToList()).ToList();
-        dancer.PosesByFrame = allPosesVector3;
+        dancer.Init(role == "lead" ? Role.Lead : Role.Follow, allPosesVector3);
 
         FRAME_MAX = allPosesVector3.Count;
 

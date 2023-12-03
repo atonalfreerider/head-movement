@@ -12,7 +12,7 @@ public enum Role
 
 public class Dancer : MonoBehaviour
 {
-    enum CocoJoint
+    public enum CocoJoint
     {
         Nose = 0,
         L_Eye = 1,
@@ -33,25 +33,30 @@ public class Dancer : MonoBehaviour
         R_Ankle = 16
     }
 
-    public List<List<Vector3>> PosesByFrame = new();
-    readonly List<Polygon> jointPolys = new();
-    public Role Role;
+    List<List<Vector3>> PosesByFrame = new();
+    readonly Dictionary<int, Polygon> jointPolys = new();
+    StaticLink spinePoly;
+    StaticLink followSpineExtension;
+    StaticLink followHeadAxis;
+    Role Role;
 
     readonly List<StaticLink> jointLinks = new();
 
     FootScorpion leftFootScorpion;
     FootScorpion rightFootScorpion;
 
+    Polygon chestTri;
+
     void Awake()
     {
-        for (int j = 0; j < Enum.GetNames(typeof(CocoJoint)).Length; j++)
+        for (int j = 5; j < Enum.GetNames(typeof(CocoJoint)).Length; j++)
         {
             Polygon joint = Instantiate(PolygonFactory.Instance.icosahedron0);
             joint.gameObject.SetActive(true);
             joint.transform.SetParent(transform, false);
             joint.transform.localScale = Vector3.one * .02f;
             joint.SetColor(Cividis.CividisColor(.7f));
-            jointPolys.Add(joint);
+            jointPolys.Add(j, joint);
         }
 
         jointLinks.Add(LinkFromTo((int)CocoJoint.R_Hip, (int)CocoJoint.R_Knee));
@@ -64,11 +69,46 @@ public class Dancer : MonoBehaviour
         jointLinks.Add(LinkFromTo((int)CocoJoint.L_Elbow, (int)CocoJoint.L_Wrist));
         jointLinks.Add(LinkFromTo((int)CocoJoint.R_Shoulder, (int)CocoJoint.L_Shoulder));
         jointLinks.Add(LinkFromTo((int)CocoJoint.R_Hip, (int)CocoJoint.L_Hip));
-        jointLinks.Add(LinkFromTo((int)CocoJoint.R_Shoulder, (int)CocoJoint.R_Hip));
-        jointLinks.Add(LinkFromTo((int)CocoJoint.L_Shoulder, (int)CocoJoint.L_Hip));
 
         leftFootScorpion = gameObject.AddComponent<FootScorpion>();
         rightFootScorpion = gameObject.AddComponent<FootScorpion>();
+        
+        chestTri = Instantiate(PolygonFactory.Instance.tri);
+        chestTri.gameObject.SetActive(false);
+        chestTri.transform.SetParent(transform, false);
+        chestTri.SetColor(Cividis.CividisColor(.5f));
+        
+        spinePoly = Instantiate(StaticLink.prototypeStaticLink);
+        spinePoly.gameObject.SetActive(true);
+        spinePoly.SetColor(Cividis.CividisColor(.8f));
+        spinePoly.transform.SetParent(transform, false);
+        
+        followSpineExtension = Instantiate(StaticLink.prototypeStaticLink);
+        followSpineExtension.gameObject.SetActive(false);
+        followSpineExtension.LW = .005f;
+        followSpineExtension.SetColor(Cividis.CividisColor(.8f));
+        followSpineExtension.transform.SetParent(transform, false);
+        
+        followHeadAxis = Instantiate(StaticLink.prototypeStaticLink);
+        followHeadAxis.gameObject.SetActive(false);
+        followHeadAxis.SetColor(Cividis.CividisColor(.8f));
+        followHeadAxis.transform.SetParent(transform, false);
+    }
+    
+    public void Init(Role role, List<List<Vector3>> posesByFrame)
+    {
+        Role = role;
+        PosesByFrame = posesByFrame;
+        
+        if (Role == Role.Lead)
+        {
+            chestTri.gameObject.SetActive(true);
+        }
+        else
+        {
+            followSpineExtension.gameObject.SetActive(true);
+            followHeadAxis.gameObject.SetActive(true);
+        }
     }
 
     StaticLink LinkFromTo(int index1, int index2)
@@ -83,9 +123,10 @@ public class Dancer : MonoBehaviour
 
     public void SetPoseToFrame(int frameNumber)
     {
+        // SKELETON POSE
         List<Vector3> pose = PosesByFrame[frameNumber];
 
-        for (int i = 0; i < pose.Count; i++)
+        for (int i = 5; i < pose.Count; i++)
         {
             jointPolys[i].transform.localPosition = pose[i];
         }
@@ -94,7 +135,35 @@ public class Dancer : MonoBehaviour
         {
             staticLink.UpdateLink();
         }
+        
+        // CHEST AND SPINE
+        Vector3 lShoulder = pose[(int)CocoJoint.L_Shoulder];
+        Vector3 rShoulder = pose[(int)CocoJoint.R_Shoulder];
+        Vector3 shoulderMidpoint = (lShoulder + rShoulder) / 2;
+        
+        chestTri.transform.position = shoulderMidpoint;
+        
+        Vector3 hipMidpoint = (pose[(int)CocoJoint.L_Hip] +  pose[(int)CocoJoint.R_Hip]) / 2;
+        
+        spinePoly.DrawFromTo(hipMidpoint, shoulderMidpoint);
+        
+        Vector3 bodyAxis = hipMidpoint - shoulderMidpoint;
+        Vector3 shoulderVector = lShoulder - rShoulder;
+        Vector3 forwardVector = Vector3.Cross(shoulderVector, bodyAxis);
+        Vector3 upVector = Vector3.Cross(shoulderVector, forwardVector).normalized;
+        forwardVector = Vector3.Cross(upVector, shoulderVector).normalized;
 
+        chestTri.transform.rotation = Quaternion.LookRotation(forwardVector, upVector);
+        chestTri.transform.localScale = new Vector3(Vector3.Distance(lShoulder, rShoulder) * .5f, .01f, .085f);
+        chestTri.transform.Translate(Vector3.forward * .075f);
+        
+        followSpineExtension.DrawFromTo(shoulderMidpoint, shoulderMidpoint + upVector * .1f);
+
+        Vector3 headCenter = (pose[(int)CocoJoint.L_Ear] + pose[(int)CocoJoint.R_Ear]) / 2;
+        
+        followHeadAxis.DrawFromTo(shoulderMidpoint, headCenter);
+                
+        // FOOT SCORPION
         leftFootScorpion.SyncToAnkleAndKnee(
             pose[(int)CocoJoint.L_Ankle],
             pose[(int)CocoJoint.L_Knee],
@@ -147,5 +216,15 @@ public class Dancer : MonoBehaviour
             leftFootScorpion.SetGroundTriState(false);
             rightFootScorpion.SetGroundTriState(true);
         }
+    }
+    
+    public void SetJointTemperature(int jointIndex, float temperature)
+    {
+        jointPolys[jointIndex].SetColor(Cividis.CividisColor(1 - temperature));
+    }
+    
+    public List<Vector3> GetPoseAtFrame(int frameNumber)
+    {
+        return PosesByFrame[frameNumber];
     }
 }
