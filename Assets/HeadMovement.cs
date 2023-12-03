@@ -5,11 +5,14 @@ using System.IO;
 using System.Linq;
 using Newtonsoft.Json;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 [RequireComponent(typeof(ContactDetection))]
 public class HeadMovement : MonoBehaviour
 {
     static readonly string assetPath = Application.streamingAssetsPath;
+
+    public static HeadMovement Instance;
 
     int FRAME_MAX = -1;
 
@@ -18,36 +21,40 @@ public class HeadMovement : MonoBehaviour
 
     ContactDetection contactDetection;
 
+    float delayBetweenFrames = .03f;
+    int frameNumber = 0;
+
+    Coroutine animator;
+
     void Awake()
     {
+        Instance = this;
         Lead = ReadAllPosesFrom(Path.Combine(assetPath, "figure1.json"), "lead");
         Follow = ReadAllPosesFrom(Path.Combine(assetPath, "figure2.json"), "follow");
-        
+
         contactDetection = GetComponent<ContactDetection>();
         contactDetection.Init(Lead, Follow);
     }
 
     void Start()
     {
-        StartCoroutine(Iterate(0));
+        Resume();
     }
 
-    IEnumerator Iterate(int frameNumber)
+    IEnumerator Iterate()
     {
         if (frameNumber >= FRAME_MAX)
         {
             frameNumber = 0;
         }
 
-        Lead.SetPoseToFrame(frameNumber);
-        Follow.SetPoseToFrame(frameNumber);
-        
-        contactDetection.DetectContact(Lead.GetPoseAtFrame(frameNumber), Follow.GetPoseAtFrame(frameNumber));
+        SetToFrameNumber();
 
-        yield return new WaitForSeconds(.03f);
+        yield return new WaitForSeconds(delayBetweenFrames);
 
         frameNumber++;
-        StartCoroutine(Iterate(frameNumber));
+
+        Resume();
     }
 
     Dancer ReadAllPosesFrom(string jsonPath, string role)
@@ -63,6 +70,100 @@ public class HeadMovement : MonoBehaviour
         FRAME_MAX = allPosesVector3.Count;
 
         return dancer;
+    }
+
+    void SetToFrameNumber()
+    {
+        Lead.SetPoseToFrame(frameNumber);
+        Follow.SetPoseToFrame(frameNumber);
+
+        contactDetection.DetectContact(frameNumber);
+    }
+
+    public void SlowDown()
+    {
+        if (animator != null)
+        {
+            // play mode
+            delayBetweenFrames += .01f;
+        }
+        else
+        {
+            // pause mode. single iteration
+            frameNumber--;
+            if (frameNumber < 0)
+            {
+                frameNumber = 0;
+            }
+
+            SetToFrameNumber();
+        }
+    }
+
+    public void SpeedUp()
+    {
+        if (animator != null)
+        {
+            // play mode
+            delayBetweenFrames -= .01f;
+            if (delayBetweenFrames < .01f)
+            {
+                delayBetweenFrames = .01f;
+            }
+        }
+        else
+        {
+            // pause mode. single iteration
+            frameNumber++;
+            if (frameNumber >= FRAME_MAX)
+            {
+                frameNumber = 0;
+            }
+            
+            SetToFrameNumber();
+        }
+    }
+
+    public void TogglePlayPause()
+    {
+        if (animator == null)
+        {
+            Resume();
+        }
+        else
+        {
+            Pause();
+        }
+    }
+
+    void Pause()
+    {
+        if (animator != null)
+        {
+            StopCoroutine(animator);
+            animator = null;
+        }
+    }
+
+    void Resume()
+    {
+        animator = StartCoroutine(Iterate());
+    }
+
+    void Update()
+    {
+        if (Keyboard.current.rightArrowKey.wasPressedThisFrame)
+        {
+            SpeedUp();
+        }
+        else if (Keyboard.current.leftArrowKey.wasPressedThisFrame)
+        {
+            SlowDown();
+        }
+        else if (Keyboard.current.spaceKey.wasPressedThisFrame)
+        {
+            TogglePlayPause();
+        }
     }
 
     [Serializable]

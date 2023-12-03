@@ -12,8 +12,11 @@ public class ContactDetection : MonoBehaviour
         Follow = follow;
     }
 
-    public void DetectContact(List<Vector3> leadPoses, List<Vector3> followPoses)
+    public void DetectContact(int frameNumber)
     {
+        List<Vector3> leadPoses = Lead.GetPoseAtFrame(frameNumber);
+        List<Vector3> followPoses = Follow.GetPoseAtFrame(frameNumber);
+        
         Vector3 leadLeftWristPos = leadPoses[(int)Dancer.CocoJoint.L_Wrist];
         Vector3 leadRightWristPos = leadPoses[(int)Dancer.CocoJoint.R_Wrist];
         Vector3 leadLeftElbowPos = leadPoses[(int)Dancer.CocoJoint.L_Elbow];
