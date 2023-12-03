@@ -12,7 +12,7 @@ public enum Role
 
 public class Dancer : MonoBehaviour
 {
-    enum Joints
+    enum CocoJoint
     {
         Nose = 0,
         L_Eye = 1,
@@ -39,9 +39,12 @@ public class Dancer : MonoBehaviour
 
     readonly List<StaticLink> jointLinks = new();
 
+    FootScorpion leftFootScorpion;
+    FootScorpion rightFootScorpion;
+
     void Awake()
     {
-        for (int j = 0; j < Enum.GetNames(typeof(Joints)).Length; j++)
+        for (int j = 0; j < Enum.GetNames(typeof(CocoJoint)).Length; j++)
         {
             Polygon joint = Instantiate(PolygonFactory.Instance.icosahedron0);
             joint.gameObject.SetActive(true);
@@ -51,25 +54,21 @@ public class Dancer : MonoBehaviour
             jointPolys.Add(joint);
         }
 
-        jointLinks.Add(LinkFromTo((int)Joints.Nose, (int)Joints.L_Eye));
-        jointLinks.Add(LinkFromTo((int)Joints.Nose, (int)Joints.R_Eye));
-        jointLinks.Add(LinkFromTo((int)Joints.L_Eye, (int)Joints.R_Eye));
-        jointLinks.Add(LinkFromTo((int)Joints.L_Eye, (int)Joints.L_Ear));
-        jointLinks.Add(LinkFromTo((int)Joints.L_Ear, (int)Joints.L_Shoulder));
-        jointLinks.Add(LinkFromTo((int)Joints.R_Eye, (int)Joints.R_Ear));
-        jointLinks.Add(LinkFromTo((int)Joints.R_Ear, (int)Joints.R_Shoulder));
-        jointLinks.Add(LinkFromTo((int)Joints.R_Hip, (int)Joints.R_Knee));
-        jointLinks.Add(LinkFromTo((int)Joints.R_Knee, (int)Joints.R_Ankle));
-        jointLinks.Add(LinkFromTo((int)Joints.L_Hip, (int)Joints.L_Knee));
-        jointLinks.Add(LinkFromTo((int)Joints.L_Knee, (int)Joints.L_Ankle));
-        jointLinks.Add(LinkFromTo((int)Joints.R_Shoulder, (int)Joints.R_Elbow));
-        jointLinks.Add(LinkFromTo((int)Joints.R_Elbow, (int)Joints.R_Wrist));
-        jointLinks.Add(LinkFromTo((int)Joints.L_Shoulder, (int)Joints.L_Elbow));
-        jointLinks.Add(LinkFromTo((int)Joints.L_Elbow, (int)Joints.L_Wrist));
-        jointLinks.Add(LinkFromTo((int)Joints.R_Shoulder, (int)Joints.L_Shoulder));
-        jointLinks.Add(LinkFromTo((int)Joints.R_Hip, (int)Joints.L_Hip));
-        jointLinks.Add(LinkFromTo((int)Joints.R_Shoulder, (int)Joints.R_Hip));
-        jointLinks.Add(LinkFromTo((int)Joints.L_Shoulder, (int)Joints.L_Hip));
+        jointLinks.Add(LinkFromTo((int)CocoJoint.R_Hip, (int)CocoJoint.R_Knee));
+        jointLinks.Add(LinkFromTo((int)CocoJoint.R_Knee, (int)CocoJoint.R_Ankle));
+        jointLinks.Add(LinkFromTo((int)CocoJoint.L_Hip, (int)CocoJoint.L_Knee));
+        jointLinks.Add(LinkFromTo((int)CocoJoint.L_Knee, (int)CocoJoint.L_Ankle));
+        jointLinks.Add(LinkFromTo((int)CocoJoint.R_Shoulder, (int)CocoJoint.R_Elbow));
+        jointLinks.Add(LinkFromTo((int)CocoJoint.R_Elbow, (int)CocoJoint.R_Wrist));
+        jointLinks.Add(LinkFromTo((int)CocoJoint.L_Shoulder, (int)CocoJoint.L_Elbow));
+        jointLinks.Add(LinkFromTo((int)CocoJoint.L_Elbow, (int)CocoJoint.L_Wrist));
+        jointLinks.Add(LinkFromTo((int)CocoJoint.R_Shoulder, (int)CocoJoint.L_Shoulder));
+        jointLinks.Add(LinkFromTo((int)CocoJoint.R_Hip, (int)CocoJoint.L_Hip));
+        jointLinks.Add(LinkFromTo((int)CocoJoint.R_Shoulder, (int)CocoJoint.R_Hip));
+        jointLinks.Add(LinkFromTo((int)CocoJoint.L_Shoulder, (int)CocoJoint.L_Hip));
+
+        leftFootScorpion = gameObject.AddComponent<FootScorpion>();
+        rightFootScorpion = gameObject.AddComponent<FootScorpion>();
     }
 
     StaticLink LinkFromTo(int index1, int index2)
@@ -81,7 +80,7 @@ public class Dancer : MonoBehaviour
         staticLink.LinkFromTo(jointPolys[index1].transform, jointPolys[index2].transform);
         return staticLink;
     }
-    
+
     public void SetPoseToFrame(int frameNumber)
     {
         List<Vector3> pose = PosesByFrame[frameNumber];
@@ -94,6 +93,59 @@ public class Dancer : MonoBehaviour
         foreach (StaticLink staticLink in jointLinks)
         {
             staticLink.UpdateLink();
+        }
+
+        leftFootScorpion.SyncToAnkleAndKnee(
+            pose[(int)CocoJoint.L_Ankle],
+            pose[(int)CocoJoint.L_Knee],
+            pose[(int)CocoJoint.L_Hip]);
+        rightFootScorpion.SyncToAnkleAndKnee(
+            pose[(int)CocoJoint.R_Ankle],
+            pose[(int)CocoJoint.R_Knee],
+            pose[(int)CocoJoint.R_Hip]);
+
+        List<Vector3> pastLeftAnklePositions = new();
+        for (int i = frameNumber - 1; i >= 0; i--)
+        {
+            pastLeftAnklePositions.Add(PosesByFrame[i][(int)CocoJoint.L_Ankle]);
+        }
+
+        List<Vector3> futureLeftAnklePositions = new();
+        for (int i = frameNumber + 1; i < PosesByFrame.Count; i++)
+        {
+            futureLeftAnklePositions.Add(PosesByFrame[i][(int)CocoJoint.L_Ankle]);
+        }
+
+        List<Vector3> pastRightAnklePositions = new();
+        for (int i = frameNumber - 1; i >= 0; i--)
+        {
+            pastRightAnklePositions.Add(PosesByFrame[i][(int)CocoJoint.R_Ankle]);
+        }
+
+        List<Vector3> futureRightAnklePositions = new();
+        for (int i = frameNumber + 1; i < PosesByFrame.Count; i++)
+        {
+            futureRightAnklePositions.Add(PosesByFrame[i][(int)CocoJoint.R_Ankle]);
+        }
+
+        leftFootScorpion.SetPastAndFuture(
+            futureLeftAnklePositions, 
+            pastLeftAnklePositions,
+            pose[(int)CocoJoint.L_Ankle]);
+        rightFootScorpion.SetPastAndFuture(
+            futureRightAnklePositions, 
+            pastRightAnklePositions,
+            pose[(int)CocoJoint.R_Ankle]);
+
+        if (pose[(int)CocoJoint.L_Ankle].y < pose[(int)CocoJoint.R_Ankle].y)
+        {
+            leftFootScorpion.SetGroundTriState(true);
+            rightFootScorpion.SetGroundTriState(false);
+        }
+        else
+        {
+            leftFootScorpion.SetGroundTriState(false);
+            rightFootScorpion.SetGroundTriState(true);
         }
     }
 }
