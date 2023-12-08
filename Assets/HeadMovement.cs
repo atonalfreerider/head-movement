@@ -29,8 +29,8 @@ public class HeadMovement : MonoBehaviour
     void Awake()
     {
         Instance = this;
-        Lead = ReadAllPosesFrom(Path.Combine(assetPath, "figure1.json"), "lead");
-        Follow = ReadAllPosesFrom(Path.Combine(assetPath, "figure2.json"), "follow");
+        Lead = ReadAllPosesFrom(Path.Combine(assetPath, "figure1.json"), "lead", Dancer.PoseType.Coco);
+        Follow = ReadAllPosesFrom(Path.Combine(assetPath, "figure2.json"), "follow", Dancer.PoseType.Coco);
 
         contactDetection = GetComponent<ContactDetection>();
         contactDetection.Init(Lead, Follow);
@@ -57,7 +57,7 @@ public class HeadMovement : MonoBehaviour
         Resume();
     }
 
-    Dancer ReadAllPosesFrom(string jsonPath, string role)
+    Dancer ReadAllPosesFrom(string jsonPath, string role, Dancer.PoseType poseType)
     {
         Dancer dancer = new GameObject(role).AddComponent<Dancer>();
 
@@ -65,7 +65,7 @@ public class HeadMovement : MonoBehaviour
         List<List<Float3>> allPoses = JsonConvert.DeserializeObject<List<List<Float3>>>(jsonString);
         List<List<Vector3>> allPosesVector3 = allPoses
             .Select(pose => pose.Select(float3 => new Vector3(float3.x, float3.y, float3.z)).ToList()).ToList();
-        dancer.Init(role == "lead" ? Role.Lead : Role.Follow, allPosesVector3);
+        dancer.Init(role == "lead" ? Role.Lead : Role.Follow, allPosesVector3, poseType);
 
         FRAME_MAX = allPosesVector3.Count;
 
