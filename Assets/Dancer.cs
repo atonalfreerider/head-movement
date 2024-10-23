@@ -15,7 +15,8 @@ public class Dancer : MonoBehaviour
     public enum PoseType
     {
         Coco = 0,
-        Halpe = 1
+        Halpe = 1,
+        Smpl = 2
     }
 
     public enum CocoJoint
@@ -95,6 +96,34 @@ public class Dancer : MonoBehaviour
         RHand21 = 135
     }
 
+    public enum SmplJoint
+    {
+        Pelvis = 0,
+        L_Hip = 1,
+        R_Hip = 2,
+        Spine1 = 3,
+        L_Knee = 4,
+        R_Knee = 5,
+        Spine2 = 6,
+        L_Ankle = 7,
+        R_Ankle = 8,
+        Spine3 = 9,
+        L_Foot = 10,
+        R_Foot = 11,
+        Neck = 12,
+        L_Collar = 13,
+        R_Collar = 14,
+        Head = 15,
+        L_Shoulder = 16,
+        R_Shoulder = 17,
+        L_Elbow = 18,
+        R_Elbow = 19,
+        L_Wrist = 20,
+        R_Wrist = 21,
+        L_Hand = 22,
+        R_Hand = 23
+    }
+
     List<List<Vector3>> PosesByFrame = new();
     readonly Dictionary<int, Polygon> jointPolys = new();
     StaticLink spinePoly;
@@ -121,6 +150,9 @@ public class Dancer : MonoBehaviour
             case PoseType.Halpe:
                 BuildHalpe();
                 break;
+            case PoseType.Smpl:
+                BuildSmpl();
+                break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(poseType), poseType, null);
         }
@@ -139,6 +171,90 @@ public class Dancer : MonoBehaviour
             {
                 followHeadAxis.gameObject.SetActive(true);
             }
+        }
+    }
+
+    void BuildSmpl()
+    {
+        for (int j = 0; j < Enum.GetNames(typeof(SmplJoint)).Length; j++)
+        {
+            Polygon joint = Instantiate(PolygonFactory.Instance.icosahedron0);
+            joint.gameObject.SetActive(true);
+            joint.name = ((SmplJoint)j).ToString();
+            joint.transform.SetParent(transform, false);
+            joint.transform.localScale = Vector3.one * .02f;
+            joint.SetColor(Cividis.CividisColor(.7f));
+            jointPolys.Add(j, joint);
+        }
+
+        // Add skeletal connections based on SMPL structure
+        jointLinks.Add(LinkFromTo((int)SmplJoint.L_Hip, (int)SmplJoint.L_Knee));
+        jointLinks.Add(LinkFromTo((int)SmplJoint.L_Knee, (int)SmplJoint.L_Ankle));
+        jointLinks.Add(LinkFromTo((int)SmplJoint.L_Ankle, (int)SmplJoint.L_Foot));
+        jointLinks.Add(LinkFromTo((int)SmplJoint.R_Hip, (int)SmplJoint.R_Knee));
+        jointLinks.Add(LinkFromTo((int)SmplJoint.R_Knee, (int)SmplJoint.R_Ankle));
+        jointLinks.Add(LinkFromTo((int)SmplJoint.R_Ankle, (int)SmplJoint.R_Foot));
+
+        jointLinks.Add(LinkFromTo((int)SmplJoint.L_Shoulder, (int)SmplJoint.L_Elbow));
+        jointLinks.Add(LinkFromTo((int)SmplJoint.L_Elbow, (int)SmplJoint.L_Wrist));
+        jointLinks.Add(LinkFromTo((int)SmplJoint.L_Wrist, (int)SmplJoint.L_Hand));
+        jointLinks.Add(LinkFromTo((int)SmplJoint.R_Shoulder, (int)SmplJoint.R_Elbow));
+        jointLinks.Add(LinkFromTo((int)SmplJoint.R_Elbow, (int)SmplJoint.R_Wrist));
+        jointLinks.Add(LinkFromTo((int)SmplJoint.R_Wrist, (int)SmplJoint.R_Hand));
+
+        jointLinks.Add(LinkFromTo((int)SmplJoint.L_Collar, (int)SmplJoint.L_Shoulder));
+        jointLinks.Add(LinkFromTo((int)SmplJoint.R_Collar, (int)SmplJoint.R_Shoulder));
+
+        jointLinks.Add(LinkFromTo((int)SmplJoint.Pelvis, (int)SmplJoint.L_Hip));
+        jointLinks.Add(LinkFromTo((int)SmplJoint.Pelvis, (int)SmplJoint.R_Hip));
+
+        // Spine chain
+        jointLinks.Add(LinkFromTo((int)SmplJoint.Pelvis, (int)SmplJoint.Spine1));
+        jointLinks.Add(LinkFromTo((int)SmplJoint.Spine1, (int)SmplJoint.Spine2));
+        jointLinks.Add(LinkFromTo((int)SmplJoint.Spine2, (int)SmplJoint.Spine3));
+        jointLinks.Add(LinkFromTo((int)SmplJoint.Spine3, (int)SmplJoint.Neck));
+        jointLinks.Add(LinkFromTo((int)SmplJoint.Neck, (int)SmplJoint.Head));
+
+        BuildShared();
+    }
+
+    private void UpdateFootScorpions(int frameNumber, Vector3 lAnkle, Vector3 rAnkle, Vector3 lKnee, Vector3 rKnee,
+        Vector3 lHip, Vector3 rHip)
+    {
+        leftFootScorpion.SyncToAnkleAndKnee(lAnkle, lKnee, lHip);
+        rightFootScorpion.SyncToAnkleAndKnee(rAnkle, rKnee, rHip);
+
+        List<Vector3> pastLeftAnklePositions = new();
+        List<Vector3> futureLeftAnklePositions = new();
+        List<Vector3> pastRightAnklePositions = new();
+        List<Vector3> futureRightAnklePositions = new();
+
+        for (int i = frameNumber - 1; i >= 0; i--)
+        {
+            var pose = PosesByFrame[i];
+            pastLeftAnklePositions.Add(GetAnklePosition(pose, true));
+            pastRightAnklePositions.Add(GetAnklePosition(pose, false));
+        }
+
+        for (int i = frameNumber + 1; i < PosesByFrame.Count; i++)
+        {
+            var pose = PosesByFrame[i];
+            futureLeftAnklePositions.Add(GetAnklePosition(pose, true));
+            futureRightAnklePositions.Add(GetAnklePosition(pose, false));
+        }
+
+        leftFootScorpion.SetPastAndFuture(futureLeftAnklePositions, pastLeftAnklePositions, lAnkle);
+        rightFootScorpion.SetPastAndFuture(futureRightAnklePositions, pastRightAnklePositions, rAnkle);
+
+        if (lAnkle.y < rAnkle.y)
+        {
+            leftFootScorpion.SetGroundTriState(true);
+            rightFootScorpion.SetGroundTriState(false);
+        }
+        else
+        {
+            leftFootScorpion.SetGroundTriState(false);
+            rightFootScorpion.SetGroundTriState(true);
         }
     }
 
@@ -241,22 +357,31 @@ public class Dancer : MonoBehaviour
 
     public void SetPoseToFrame(int frameNumber)
     {
-        // SKELETON POSE
         List<Vector3> pose = PosesByFrame[frameNumber];
 
-        if (poseType == PoseType.Coco)
+        switch (poseType)
         {
-            for (int i = 5; i < pose.Count; i++) // ignoring head
-            {
-                jointPolys[i].transform.localPosition = pose[i];
-            }
-        }
-        else if (poseType == PoseType.Halpe)
-        {
-            for (int i = 0; i < 26; i++) // ignoring face and hands
-            {
-                jointPolys[i].transform.localPosition = pose[i];
-            }
+            case PoseType.Coco:
+                for (int i = 5; i < pose.Count; i++)
+                {
+                    jointPolys[i].transform.localPosition = pose[i];
+                }
+
+                break;
+            case PoseType.Halpe:
+                for (int i = 0; i < 24; i++)
+                {
+                    jointPolys[i].transform.localPosition = pose[i];
+                }
+
+                break;
+            case PoseType.Smpl:
+                for (int i = 0; i < pose.Count; i++)
+                {
+                    jointPolys[i].transform.localPosition = pose[i];
+                }
+
+                break;
         }
 
         foreach (StaticLink staticLink in jointLinks)
@@ -264,20 +389,37 @@ public class Dancer : MonoBehaviour
             staticLink.UpdateLink();
         }
 
-        // CHEST AND SPINE
-        int lShoulderIndex = poseType == PoseType.Coco ? (int)CocoJoint.L_Shoulder : (int)Halpe.LShoulder;
-        int rShoulderIndex = poseType == PoseType.Coco ? (int)CocoJoint.R_Shoulder : (int)Halpe.RShoulder;
-        
-        Vector3 lShoulder = pose[lShoulderIndex];
-        Vector3 rShoulder = pose[rShoulderIndex];
+        // Update chest and spine visualization
+        Vector3 lShoulder, rShoulder, lHip, rHip;
+
+        switch (poseType)
+        {
+            case PoseType.Coco:
+                lShoulder = pose[(int)CocoJoint.L_Shoulder];
+                rShoulder = pose[(int)CocoJoint.R_Shoulder];
+                lHip = pose[(int)CocoJoint.L_Hip];
+                rHip = pose[(int)CocoJoint.R_Hip];
+                break;
+            case PoseType.Halpe:
+                lShoulder = pose[(int)Halpe.LShoulder];
+                rShoulder = pose[(int)Halpe.RShoulder];
+                lHip = pose[(int)Halpe.LHip];
+                rHip = pose[(int)Halpe.RHip];
+                break;
+            case PoseType.Smpl:
+                lShoulder = pose[(int)SmplJoint.L_Shoulder];
+                rShoulder = pose[(int)SmplJoint.R_Shoulder];
+                lHip = pose[(int)SmplJoint.L_Hip];
+                rHip = pose[(int)SmplJoint.R_Hip];
+                break;
+            default:
+                throw new ArgumentOutOfRangeException();
+        }
+
         Vector3 shoulderMidpoint = (lShoulder + rShoulder) / 2;
+        Vector3 hipMidpoint = (lHip + rHip) / 2;
 
         chestTri.transform.position = shoulderMidpoint;
-
-        int lHipIndex = poseType == PoseType.Coco ? (int)CocoJoint.L_Hip : (int)Halpe.LHip;
-        int rHipIndex = poseType == PoseType.Coco ? (int)CocoJoint.R_Hip : (int)Halpe.RHip;
-        
-        Vector3 hipMidpoint = (pose[lHipIndex] + pose[rHipIndex]) / 2;
 
         if (poseType == PoseType.Coco)
         {
@@ -296,69 +438,48 @@ public class Dancer : MonoBehaviour
 
         followSpineExtension.DrawFromTo(shoulderMidpoint, shoulderMidpoint + upVector * .1f);
 
-        if (poseType == PoseType.Coco)
+        // Update foot scorpion positions
+        Vector3 lAnkle, rAnkle, lKnee, rKnee;
+
+        switch (poseType)
         {
-            Vector3 headCenter = (pose[(int)CocoJoint.L_Ear] + pose[(int)CocoJoint.R_Ear]) / 2;
-            followHeadAxis.DrawFromTo(shoulderMidpoint, headCenter);
+            case PoseType.Coco:
+                lAnkle = pose[(int)CocoJoint.L_Ankle];
+                rAnkle = pose[(int)CocoJoint.R_Ankle];
+                lKnee = pose[(int)CocoJoint.L_Knee];
+                rKnee = pose[(int)CocoJoint.R_Knee];
+                break;
+            case PoseType.Halpe:
+                lAnkle = pose[(int)Halpe.LAnkle];
+                rAnkle = pose[(int)Halpe.RAnkle];
+                lKnee = pose[(int)Halpe.LKnee];
+                rKnee = pose[(int)Halpe.RKnee];
+                break;
+            case PoseType.Smpl:
+                lAnkle = pose[(int)SmplJoint.L_Ankle];
+                rAnkle = pose[(int)SmplJoint.R_Ankle];
+                lKnee = pose[(int)SmplJoint.L_Knee];
+                rKnee = pose[(int)SmplJoint.R_Knee];
+                break;
+            default:
+                throw new ArgumentOutOfRangeException();
         }
 
-        // FOOT SCORPION
-        int lAnkleIndex = poseType == PoseType.Coco ? (int)CocoJoint.L_Ankle : (int)Halpe.LAnkle;
-        int rAnkleIndex = poseType == PoseType.Coco ? (int)CocoJoint.R_Ankle : (int)Halpe.RAnkle;
-        int lKneeIndex = poseType == PoseType.Coco ? (int)CocoJoint.L_Knee : (int)Halpe.LKnee;
-        int rKneeIndex = poseType == PoseType.Coco ? (int)CocoJoint.R_Knee : (int)Halpe.RKnee;
-        
-        leftFootScorpion.SyncToAnkleAndKnee(
-            pose[lAnkleIndex],
-            pose[lKneeIndex],
-            pose[lHipIndex]);
-        rightFootScorpion.SyncToAnkleAndKnee(
-            pose[rAnkleIndex],
-            pose[rKneeIndex],
-            pose[rHipIndex]);
-
-        List<Vector3> pastLeftAnklePositions = new();
-        for (int i = frameNumber - 1; i >= 0; i--)
+        UpdateFootScorpions(frameNumber, lAnkle, rAnkle, lKnee, rKnee, lHip, rHip);
+    }
+    
+    private Vector3 GetAnklePosition(List<Vector3> pose, bool isLeft)
+    {
+        switch (poseType)
         {
-            pastLeftAnklePositions.Add(PosesByFrame[i][lAnkleIndex]);
-        }
-
-        List<Vector3> futureLeftAnklePositions = new();
-        for (int i = frameNumber + 1; i < PosesByFrame.Count; i++)
-        {
-            futureLeftAnklePositions.Add(PosesByFrame[i][lAnkleIndex]);
-        }
-
-        List<Vector3> pastRightAnklePositions = new();
-        for (int i = frameNumber - 1; i >= 0; i--)
-        {
-            pastRightAnklePositions.Add(PosesByFrame[i][rAnkleIndex]);
-        }
-
-        List<Vector3> futureRightAnklePositions = new();
-        for (int i = frameNumber + 1; i < PosesByFrame.Count; i++)
-        {
-            futureRightAnklePositions.Add(PosesByFrame[i][rAnkleIndex]);
-        }
-
-        leftFootScorpion.SetPastAndFuture(
-            futureLeftAnklePositions,
-            pastLeftAnklePositions,
-            pose[lAnkleIndex]);
-        rightFootScorpion.SetPastAndFuture(
-            futureRightAnklePositions,
-            pastRightAnklePositions,
-            pose[rAnkleIndex]);
-
-        if (pose[lAnkleIndex].y < pose[rAnkleIndex].y)
-        {
-            leftFootScorpion.SetGroundTriState(true);
-            rightFootScorpion.SetGroundTriState(false);
-        }
-        else
-        {
-            leftFootScorpion.SetGroundTriState(false);
-            rightFootScorpion.SetGroundTriState(true);
+            case PoseType.Coco:
+                return pose[isLeft ? (int)CocoJoint.L_Ankle : (int)CocoJoint.R_Ankle];
+            case PoseType.Halpe:
+                return pose[isLeft ? (int)Halpe.LAnkle : (int)Halpe.RAnkle];
+            case PoseType.Smpl:
+                return pose[isLeft ? (int)SmplJoint.L_Ankle : (int)SmplJoint.R_Ankle];
+            default:
+                throw new ArgumentOutOfRangeException();
         }
     }
 
