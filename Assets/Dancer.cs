@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Shapes;
 using Shapes.Lines;
 using UnityEngine;
+using Util;
 
 public enum Role
 {
@@ -43,7 +44,7 @@ public class Dancer : MonoBehaviour
     /// <summary>
     /// https://github.com/Fang-Haoshu/Halpe-FullBody
     /// </summary>
-    public enum Halpe
+    enum Halpe
     {
         Nose = 0,
         LEye = 1,
@@ -96,7 +97,7 @@ public class Dancer : MonoBehaviour
         RHand21 = 135
     }
 
-    public enum SmplJoint
+    enum SmplJoint
     {
         Pelvis = 0,
         L_Hip = 1,
@@ -122,6 +123,48 @@ public class Dancer : MonoBehaviour
         R_Wrist = 21,
         L_Hand = 22,
         R_Hand = 23
+    }
+
+    enum CocoLimbs
+    {
+        // Precomputed with Szudzik pairing to correspond with joint indices
+        R_Upper_Arm = 70,
+        L_Upper_Arm = 54,
+        R_Forearm = 108,
+        L_Forearm = 88,
+        R_Thigh = 208,
+        L_Thigh = 180,
+        R_Calf = 270,
+        L_Calf = 238,
+        Pelvis = 167,
+        Shoulders = 47
+    }
+
+    enum SmplLimbs
+    {
+        L_Calf = 60, // L_Ankle to L_Knee
+        R_Calf = 77, // R_Ankle to R_Knee
+        L_Thigh = 17, // L_Hip to L_Knee
+        R_Thigh = 27, // R_Hip to R_Knee
+        L_HipToPelvis = 2, // L_Hip to Pelvis
+        R_HipToPelvis = 6, // R_Hip to Pelvis
+        L_UpperArm = 340, // L_Shoulder to L_Elbow
+        R_UpperArm = 378, // R_Shoulder to R_Elbow
+        L_Forearm = 418, // L_Elbow to L_Wrist
+        R_Forearm = 460, // R_Elbow to R_Wrist
+        PelvisToSpine1 = 9, // Pelvis to Spine1
+        Spine3ToSpine2 = 96, // Spine3 to Spine2
+        Spine2ToSpine1 = 45, // Spine2 to Spine1
+        Spine3ToNeck = 153, // Spine3 to Neck
+        NeckToHead = 237, // Neck to Head
+        L_Foot = 107, // L_Ankle to L_Foot
+        R_Foot = 129, // R_Ankle to R_Foot
+        L_Hand = 526, // L_Hand to L_Wrist
+        R_Hand = 573, // R_Hand to R_Wrist
+        L_CollarToShoulder = 285, // L_Shoulder to L_Collar
+        R_CollarToShoulder = 320, // R_Shoulder to R_Collar
+        L_CollarToNeck = 194, // L_Collar to Neck
+        R_CollarToNeck = 222 // R_Collar to Neck
     }
 
     List<List<Vector3>> PosesByFrame = new();
@@ -187,33 +230,12 @@ public class Dancer : MonoBehaviour
             jointPolys.Add(j, joint);
         }
 
-        // Add skeletal connections based on SMPL structure
-        jointLinks.Add(LinkFromTo((int)SmplJoint.L_Hip, (int)SmplJoint.L_Knee));
-        jointLinks.Add(LinkFromTo((int)SmplJoint.L_Knee, (int)SmplJoint.L_Ankle));
-        jointLinks.Add(LinkFromTo((int)SmplJoint.L_Ankle, (int)SmplJoint.L_Foot));
-        jointLinks.Add(LinkFromTo((int)SmplJoint.R_Hip, (int)SmplJoint.R_Knee));
-        jointLinks.Add(LinkFromTo((int)SmplJoint.R_Knee, (int)SmplJoint.R_Ankle));
-        jointLinks.Add(LinkFromTo((int)SmplJoint.R_Ankle, (int)SmplJoint.R_Foot));
-
-        jointLinks.Add(LinkFromTo((int)SmplJoint.L_Shoulder, (int)SmplJoint.L_Elbow));
-        jointLinks.Add(LinkFromTo((int)SmplJoint.L_Elbow, (int)SmplJoint.L_Wrist));
-        jointLinks.Add(LinkFromTo((int)SmplJoint.L_Wrist, (int)SmplJoint.L_Hand));
-        jointLinks.Add(LinkFromTo((int)SmplJoint.R_Shoulder, (int)SmplJoint.R_Elbow));
-        jointLinks.Add(LinkFromTo((int)SmplJoint.R_Elbow, (int)SmplJoint.R_Wrist));
-        jointLinks.Add(LinkFromTo((int)SmplJoint.R_Wrist, (int)SmplJoint.R_Hand));
-
-        jointLinks.Add(LinkFromTo((int)SmplJoint.L_Collar, (int)SmplJoint.L_Shoulder));
-        jointLinks.Add(LinkFromTo((int)SmplJoint.R_Collar, (int)SmplJoint.R_Shoulder));
-
-        jointLinks.Add(LinkFromTo((int)SmplJoint.Pelvis, (int)SmplJoint.L_Hip));
-        jointLinks.Add(LinkFromTo((int)SmplJoint.Pelvis, (int)SmplJoint.R_Hip));
-
-        // Spine chain
-        jointLinks.Add(LinkFromTo((int)SmplJoint.Pelvis, (int)SmplJoint.Spine1));
-        jointLinks.Add(LinkFromTo((int)SmplJoint.Spine1, (int)SmplJoint.Spine2));
-        jointLinks.Add(LinkFromTo((int)SmplJoint.Spine2, (int)SmplJoint.Spine3));
-        jointLinks.Add(LinkFromTo((int)SmplJoint.Spine3, (int)SmplJoint.Neck));
-        jointLinks.Add(LinkFromTo((int)SmplJoint.Neck, (int)SmplJoint.Head));
+        foreach (SmplLimbs limb in Enum.GetValues(typeof(SmplLimbs)))
+        {
+            uint[] pair = Szudzik.uintSzudzik2tupleReverse((uint)limb);
+            StaticLink limbLink = LinkFromTo((int)pair[0], (int)pair[1]);
+            jointLinks.Add(limbLink);
+        }
 
         BuildShared();
     }
@@ -231,14 +253,14 @@ public class Dancer : MonoBehaviour
 
         for (int i = frameNumber - 1; i >= 0; i--)
         {
-            var pose = PosesByFrame[i];
+            List<Vector3> pose = PosesByFrame[i];
             pastLeftAnklePositions.Add(GetAnklePosition(pose, true));
             pastRightAnklePositions.Add(GetAnklePosition(pose, false));
         }
 
         for (int i = frameNumber + 1; i < PosesByFrame.Count; i++)
         {
-            var pose = PosesByFrame[i];
+            List<Vector3> pose = PosesByFrame[i];
             futureLeftAnklePositions.Add(GetAnklePosition(pose, true));
             futureRightAnklePositions.Add(GetAnklePosition(pose, false));
         }
@@ -271,16 +293,12 @@ public class Dancer : MonoBehaviour
             jointPolys.Add(j, joint);
         }
 
-        jointLinks.Add(LinkFromTo((int)CocoJoint.R_Hip, (int)CocoJoint.R_Knee));
-        jointLinks.Add(LinkFromTo((int)CocoJoint.R_Knee, (int)CocoJoint.R_Ankle));
-        jointLinks.Add(LinkFromTo((int)CocoJoint.L_Hip, (int)CocoJoint.L_Knee));
-        jointLinks.Add(LinkFromTo((int)CocoJoint.L_Knee, (int)CocoJoint.L_Ankle));
-        jointLinks.Add(LinkFromTo((int)CocoJoint.R_Shoulder, (int)CocoJoint.R_Elbow));
-        jointLinks.Add(LinkFromTo((int)CocoJoint.R_Elbow, (int)CocoJoint.R_Wrist));
-        jointLinks.Add(LinkFromTo((int)CocoJoint.L_Shoulder, (int)CocoJoint.L_Elbow));
-        jointLinks.Add(LinkFromTo((int)CocoJoint.L_Elbow, (int)CocoJoint.L_Wrist));
-        jointLinks.Add(LinkFromTo((int)CocoJoint.R_Shoulder, (int)CocoJoint.L_Shoulder));
-        jointLinks.Add(LinkFromTo((int)CocoJoint.R_Hip, (int)CocoJoint.L_Hip));
+        foreach (CocoLimbs limb in Enum.GetValues(typeof(CocoLimbs)))
+        {
+            uint[] pair = Szudzik.uintSzudzik2tupleReverse((uint)limb);
+            StaticLink limbLink = LinkFromTo((int)pair[0], (int)pair[1]);
+            jointLinks.Add(limbLink);
+        }
 
         spinePoly = Instantiate(StaticLink.prototypeStaticLink);
         spinePoly.gameObject.SetActive(true);
@@ -346,9 +364,16 @@ public class Dancer : MonoBehaviour
     {
         StaticLink staticLink = Instantiate(StaticLink.prototypeStaticLink);
         staticLink.gameObject.SetActive(true);
-        staticLink.name = poseType == PoseType.Coco
-            ? $"{((CocoJoint)index1).ToString()}-{((CocoJoint)index2).ToString()}"
-            : $"{((Halpe)index1).ToString()}-{((Halpe)index2).ToString()}";
+        staticLink.name = poseType switch
+        {
+            PoseType.Coco => $"{((CocoJoint)index1).ToString()}-{((CocoJoint)index2).ToString()}",
+            PoseType.Halpe => $"{((Halpe)index1).ToString()}-{((Halpe)index2).ToString()}",
+            PoseType.Smpl => $"{((SmplJoint)index1).ToString()}-{((SmplJoint)index2).ToString()}",
+            _ => throw new ArgumentOutOfRangeException(nameof(poseType), poseType,
+                null) // Handle unexpected poseType values
+        };
+
+
         staticLink.SetColor(Cividis.CividisColor(.8f));
         staticLink.transform.SetParent(transform, false);
         staticLink.LinkFromTo(jointPolys[index1].transform, jointPolys[index2].transform);
@@ -467,7 +492,7 @@ public class Dancer : MonoBehaviour
 
         UpdateFootScorpions(frameNumber, lAnkle, rAnkle, lKnee, rKnee, lHip, rHip);
     }
-    
+
     private Vector3 GetAnklePosition(List<Vector3> pose, bool isLeft)
     {
         switch (poseType)

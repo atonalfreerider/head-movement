@@ -29,8 +29,8 @@ public class HeadMovement : MonoBehaviour
     void Awake()
     {
         Instance = this;
-        Lead = ReadAllPosesFrom(Path.Combine(assetPath, "figure1.json"), "lead", Dancer.PoseType.Coco);
-        Follow = ReadAllPosesFrom(Path.Combine(assetPath, "figure2.json"), "follow", Dancer.PoseType.Coco);
+        Lead = ReadAllPosesFrom(Path.Combine(assetPath, "lead.json"), "lead", Dancer.PoseType.Smpl);
+        Follow = ReadAllPosesFrom(Path.Combine(assetPath, "follow.json"), "follow", Dancer.PoseType.Smpl);
 
         contactDetection = GetComponent<ContactDetection>();
         contactDetection.Init(Lead, Follow);
