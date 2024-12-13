@@ -212,7 +212,7 @@ public class Dancer : MonoBehaviour
             followSpineExtension.gameObject.SetActive(true);
             if (poseType == PoseType.Coco)
             {
-                followHeadAxis.gameObject.SetActive(true);
+                //followHeadAxis.gameObject.SetActive(true);
             }
         }
     }
@@ -240,7 +240,7 @@ public class Dancer : MonoBehaviour
         BuildShared();
     }
 
-    private void UpdateFootScorpions(int frameNumber, Vector3 lAnkle, Vector3 rAnkle, Vector3 lKnee, Vector3 rKnee,
+    void UpdateFootScorpions(int frameNumber, Vector3 lAnkle, Vector3 rAnkle, Vector3 lKnee, Vector3 rKnee,
         Vector3 lHip, Vector3 rHip)
     {
         leftFootScorpion.SyncToAnkleAndKnee(lAnkle, lKnee, lHip);
@@ -301,11 +301,13 @@ public class Dancer : MonoBehaviour
         }
 
         spinePoly = Instantiate(StaticLink.prototypeStaticLink);
+        spinePoly.name = "spine poly";
         spinePoly.gameObject.SetActive(true);
         spinePoly.SetColor(Cividis.CividisColor(.8f));
         spinePoly.transform.SetParent(transform, false);
 
         followHeadAxis = Instantiate(StaticLink.prototypeStaticLink);
+        followHeadAxis.name = "follow head axis";
         followHeadAxis.gameObject.SetActive(false);
         followHeadAxis.SetColor(Cividis.CividisColor(.8f));
         followHeadAxis.transform.SetParent(transform, false);
@@ -354,6 +356,7 @@ public class Dancer : MonoBehaviour
         chestTri.SetColor(Cividis.CividisColor(.5f));
 
         followSpineExtension = Instantiate(StaticLink.prototypeStaticLink);
+        followSpineExtension.name = "follow spine extension";
         followSpineExtension.gameObject.SetActive(false);
         followSpineExtension.LW = .005f;
         followSpineExtension.SetColor(Cividis.CividisColor(.8f));
@@ -493,7 +496,7 @@ public class Dancer : MonoBehaviour
         UpdateFootScorpions(frameNumber, lAnkle, rAnkle, lKnee, rKnee, lHip, rHip);
     }
 
-    private Vector3 GetAnklePosition(List<Vector3> pose, bool isLeft)
+    Vector3 GetAnklePosition(List<Vector3> pose, bool isLeft)
     {
         switch (poseType)
         {
