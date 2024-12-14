@@ -176,10 +176,7 @@ public class Dancer : MonoBehaviour
     PoseType poseType;
 
     readonly List<StaticLink> jointLinks = new();
-
-    FootScorpion leftFootScorpion;
-    FootScorpion rightFootScorpion;
-
+    
     Polygon chestTri;
 
     public void Init(Role role, List<List<Vector3>> posesByFrame, PoseType poseType)
@@ -238,46 +235,6 @@ public class Dancer : MonoBehaviour
         }
 
         BuildShared();
-    }
-
-    void UpdateFootScorpions(int frameNumber, Vector3 lAnkle, Vector3 rAnkle, Vector3 lKnee, Vector3 rKnee,
-        Vector3 lHip, Vector3 rHip)
-    {
-        leftFootScorpion.SyncToAnkleAndKnee(lAnkle, lKnee, lHip);
-        rightFootScorpion.SyncToAnkleAndKnee(rAnkle, rKnee, rHip);
-
-        List<Vector3> pastLeftAnklePositions = new();
-        List<Vector3> futureLeftAnklePositions = new();
-        List<Vector3> pastRightAnklePositions = new();
-        List<Vector3> futureRightAnklePositions = new();
-
-        for (int i = frameNumber - 1; i >= 0; i--)
-        {
-            List<Vector3> pose = PosesByFrame[i];
-            pastLeftAnklePositions.Add(GetAnklePosition(pose, true));
-            pastRightAnklePositions.Add(GetAnklePosition(pose, false));
-        }
-
-        for (int i = frameNumber + 1; i < PosesByFrame.Count; i++)
-        {
-            List<Vector3> pose = PosesByFrame[i];
-            futureLeftAnklePositions.Add(GetAnklePosition(pose, true));
-            futureRightAnklePositions.Add(GetAnklePosition(pose, false));
-        }
-
-        leftFootScorpion.SetPastAndFuture(futureLeftAnklePositions, pastLeftAnklePositions, lAnkle);
-        rightFootScorpion.SetPastAndFuture(futureRightAnklePositions, pastRightAnklePositions, rAnkle);
-
-        if (lAnkle.y < rAnkle.y)
-        {
-            leftFootScorpion.SetGroundTriState(true);
-            rightFootScorpion.SetGroundTriState(false);
-        }
-        else
-        {
-            leftFootScorpion.SetGroundTriState(false);
-            rightFootScorpion.SetGroundTriState(true);
-        }
     }
 
     void BuildCoco()
@@ -347,9 +304,6 @@ public class Dancer : MonoBehaviour
 
     void BuildShared()
     {
-        leftFootScorpion = gameObject.AddComponent<FootScorpion>();
-        rightFootScorpion = gameObject.AddComponent<FootScorpion>();
-
         chestTri = Instantiate(PolygonFactory.Instance.tri);
         chestTri.gameObject.SetActive(false);
         chestTri.transform.SetParent(transform, false);
@@ -465,57 +419,8 @@ public class Dancer : MonoBehaviour
         chestTri.transform.Translate(Vector3.forward * .075f);
 
         followSpineExtension.DrawFromTo(shoulderMidpoint, shoulderMidpoint + upVector * .1f);
-
-        // Update foot scorpion positions
-        Vector3 lAnkle, rAnkle, lKnee, rKnee;
-
-        switch (poseType)
-        {
-            case PoseType.Coco:
-                lAnkle = pose[(int)CocoJoint.L_Ankle];
-                rAnkle = pose[(int)CocoJoint.R_Ankle];
-                lKnee = pose[(int)CocoJoint.L_Knee];
-                rKnee = pose[(int)CocoJoint.R_Knee];
-                break;
-            case PoseType.Halpe:
-                lAnkle = pose[(int)Halpe.LAnkle];
-                rAnkle = pose[(int)Halpe.RAnkle];
-                lKnee = pose[(int)Halpe.LKnee];
-                rKnee = pose[(int)Halpe.RKnee];
-                break;
-            case PoseType.Smpl:
-                lAnkle = pose[(int)SmplJoint.L_Ankle];
-                rAnkle = pose[(int)SmplJoint.R_Ankle];
-                lKnee = pose[(int)SmplJoint.L_Knee];
-                rKnee = pose[(int)SmplJoint.R_Knee];
-                break;
-            default:
-                throw new ArgumentOutOfRangeException();
-        }
-
-        UpdateFootScorpions(frameNumber, lAnkle, rAnkle, lKnee, rKnee, lHip, rHip);
     }
-
-    Vector3 GetAnklePosition(List<Vector3> pose, bool isLeft)
-    {
-        switch (poseType)
-        {
-            case PoseType.Coco:
-                return pose[isLeft ? (int)CocoJoint.L_Ankle : (int)CocoJoint.R_Ankle];
-            case PoseType.Halpe:
-                return pose[isLeft ? (int)Halpe.LAnkle : (int)Halpe.RAnkle];
-            case PoseType.Smpl:
-                return pose[isLeft ? (int)SmplJoint.L_Ankle : (int)SmplJoint.R_Ankle];
-            default:
-                throw new ArgumentOutOfRangeException();
-        }
-    }
-
-    public void SetJointTemperature(int jointIndex, float temperature)
-    {
-        jointPolys[jointIndex].SetColor(Cividis.CividisColor(1 - temperature));
-    }
-
+    
     public List<Vector3> GetPoseAtFrame(int frameNumber)
     {
         return PosesByFrame[frameNumber];
