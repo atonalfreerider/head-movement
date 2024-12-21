@@ -19,7 +19,13 @@ public class Dancer : MonoBehaviour
 
     LineRenderer followSpineRenderer;
     LineRenderer followLegsRenderer;
+    LineRenderer followShouldersRenderer;
+    LineRenderer followLeftArmRenderer;
+    LineRenderer followRightArmRenderer;
+    
     LineRenderer leadArmsRenderer;
+    LineRenderer leadLeftLegRenderer;
+    LineRenderer leadRightLegRenderer;
 
     readonly int[] smplFollowSpine =
     {
@@ -33,6 +39,8 @@ public class Dancer : MonoBehaviour
 
     readonly int[] smplFollowLegs =
     {
+        (int)SmplJoint.L_Ankle,
+        0,
         (int)SmplJoint.L_Foot,
         (int)SmplJoint.L_Ankle,
         (int)SmplJoint.L_Knee,
@@ -40,7 +48,31 @@ public class Dancer : MonoBehaviour
         (int)SmplJoint.R_Hip,
         (int)SmplJoint.R_Knee,
         (int)SmplJoint.R_Ankle,
-        (int)SmplJoint.R_Foot
+        (int)SmplJoint.R_Foot,
+        -1,
+        (int)SmplJoint.R_Ankle
+    };
+
+    readonly int[] smplFollowShoulders =
+    {
+        (int) SmplJoint.L_Shoulder,
+        (int) SmplJoint.L_Collar,
+        (int) SmplJoint.R_Collar,
+        (int) SmplJoint.R_Shoulder
+    };
+
+    readonly int[] smplFollowLeftArm =
+    {
+        (int) SmplJoint.L_Hand,
+        (int) SmplJoint.L_Wrist,
+        (int) SmplJoint.L_Elbow
+    };
+    
+    readonly int[] smplFollowRightArm =
+    {
+        (int) SmplJoint.R_Hand,
+        (int) SmplJoint.R_Wrist,
+        (int) SmplJoint.R_Elbow
     };
 
     readonly int[] smplLeadArms =
@@ -56,13 +88,33 @@ public class Dancer : MonoBehaviour
         (int)SmplJoint.R_Hand
     };
 
+    readonly int[] smplLeadLeftLeg =
+    {
+        (int)SmplJoint.L_Ankle,
+        0,
+        (int)SmplJoint.L_Foot,
+        (int)SmplJoint.L_Ankle,
+        (int)SmplJoint.L_Knee,
+        (int)SmplJoint.L_Hip
+    };
+    
+    readonly int[] smplLeadRightLeg =
+    {
+        (int)SmplJoint.R_Ankle,
+        0,
+        (int)SmplJoint.R_Foot,
+        (int)SmplJoint.R_Ankle,
+        (int)SmplJoint.R_Knee,
+        (int)SmplJoint.R_Hip
+    };
+
     Material BloomMat;
 
     public void Init(Role role, List<List<Vector3>> posesByFrame, PoseType poseType, Material bloomMat)
     {
         this.poseType = poseType;
         BloomMat = bloomMat;
-        
+
         switch (poseType)
         {
             case PoseType.Coco:
@@ -94,6 +146,7 @@ public class Dancer : MonoBehaviour
             joint.SetColor(Cividis.CividisColor(.7f));
             jointPolys.Add(j, joint);
         }
+
         const float alpha = 1f;
         const float intensity = 3f;
         switch (role)
@@ -101,46 +154,69 @@ public class Dancer : MonoBehaviour
             case Role.Follow:
                 followSpineRenderer = NewLineRenderer(0.01f, BloomMat);
                 followSpineRenderer.transform.SetParent(transform, false);
-                Material fifthsMat = BloomMat;
-                followLegsRenderer = NewLineRenderer(0.01f, fifthsMat);
+                
+                followLegsRenderer = NewLineRenderer(0.01f, BloomMat);
                 followLegsRenderer.transform.SetParent(transform, false);
 
-                Gradient gradient = new();
+                Gradient followLegsGrad = new();
                 Color endColor = Color.red; // intensify on HDR
-                Color midColor = Color.white * Mathf.Pow(2, intensity); 
+                Color midColor = Color.white * Mathf.Pow(2, intensity);
 
-                gradient.SetKeys(
+                followLegsGrad.SetKeys(
                     new[]
                     {
                         new GradientColorKey(endColor, 0.0f),
-                        new GradientColorKey(midColor, 0.5f),  
+                        new GradientColorKey(midColor, 0.5f),
                         new GradientColorKey(endColor, 1.0f)
                     },
                     new[]
                     {
-                        new GradientAlphaKey(alpha, 0.0f), 
-                        new GradientAlphaKey(alpha, 0.5f), 
+                        new GradientAlphaKey(alpha, 0.0f),
+                        new GradientAlphaKey(alpha, 0.5f),
                         new GradientAlphaKey(alpha, 1.0f)
                     }
                 );
-                        
-                AnimationCurve curve = new AnimationCurve();
-                curve.AddKey(new Keyframe(0.0f, 0.01f));
-                curve.AddKey(new Keyframe(0.5f, 0.03f));
-                curve.AddKey(new Keyframe(1.0f, 0.01f));
-                        
-                followLegsRenderer.widthCurve = curve;
-                followLegsRenderer.colorGradient = gradient;
+
+                AnimationCurve followLegsCurve = new AnimationCurve();
+                followLegsCurve.AddKey(new Keyframe(0.0f, 0.01f));
+                followLegsCurve.AddKey(new Keyframe(0.5f, 0.03f));
+                followLegsCurve.AddKey(new Keyframe(1.0f, 0.01f));
+
+                followLegsRenderer.widthCurve = followLegsCurve;
+                followLegsRenderer.colorGradient = followLegsGrad;
+                
+                followShouldersRenderer = NewLineRenderer(0.01f, BloomMat);
+                followShouldersRenderer.transform.SetParent(transform, false);
+                
+                followShouldersRenderer.widthCurve = followLegsCurve;
+                followShouldersRenderer.colorGradient = followLegsGrad;
+                
+                AnimationCurve followArmCurve = new AnimationCurve();
+                followArmCurve.AddKey(new Keyframe(0.0f, 0.01f));
+                followArmCurve.AddKey(new Keyframe(1.0f, 0.02f));
+                
+                followLeftArmRenderer = NewLineRenderer(0.01f, BloomMat);
+                followLeftArmRenderer.transform.SetParent(transform, false);
+                
+                followLeftArmRenderer.widthCurve = followArmCurve;
+                followLeftArmRenderer.colorGradient = followLegsGrad;
+                
+                followRightArmRenderer = NewLineRenderer(0.01f, BloomMat);
+                followRightArmRenderer.transform.SetParent(transform, false);
+                
+                followRightArmRenderer.widthCurve = followArmCurve;
+                followRightArmRenderer.colorGradient = followLegsGrad;
+                
                 break;
             case Role.Lead:
                 leadArmsRenderer = NewLineRenderer(0.01f, BloomMat);
                 leadArmsRenderer.transform.SetParent(transform, false);
 
-                Gradient leadGradient = new();
-                
+                Gradient leadArmGradient = new();
+
                 Color color = Color.red; // intensify on HDR 
 
-                leadGradient.SetKeys(
+                leadArmGradient.SetKeys(
                     new[]
                     {
                         new GradientColorKey(color, 0.0f),
@@ -148,22 +224,53 @@ public class Dancer : MonoBehaviour
                     },
                     new[]
                     {
-                        new GradientAlphaKey(alpha, 0.0f), 
-                        new GradientAlphaKey(alpha, 0.5f), 
+                        new GradientAlphaKey(alpha, 0.0f),
                         new GradientAlphaKey(alpha, 1.0f)
                     }
                 );
-                        
-                AnimationCurve leadCurve = new AnimationCurve();
-                leadCurve.AddKey(new Keyframe(0.0f, 0.01f));
-                leadCurve.AddKey(new Keyframe(0.25f, 0.03f));
-                leadCurve.AddKey(new Keyframe(0.75f, 0.03f));
-                leadCurve.AddKey(new Keyframe(1.0f, 0.01f));
-                        
-                leadArmsRenderer.widthCurve = leadCurve;
-                leadArmsRenderer.colorGradient = leadGradient;
+
+                AnimationCurve leadArmCurve = new AnimationCurve();
+                leadArmCurve.AddKey(new Keyframe(0.0f, 0.01f));
+                leadArmCurve.AddKey(new Keyframe(0.25f, 0.03f));
+                leadArmCurve.AddKey(new Keyframe(0.75f, 0.03f));
+                leadArmCurve.AddKey(new Keyframe(1.0f, 0.01f));
+
+                leadArmsRenderer.widthCurve = leadArmCurve;
+                leadArmsRenderer.colorGradient = leadArmGradient;
                 
+                leadLeftLegRenderer = NewLineRenderer(0.01f, BloomMat);
+                leadLeftLegRenderer.transform.SetParent(transform, false);
                 
+                Gradient leadLegGradient = new();
+                
+                leadLegGradient.SetKeys(
+                    new[]
+                    {
+                        new GradientColorKey(color, 0.0f),
+                        new GradientColorKey(color, 1.0f)
+                    },
+                    new[]
+                    {
+                        new GradientAlphaKey(alpha, 0.0f),
+                        new GradientAlphaKey(alpha, 1.0f)
+                    }
+                );
+
+                AnimationCurve leadLegCurve = new AnimationCurve();
+                leadLegCurve.AddKey(new Keyframe(0.0f, 0.01f));
+                leadLegCurve.AddKey(new Keyframe(0.25f, 0.03f));
+                leadLegCurve.AddKey(new Keyframe(0.75f, 0.05f));
+                leadLegCurve.AddKey(new Keyframe(1.0f, 0.03f));
+
+                leadLeftLegRenderer.widthCurve = leadLegCurve;
+                leadLeftLegRenderer.colorGradient = leadLegGradient;
+                
+                leadRightLegRenderer = NewLineRenderer(0.01f, BloomMat);
+                leadRightLegRenderer.transform.SetParent(transform, false);
+
+                leadRightLegRenderer.widthCurve = leadLegCurve;
+                leadRightLegRenderer.colorGradient = leadLegGradient;
+
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(role), role, null);
@@ -242,25 +349,54 @@ public class Dancer : MonoBehaviour
                         for (int i = 0; i < smplFollowLegs.Length; i++)
                         {
                             int x = smplFollowLegs[i];
-                            if (x == (int)SmplJoint.L_Hip)
+                            legsArray[i] = x switch
                             {
-                                legsArray[i] = Vector3.LerpUnclamped(pose[(int)SmplJoint.R_Hip], pose[x], 1.5f);
-                            }
-                            else if (x == (int)SmplJoint.R_Hip)
-                            {
-                                legsArray[i] = Vector3.LerpUnclamped(pose[(int)SmplJoint.L_Hip], pose[x], 1.5f);
-                            }
-                            else
-                            {
-                                legsArray[i] = pose[x];
-                            }
+                                (int)SmplJoint.L_Hip => Vector3.LerpUnclamped(pose[(int)SmplJoint.R_Hip], pose[x],
+                                    1.5f),
+                                (int)SmplJoint.R_Hip => Vector3.LerpUnclamped(pose[(int)SmplJoint.L_Hip], pose[x],
+                                    1.5f),
+                                0 => Vector3.LerpUnclamped(pose[(int)SmplJoint.L_Knee], pose[(int)SmplJoint.L_Ankle],
+                                    1.2f),
+                                -1 => Vector3.LerpUnclamped(pose[(int)SmplJoint.R_Knee], pose[(int)SmplJoint.R_Ankle],
+                                    1.2f),
+                                _ => pose[x]
+                            };
                         }
 
                         Vector3[] legsBez = CatmullRomSpline.Generate(legsArray);
-                        
 
                         followLegsRenderer.positionCount = legsBez.Length;
                         followLegsRenderer.SetPositions(legsBez);
+                        
+                        Vector3[] shoulderArray = new Vector3[smplFollowShoulders.Length];
+                        for (int i = 0; i < smplFollowShoulders.Length; i++)
+                        {
+                            shoulderArray[i] = pose[smplFollowShoulders[i]];
+                        }    
+                        
+                        Vector3[] shoulderBez = CatmullRomSpline.Generate(shoulderArray);
+                        followShouldersRenderer.positionCount = shoulderBez.Length;
+                        followShouldersRenderer.SetPositions(shoulderBez);
+                        
+                        Vector3[] leftArmArray = new Vector3[smplFollowLeftArm.Length];
+                        for (int i = 0; i < smplFollowLeftArm.Length; i++)
+                        {
+                            leftArmArray[i] = pose[smplFollowLeftArm[i]];
+                        }
+                        
+                        Vector3[] leftArmBez = CatmullRomSpline.Generate(leftArmArray);
+                        followLeftArmRenderer.positionCount = leftArmBez.Length;
+                        followLeftArmRenderer.SetPositions(leftArmBez);
+                        
+                        Vector3[] rightArmArray = new Vector3[smplFollowRightArm.Length];
+                        for (int i = 0; i < smplFollowRightArm.Length; i++)
+                        {
+                            rightArmArray[i] = pose[smplFollowRightArm[i]];
+                        }
+                        
+                        Vector3[] rightArmBez = CatmullRomSpline.Generate(rightArmArray);
+                        followRightArmRenderer.positionCount = rightArmBez.Length;
+                        followRightArmRenderer.SetPositions(rightArmBez);
 
                         break;
                     }
@@ -278,7 +414,8 @@ public class Dancer : MonoBehaviour
 
                                 // Calculate the body axis and forward vector based on the person's orientation
                                 Vector3 bodyAxis = hipMidpoint - shoulderMidpoint;
-                                Vector3 rightVector = rShoulder - lShoulder; // Right direction from left to right shoulder
+                                Vector3 rightVector =
+                                    rShoulder - lShoulder; // Right direction from left to right shoulder
                                 Vector3 forwardVector = Vector3.Cross(bodyAxis, rightVector).normalized;
 
                                 // Ensure the forward vector is perpendicular to the plane of the shoulders and hips
@@ -297,6 +434,45 @@ public class Dancer : MonoBehaviour
                         Vector3[] armsBez = CatmullRomSpline.Generate(armsArray);
                         leadArmsRenderer.positionCount = armsBez.Length;
                         leadArmsRenderer.SetPositions(armsBez);
+                        
+                        // LEFT LEG
+                        Vector3[] leftLegArray = new Vector3[smplLeadLeftLeg.Length];
+                        for (int i = 0; i < smplLeadLeftLeg.Length; i++)
+                        {
+                            int x = smplLeadLeftLeg[i];
+                            leftLegArray[i] = x switch
+                            {
+                                0 => Vector3.LerpUnclamped(pose[(int)SmplJoint.L_Knee], pose[(int)SmplJoint.L_Ankle],
+                                    1.2f),
+                                (int)SmplJoint.L_Hip => Vector3.LerpUnclamped(pose[(int)SmplJoint.R_Hip], pose[x], 1.2f),
+                                _ => pose[x]
+                            };
+                        }
+
+                        Vector3[] leftLegBez = CatmullRomSpline.Generate(leftLegArray);
+
+                        leadLeftLegRenderer.positionCount = leftLegBez.Length;
+                        leadLeftLegRenderer.SetPositions(leftLegBez);
+                        
+                        // RIGHT LEG
+                        Vector3[] rightLegArray = new Vector3[smplLeadRightLeg.Length];
+                        for (int i = 0; i < smplLeadRightLeg.Length; i++)
+                        {
+                            int x = smplLeadRightLeg[i];
+                            rightLegArray[i] = x switch
+                            {
+                                0 => Vector3.LerpUnclamped(pose[(int)SmplJoint.L_Knee], pose[(int)SmplJoint.R_Ankle],
+                                    1.2f),
+                                (int)SmplJoint.R_Hip => Vector3.LerpUnclamped(pose[(int)SmplJoint.L_Hip], pose[x], 1.2f),
+                                _ => pose[x]
+                            };
+                        }
+
+                        Vector3[] rightLegBez = CatmullRomSpline.Generate(rightLegArray);
+
+                        leadRightLegRenderer.positionCount = rightLegBez.Length;
+                        leadRightLegRenderer.SetPositions(rightLegBez);
+                        
                         break;
                     default:
                         throw new ArgumentOutOfRangeException();
