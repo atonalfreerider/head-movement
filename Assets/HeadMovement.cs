@@ -6,6 +6,7 @@ using System.Linq;
 using Newtonsoft.Json;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using VRTKLite.Controllers;
 
 [RequireComponent(typeof(ContactDetection))]
 public class HeadMovement : MonoBehaviour
@@ -26,6 +27,8 @@ public class HeadMovement : MonoBehaviour
 
     Coroutine animator;
     public Material BloomMaterial;
+    
+    CameraControl cameraControl;
 
     void Awake()
     {
@@ -40,6 +43,7 @@ public class HeadMovement : MonoBehaviour
 
     void Start()
     {
+        cameraControl = GameObject.Find("Simulator").GetComponent<CameraControl>();
         Resume();
     }
 
@@ -165,6 +169,13 @@ public class HeadMovement : MonoBehaviour
         else if (Keyboard.current.spaceKey.wasPressedThisFrame)
         {
             TogglePlayPause();
+        }
+
+        if (cameraControl.gameObject.activeInHierarchy)
+        {
+            Vector3 center = Vector3.Lerp(Lead.Center(frameNumber), Follow.Center(frameNumber), .5f);
+            center = new Vector3(center.x, 0, center.z);
+            cameraControl.Center = center;
         }
     }
 

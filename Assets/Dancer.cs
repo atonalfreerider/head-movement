@@ -33,8 +33,7 @@ public class Dancer : MonoBehaviour
         (int)SmplJoint.Spine1,
         (int)SmplJoint.Spine2,
         (int)SmplJoint.Spine3,
-        (int)SmplJoint.Neck,
-        (int)SmplJoint.Head
+        (int)SmplJoint.Neck
     };
 
     readonly int[] smplFollowLegs =
@@ -136,17 +135,6 @@ public class Dancer : MonoBehaviour
 
     void BuildSmpl(Role role)
     {
-        for (int j = 0; j < Enum.GetNames(typeof(SmplJoint)).Length; j++)
-        {
-            Polygon joint = Instantiate(PolygonFactory.Instance.icosahedron0);
-            joint.gameObject.SetActive(true);
-            joint.name = ((SmplJoint)j).ToString();
-            joint.transform.SetParent(transform, false);
-            joint.transform.localScale = Vector3.one * .02f;
-            joint.SetColor(Cividis.CividisColor(.7f));
-            jointPolys.Add(j, joint);
-        }
-
         const float alpha = 1f;
         const float intensity = 3f;
         switch (role)
@@ -326,11 +314,6 @@ public class Dancer : MonoBehaviour
 
                 break;
             case PoseType.Smpl:
-                for (int i = 0; i < pose.Count; i++)
-                {
-                    jointPolys[i].transform.localPosition = pose[i];
-                }
-
                 switch (Role)
                 {
                     case Role.Follow:
@@ -501,4 +484,6 @@ public class Dancer : MonoBehaviour
 
         return lineRenderer;
     }
+
+    public Vector3 Center(int frameNumber) => PosesByFrame[frameNumber][(int) SmplJoint.Spine3];
 }
