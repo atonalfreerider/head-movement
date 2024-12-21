@@ -56,16 +56,13 @@ public class Dancer : MonoBehaviour
         (int)SmplJoint.R_Hand
     };
 
-    public Material BloomMat;
+    Material BloomMat;
 
-    void Awake()
-    {
-        BloomMat = new Material(Shader.Find("Unlit/Color"));
-    }
-
-    public void Init(Role role, List<List<Vector3>> posesByFrame, PoseType poseType)
+    public void Init(Role role, List<List<Vector3>> posesByFrame, PoseType poseType, Material bloomMat)
     {
         this.poseType = poseType;
+        BloomMat = bloomMat;
+        
         switch (poseType)
         {
             case PoseType.Coco:
@@ -97,18 +94,76 @@ public class Dancer : MonoBehaviour
             joint.SetColor(Cividis.CividisColor(.7f));
             jointPolys.Add(j, joint);
         }
-
+        const float alpha = 1f;
+        const float intensity = 3f;
         switch (role)
         {
             case Role.Follow:
-                followSpineRenderer = NewLineRenderer(0.01f);
+                followSpineRenderer = NewLineRenderer(0.01f, BloomMat);
                 followSpineRenderer.transform.SetParent(transform, false);
-                followLegsRenderer = NewLineRenderer(0.01f);
+                Material fifthsMat = BloomMat;
+                followLegsRenderer = NewLineRenderer(0.01f, fifthsMat);
                 followLegsRenderer.transform.SetParent(transform, false);
+
+                Gradient gradient = new();
+                Color endColor = Color.red; // intensify on HDR
+                Color midColor = Color.white * Mathf.Pow(2, intensity); 
+
+                gradient.SetKeys(
+                    new[]
+                    {
+                        new GradientColorKey(endColor, 0.0f),
+                        new GradientColorKey(midColor, 0.5f),  
+                        new GradientColorKey(endColor, 1.0f)
+                    },
+                    new[]
+                    {
+                        new GradientAlphaKey(alpha, 0.0f), 
+                        new GradientAlphaKey(alpha, 0.5f), 
+                        new GradientAlphaKey(alpha, 1.0f)
+                    }
+                );
+                        
+                AnimationCurve curve = new AnimationCurve();
+                curve.AddKey(new Keyframe(0.0f, 0.01f));
+                curve.AddKey(new Keyframe(0.5f, 0.03f));
+                curve.AddKey(new Keyframe(1.0f, 0.01f));
+                        
+                followLegsRenderer.widthCurve = curve;
+                followLegsRenderer.colorGradient = gradient;
                 break;
             case Role.Lead:
-                leadArmsRenderer = NewLineRenderer(0.01f);
+                leadArmsRenderer = NewLineRenderer(0.01f, BloomMat);
                 leadArmsRenderer.transform.SetParent(transform, false);
+
+                Gradient leadGradient = new();
+                
+                Color color = Color.red; // intensify on HDR 
+
+                leadGradient.SetKeys(
+                    new[]
+                    {
+                        new GradientColorKey(color, 0.0f),
+                        new GradientColorKey(color, 1.0f)
+                    },
+                    new[]
+                    {
+                        new GradientAlphaKey(alpha, 0.0f), 
+                        new GradientAlphaKey(alpha, 0.5f), 
+                        new GradientAlphaKey(alpha, 1.0f)
+                    }
+                );
+                        
+                AnimationCurve leadCurve = new AnimationCurve();
+                leadCurve.AddKey(new Keyframe(0.0f, 0.01f));
+                leadCurve.AddKey(new Keyframe(0.25f, 0.03f));
+                leadCurve.AddKey(new Keyframe(0.75f, 0.03f));
+                leadCurve.AddKey(new Keyframe(1.0f, 0.01f));
+                        
+                leadArmsRenderer.widthCurve = leadCurve;
+                leadArmsRenderer.colorGradient = leadGradient;
+                
+                
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(role), role, null);
@@ -202,6 +257,8 @@ public class Dancer : MonoBehaviour
                         }
 
                         Vector3[] legsBez = CatmullRomSpline.Generate(legsArray);
+                        
+
                         followLegsRenderer.positionCount = legsBez.Length;
                         followLegsRenderer.SetPositions(legsBez);
 
@@ -256,11 +313,11 @@ public class Dancer : MonoBehaviour
         return PosesByFrame[frameNumber];
     }
 
-    static LineRenderer NewLineRenderer(float LW)
+    static LineRenderer NewLineRenderer(float LW, Material mat)
     {
         GameObject parent = new("line rend");
         LineRenderer lineRenderer = parent.AddComponent<LineRenderer>();
-        lineRenderer.material = new Material(Shader.Find("Unlit/Color"));
+        lineRenderer.material = mat;
         lineRenderer.startWidth = LW;
         lineRenderer.endWidth = LW;
         lineRenderer.loop = false;

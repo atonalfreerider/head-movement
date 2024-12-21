@@ -25,6 +25,7 @@ public class HeadMovement : MonoBehaviour
     int frameNumber = 0;
 
     Coroutine animator;
+    public Material BloomMaterial;
 
     void Awake()
     {
@@ -66,7 +67,7 @@ public class HeadMovement : MonoBehaviour
         List<List<Float3>> allPoses = JsonConvert.DeserializeObject<List<List<Float3>>>(jsonString);
         List<List<Vector3>> allPosesVector3 = allPoses
             .Select(pose => pose.Select(float3 => new Vector3(float3.x, float3.y, float3.z)).ToList()).ToList();
-        dancer.Init(role, allPosesVector3, poseType);
+        dancer.Init(role, allPosesVector3, poseType, BloomMaterial);
 
         FRAME_MAX = allPosesVector3.Count;
 
