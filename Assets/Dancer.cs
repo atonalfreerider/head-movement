@@ -23,9 +23,10 @@ public class Dancer : MonoBehaviour
 
     readonly int[] smplFollowSpine =
     {
-        (int)SmplJoint.Spine1, 
-        (int)SmplJoint.Spine2, 
-        (int)SmplJoint.Spine3, 
+        (int)SmplJoint.Pelvis,
+        (int)SmplJoint.Spine1,
+        (int)SmplJoint.Spine2,
+        (int)SmplJoint.Spine3,
         (int)SmplJoint.Neck,
         (int)SmplJoint.Head
     };
@@ -36,7 +37,6 @@ public class Dancer : MonoBehaviour
         (int)SmplJoint.L_Ankle,
         (int)SmplJoint.L_Knee,
         (int)SmplJoint.L_Hip,
-        (int)SmplJoint.Pelvis,
         (int)SmplJoint.R_Hip,
         (int)SmplJoint.R_Knee,
         (int)SmplJoint.R_Ankle,
@@ -49,9 +49,7 @@ public class Dancer : MonoBehaviour
         (int)SmplJoint.L_Wrist,
         (int)SmplJoint.L_Elbow,
         (int)SmplJoint.L_Shoulder,
-        (int)SmplJoint.L_Collar,
-        (int)SmplJoint.Spine1,
-        (int)SmplJoint.R_Collar,
+        -1,
         (int)SmplJoint.R_Shoulder,
         (int)SmplJoint.R_Elbow,
         (int)SmplJoint.R_Wrist,
@@ -62,9 +60,9 @@ public class Dancer : MonoBehaviour
 
     void Awake()
     {
-        BloomMat =new Material(Shader.Find("Unlit/Color"));
+        BloomMat = new Material(Shader.Find("Unlit/Color"));
     }
-    
+
     public void Init(Role role, List<List<Vector3>> posesByFrame, PoseType poseType)
     {
         this.poseType = poseType;
@@ -181,20 +179,32 @@ public class Dancer : MonoBehaviour
                             spineArray[i] = pose[smplFollowSpine[i]];
                         }
 
-                        Vector3[] spineBez = BezierCurve(spineArray);
+                        Vector3[] spineBez = CatmullRomSpline.Generate(spineArray);
                         followSpineRenderer.positionCount = spineBez.Length;
                         followSpineRenderer.SetPositions(spineBez);
-                        
+
                         Vector3[] legsArray = new Vector3[smplFollowLegs.Length];
                         for (int i = 0; i < smplFollowLegs.Length; i++)
                         {
-                            legsArray[i] = pose[smplFollowLegs[i]];
+                            int x = smplFollowLegs[i];
+                            if (x == (int)SmplJoint.L_Hip)
+                            {
+                                legsArray[i] = Vector3.LerpUnclamped(pose[(int)SmplJoint.R_Hip], pose[x], 1.5f);
+                            }
+                            else if (x == (int)SmplJoint.R_Hip)
+                            {
+                                legsArray[i] = Vector3.LerpUnclamped(pose[(int)SmplJoint.L_Hip], pose[x], 1.5f);
+                            }
+                            else
+                            {
+                                legsArray[i] = pose[x];
+                            }
                         }
 
-                        Vector3[] legsBez = BezierCurve(legsArray);
+                        Vector3[] legsBez = CatmullRomSpline.Generate(legsArray);
                         followLegsRenderer.positionCount = legsBez.Length;
                         followLegsRenderer.SetPositions(legsBez);
-                        
+
                         break;
                     }
                     case Role.Lead:
@@ -202,16 +212,24 @@ public class Dancer : MonoBehaviour
                         for (int i = 0; i < smplLeadArms.Length; i++)
                         {
                             int x = smplLeadArms[i];
-                            if (x == (int)SmplJoint.Spine1)
+                            if (x == -1)
                             {
-                                Vector3 spineVector = pose[x];
+                                Vector3 lShoulder = pose[(int)SmplJoint.L_Shoulder];
+                                Vector3 rShoulder = pose[(int)SmplJoint.R_Shoulder];
+                                Vector3 shoulderMidpoint = Vector3.Lerp(lShoulder, rShoulder, 0.5f);
                                 Vector3 hipMidpoint = pose[(int)SmplJoint.Pelvis];
-                                Vector3 bodyAxis = hipMidpoint - spineVector;
-                                Vector3 forwardVector = Vector3.Cross(spineVector, bodyAxis);
-                                Vector3 upVector = Vector3.Cross(spineVector, forwardVector).normalized;
-                                forwardVector = Vector3.Cross(upVector, spineVector).normalized;
-                                
-                                armsArray[i] = forwardVector;
+
+                                // Calculate the body axis and forward vector based on the person's orientation
+                                Vector3 bodyAxis = hipMidpoint - shoulderMidpoint;
+                                Vector3 rightVector = rShoulder - lShoulder; // Right direction from left to right shoulder
+                                Vector3 forwardVector = Vector3.Cross(bodyAxis, rightVector).normalized;
+
+                                // Ensure the forward vector is perpendicular to the plane of the shoulders and hips
+                                Vector3 upVector = Vector3.Cross(rightVector, forwardVector).normalized;
+                                forwardVector = Vector3.Cross(upVector, rightVector).normalized;
+
+                                // Offset the shoulder midpoint by the forward vector to place the point 0.125m in front of the chest
+                                armsArray[i] = shoulderMidpoint + forwardVector * 0.125f;
                             }
                             else
                             {
@@ -219,7 +237,7 @@ public class Dancer : MonoBehaviour
                             }
                         }
 
-                        Vector3[] armsBez = BezierCurve(armsArray);
+                        Vector3[] armsBez = CatmullRomSpline.Generate(armsArray);
                         leadArmsRenderer.positionCount = armsBez.Length;
                         leadArmsRenderer.SetPositions(armsBez);
                         break;
@@ -232,12 +250,12 @@ public class Dancer : MonoBehaviour
                 throw new ArgumentOutOfRangeException();
         }
     }
-    
+
     public List<Vector3> GetPoseAtFrame(int frameNumber)
     {
         return PosesByFrame[frameNumber];
     }
-    
+
     static LineRenderer NewLineRenderer(float LW)
     {
         GameObject parent = new("line rend");
@@ -250,38 +268,4 @@ public class Dancer : MonoBehaviour
 
         return lineRenderer;
     }
-    
-    static Vector3[] BezierCurve(Vector3[] points)
-    {
-        float linearD = 0;
-        for (int ii = 0; ii < points.Length - 1; ii++)
-        {
-            linearD += Vector3.Distance(points[ii], points[ii + 1]);
-        }
-
-        int numPts = Convert.ToInt32(.3f * linearD / .03f);
-        Vector3[] curvePts = new Vector3[numPts + 1];
-        for (int ii = 0; ii <= numPts; ii++)
-        {
-            curvePts[ii] = BezierPt(points, ii / (float) numPts);
-        }
-
-        return curvePts;
-    }
-    
-    static Vector3 BezierPt(Vector3[] points, float t)
-    {
-        while (true)
-        {
-            if (points.Length == 1) return points.First();
-            Vector3[] lerps = new Vector3[points.Length - 1];
-            for (int ii = 0; ii < lerps.Length; ii++)
-            {
-                lerps[ii] = Vector3.Lerp(points[ii], points[ii + 1], t);
-            }
-
-            points = lerps;
-        }
-    }
-
 }
