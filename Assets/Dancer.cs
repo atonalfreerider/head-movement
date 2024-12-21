@@ -1,9 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using Shapes;
-using Shapes.Lines;
 using UnityEngine;
-using Util;
 
 public enum Role
 {
@@ -15,16 +14,57 @@ public class Dancer : MonoBehaviour
 {
     List<List<Vector3>> PosesByFrame = new();
     readonly Dictionary<int, Polygon> jointPolys = new();
-    StaticLink spinePoly;
-    StaticLink followSpineExtension;
-    StaticLink followHeadAxis;
     Role Role;
     PoseType poseType;
 
-    readonly List<StaticLink> jointLinks = new();
-    
-    Polygon chestTri;
+    LineRenderer followSpineRenderer;
+    LineRenderer followLegsRenderer;
+    LineRenderer leadArmsRenderer;
 
+    readonly int[] smplFollowSpine =
+    {
+        (int)SmplJoint.Spine1, 
+        (int)SmplJoint.Spine2, 
+        (int)SmplJoint.Spine3, 
+        (int)SmplJoint.Neck,
+        (int)SmplJoint.Head
+    };
+
+    readonly int[] smplFollowLegs =
+    {
+        (int)SmplJoint.L_Foot,
+        (int)SmplJoint.L_Ankle,
+        (int)SmplJoint.L_Knee,
+        (int)SmplJoint.L_Hip,
+        (int)SmplJoint.Pelvis,
+        (int)SmplJoint.R_Hip,
+        (int)SmplJoint.R_Knee,
+        (int)SmplJoint.R_Ankle,
+        (int)SmplJoint.R_Foot
+    };
+
+    readonly int[] smplLeadArms =
+    {
+        (int)SmplJoint.L_Hand,
+        (int)SmplJoint.L_Wrist,
+        (int)SmplJoint.L_Elbow,
+        (int)SmplJoint.L_Shoulder,
+        (int)SmplJoint.L_Collar,
+        (int)SmplJoint.Spine1,
+        (int)SmplJoint.R_Collar,
+        (int)SmplJoint.R_Shoulder,
+        (int)SmplJoint.R_Elbow,
+        (int)SmplJoint.R_Wrist,
+        (int)SmplJoint.R_Hand
+    };
+
+    public Material BloomMat;
+
+    void Awake()
+    {
+        BloomMat =new Material(Shader.Find("Unlit/Color"));
+    }
+    
     public void Init(Role role, List<List<Vector3>> posesByFrame, PoseType poseType)
     {
         this.poseType = poseType;
@@ -37,7 +77,7 @@ public class Dancer : MonoBehaviour
                 BuildHalpe();
                 break;
             case PoseType.Smpl:
-                BuildSmpl();
+                BuildSmpl(role);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(poseType), poseType, null);
@@ -45,22 +85,9 @@ public class Dancer : MonoBehaviour
 
         Role = role;
         PosesByFrame = posesByFrame;
-
-        if (Role == Role.Lead)
-        {
-            chestTri.gameObject.SetActive(true);
-        }
-        else
-        {
-            followSpineExtension.gameObject.SetActive(true);
-            if (poseType == PoseType.Coco)
-            {
-                //followHeadAxis.gameObject.SetActive(true);
-            }
-        }
     }
 
-    void BuildSmpl()
+    void BuildSmpl(Role role)
     {
         for (int j = 0; j < Enum.GetNames(typeof(SmplJoint)).Length; j++)
         {
@@ -73,14 +100,21 @@ public class Dancer : MonoBehaviour
             jointPolys.Add(j, joint);
         }
 
-        foreach (SmplLimbs limb in Enum.GetValues(typeof(SmplLimbs)))
+        switch (role)
         {
-            uint[] pair = Szudzik.uintSzudzik2tupleReverse((uint)limb);
-            StaticLink limbLink = LinkFromTo((int)pair[0], (int)pair[1]);
-            jointLinks.Add(limbLink);
+            case Role.Follow:
+                followSpineRenderer = NewLineRenderer(0.01f);
+                followSpineRenderer.transform.SetParent(transform, false);
+                followLegsRenderer = NewLineRenderer(0.01f);
+                followLegsRenderer.transform.SetParent(transform, false);
+                break;
+            case Role.Lead:
+                leadArmsRenderer = NewLineRenderer(0.01f);
+                leadArmsRenderer.transform.SetParent(transform, false);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(role), role, null);
         }
-
-        BuildShared();
     }
 
     void BuildCoco()
@@ -95,27 +129,6 @@ public class Dancer : MonoBehaviour
             joint.SetColor(Cividis.CividisColor(.7f));
             jointPolys.Add(j, joint);
         }
-
-        foreach (CocoLimbs limb in Enum.GetValues(typeof(CocoLimbs)))
-        {
-            uint[] pair = Szudzik.uintSzudzik2tupleReverse((uint)limb);
-            StaticLink limbLink = LinkFromTo((int)pair[0], (int)pair[1]);
-            jointLinks.Add(limbLink);
-        }
-
-        spinePoly = Instantiate(StaticLink.prototypeStaticLink);
-        spinePoly.name = "spine poly";
-        spinePoly.gameObject.SetActive(true);
-        spinePoly.SetColor(Cividis.CividisColor(.8f));
-        spinePoly.transform.SetParent(transform, false);
-
-        followHeadAxis = Instantiate(StaticLink.prototypeStaticLink);
-        followHeadAxis.name = "follow head axis";
-        followHeadAxis.gameObject.SetActive(false);
-        followHeadAxis.SetColor(Cividis.CividisColor(.8f));
-        followHeadAxis.transform.SetParent(transform, false);
-
-        BuildShared();
     }
 
     void BuildHalpe()
@@ -130,57 +143,6 @@ public class Dancer : MonoBehaviour
             joint.SetColor(Cividis.CividisColor(.7f));
             jointPolys.Add(j, joint);
         }
-
-        jointLinks.Add(LinkFromTo((int)Halpe.RHip, (int)Halpe.RKnee));
-        jointLinks.Add(LinkFromTo((int)Halpe.RKnee, (int)Halpe.RAnkle));
-        jointLinks.Add(LinkFromTo((int)Halpe.LHip, (int)Halpe.LKnee));
-        jointLinks.Add(LinkFromTo((int)Halpe.LKnee, (int)Halpe.LAnkle));
-        jointLinks.Add(LinkFromTo((int)Halpe.RShoulder, (int)Halpe.RElbow));
-        jointLinks.Add(LinkFromTo((int)Halpe.RElbow, (int)Halpe.RWrist));
-        jointLinks.Add(LinkFromTo((int)Halpe.LShoulder, (int)Halpe.LElbow));
-        jointLinks.Add(LinkFromTo((int)Halpe.LElbow, (int)Halpe.LWrist));
-        jointLinks.Add(LinkFromTo((int)Halpe.RShoulder, (int)Halpe.Neck));
-        jointLinks.Add(LinkFromTo((int)Halpe.LShoulder, (int)Halpe.Neck));
-        jointLinks.Add(LinkFromTo((int)Halpe.RHip, (int)Halpe.Hip));
-        jointLinks.Add(LinkFromTo((int)Halpe.LHip, (int)Halpe.Hip));
-        jointLinks.Add(LinkFromTo((int)Halpe.Hip, (int)Halpe.Neck));
-
-        BuildShared();
-    }
-
-    void BuildShared()
-    {
-        chestTri = Instantiate(PolygonFactory.Instance.tri);
-        chestTri.gameObject.SetActive(false);
-        chestTri.transform.SetParent(transform, false);
-        chestTri.SetColor(Cividis.CividisColor(.5f));
-
-        followSpineExtension = Instantiate(StaticLink.prototypeStaticLink);
-        followSpineExtension.name = "follow spine extension";
-        followSpineExtension.gameObject.SetActive(false);
-        followSpineExtension.LW = .005f;
-        followSpineExtension.SetColor(Cividis.CividisColor(.8f));
-        followSpineExtension.transform.SetParent(transform, false);
-    }
-
-    StaticLink LinkFromTo(int index1, int index2)
-    {
-        StaticLink staticLink = Instantiate(StaticLink.prototypeStaticLink);
-        staticLink.gameObject.SetActive(true);
-        staticLink.name = poseType switch
-        {
-            PoseType.Coco => $"{((CocoJoint)index1).ToString()}-{((CocoJoint)index2).ToString()}",
-            PoseType.Halpe => $"{((Halpe)index1).ToString()}-{((Halpe)index2).ToString()}",
-            PoseType.Smpl => $"{((SmplJoint)index1).ToString()}-{((SmplJoint)index2).ToString()}",
-            _ => throw new ArgumentOutOfRangeException(nameof(poseType), poseType,
-                null) // Handle unexpected poseType values
-        };
-
-
-        staticLink.SetColor(Cividis.CividisColor(.8f));
-        staticLink.transform.SetParent(transform, false);
-        staticLink.LinkFromTo(jointPolys[index1].transform, jointPolys[index2].transform);
-        return staticLink;
     }
 
     public void SetPoseToFrame(int frameNumber)
@@ -209,66 +171,117 @@ public class Dancer : MonoBehaviour
                     jointPolys[i].transform.localPosition = pose[i];
                 }
 
-                break;
-        }
+                switch (Role)
+                {
+                    case Role.Follow:
+                    {
+                        Vector3[] spineArray = new Vector3[smplFollowSpine.Length];
+                        for (int i = 0; i < smplFollowSpine.Length; i++)
+                        {
+                            spineArray[i] = pose[smplFollowSpine[i]];
+                        }
 
-        foreach (StaticLink staticLink in jointLinks)
-        {
-            staticLink.UpdateLink();
-        }
+                        Vector3[] spineBez = BezierCurve(spineArray);
+                        followSpineRenderer.positionCount = spineBez.Length;
+                        followSpineRenderer.SetPositions(spineBez);
+                        
+                        Vector3[] legsArray = new Vector3[smplFollowLegs.Length];
+                        for (int i = 0; i < smplFollowLegs.Length; i++)
+                        {
+                            legsArray[i] = pose[smplFollowLegs[i]];
+                        }
 
-        // Update chest and spine visualization
-        Vector3 lShoulder, rShoulder, lHip, rHip;
+                        Vector3[] legsBez = BezierCurve(legsArray);
+                        followLegsRenderer.positionCount = legsBez.Length;
+                        followLegsRenderer.SetPositions(legsBez);
+                        
+                        break;
+                    }
+                    case Role.Lead:
+                        Vector3[] armsArray = new Vector3[smplLeadArms.Length];
+                        for (int i = 0; i < smplLeadArms.Length; i++)
+                        {
+                            int x = smplLeadArms[i];
+                            if (x == (int)SmplJoint.Spine1)
+                            {
+                                Vector3 spineVector = pose[x];
+                                Vector3 hipMidpoint = pose[(int)SmplJoint.Pelvis];
+                                Vector3 bodyAxis = hipMidpoint - spineVector;
+                                Vector3 forwardVector = Vector3.Cross(spineVector, bodyAxis);
+                                Vector3 upVector = Vector3.Cross(spineVector, forwardVector).normalized;
+                                forwardVector = Vector3.Cross(upVector, spineVector).normalized;
+                                
+                                armsArray[i] = forwardVector;
+                            }
+                            else
+                            {
+                                armsArray[i] = pose[x];
+                            }
+                        }
 
-        switch (poseType)
-        {
-            case PoseType.Coco:
-                lShoulder = pose[(int)CocoJoint.L_Shoulder];
-                rShoulder = pose[(int)CocoJoint.R_Shoulder];
-                lHip = pose[(int)CocoJoint.L_Hip];
-                rHip = pose[(int)CocoJoint.R_Hip];
-                break;
-            case PoseType.Halpe:
-                lShoulder = pose[(int)Halpe.LShoulder];
-                rShoulder = pose[(int)Halpe.RShoulder];
-                lHip = pose[(int)Halpe.LHip];
-                rHip = pose[(int)Halpe.RHip];
-                break;
-            case PoseType.Smpl:
-                lShoulder = pose[(int)SmplJoint.L_Shoulder];
-                rShoulder = pose[(int)SmplJoint.R_Shoulder];
-                lHip = pose[(int)SmplJoint.L_Hip];
-                rHip = pose[(int)SmplJoint.R_Hip];
+                        Vector3[] armsBez = BezierCurve(armsArray);
+                        leadArmsRenderer.positionCount = armsBez.Length;
+                        leadArmsRenderer.SetPositions(armsBez);
+                        break;
+                    default:
+                        throw new ArgumentOutOfRangeException();
+                }
+
                 break;
             default:
                 throw new ArgumentOutOfRangeException();
         }
-
-        Vector3 shoulderMidpoint = (lShoulder + rShoulder) / 2;
-        Vector3 hipMidpoint = (lHip + rHip) / 2;
-
-        chestTri.transform.position = shoulderMidpoint;
-
-        if (poseType == PoseType.Coco)
-        {
-            spinePoly.DrawFromTo(hipMidpoint, shoulderMidpoint);
-        }
-
-        Vector3 bodyAxis = hipMidpoint - shoulderMidpoint;
-        Vector3 shoulderVector = lShoulder - rShoulder;
-        Vector3 forwardVector = Vector3.Cross(shoulderVector, bodyAxis);
-        Vector3 upVector = Vector3.Cross(shoulderVector, forwardVector).normalized;
-        forwardVector = Vector3.Cross(upVector, shoulderVector).normalized;
-
-        chestTri.transform.rotation = Quaternion.LookRotation(forwardVector, upVector);
-        chestTri.transform.localScale = new Vector3(Vector3.Distance(lShoulder, rShoulder) * .5f, .01f, .085f);
-        chestTri.transform.Translate(Vector3.forward * .075f);
-
-        followSpineExtension.DrawFromTo(shoulderMidpoint, shoulderMidpoint + upVector * .1f);
     }
     
     public List<Vector3> GetPoseAtFrame(int frameNumber)
     {
         return PosesByFrame[frameNumber];
     }
+    
+    static LineRenderer NewLineRenderer(float LW)
+    {
+        GameObject parent = new("line rend");
+        LineRenderer lineRenderer = parent.AddComponent<LineRenderer>();
+        lineRenderer.material = new Material(Shader.Find("Unlit/Color"));
+        lineRenderer.startWidth = LW;
+        lineRenderer.endWidth = LW;
+        lineRenderer.loop = false;
+        lineRenderer.useWorldSpace = false;
+
+        return lineRenderer;
+    }
+    
+    static Vector3[] BezierCurve(Vector3[] points)
+    {
+        float linearD = 0;
+        for (int ii = 0; ii < points.Length - 1; ii++)
+        {
+            linearD += Vector3.Distance(points[ii], points[ii + 1]);
+        }
+
+        int numPts = Convert.ToInt32(.3f * linearD / .03f);
+        Vector3[] curvePts = new Vector3[numPts + 1];
+        for (int ii = 0; ii <= numPts; ii++)
+        {
+            curvePts[ii] = BezierPt(points, ii / (float) numPts);
+        }
+
+        return curvePts;
+    }
+    
+    static Vector3 BezierPt(Vector3[] points, float t)
+    {
+        while (true)
+        {
+            if (points.Length == 1) return points.First();
+            Vector3[] lerps = new Vector3[points.Length - 1];
+            for (int ii = 0; ii < lerps.Length; ii++)
+            {
+                lerps[ii] = Vector3.Lerp(points[ii], points[ii + 1], t);
+            }
+
+            points = lerps;
+        }
+    }
+
 }
