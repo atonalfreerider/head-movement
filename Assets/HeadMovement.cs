@@ -38,7 +38,7 @@ public class HeadMovement : MonoBehaviour
         Follow = ReadAllPosesFrom(Path.Combine(assetPath, "figure2.json"), Role.Follow, poseType);
 
         contactDetection = GetComponent<ContactDetection>();
-        contactDetection.Init(Lead, Follow, poseType);
+        contactDetection.Init(Lead, Follow, BloomMaterial);
     }
 
     void Start()

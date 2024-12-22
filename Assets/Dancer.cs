@@ -108,11 +108,13 @@ public class Dancer : MonoBehaviour
     };
 
     Material BloomMat;
+    readonly Color darkGrey = new(0.1f, 0.1f, 0.1f);
 
     public void Init(Role role, List<List<Vector3>> posesByFrame, PoseType poseType, Material bloomMat)
     {
         this.poseType = poseType;
         BloomMat = bloomMat;
+
 
         switch (poseType)
         {
@@ -147,8 +149,8 @@ public class Dancer : MonoBehaviour
                 followLegsRenderer.transform.SetParent(transform, false);
 
                 Gradient followLegsGrad = new();
-                Color endColor = Color.red; // intensify on HDR
-                Color midColor = Color.white * Mathf.Pow(2, intensity);
+                Color endColor = Color.Lerp(darkGrey, Color.red, 0.2f); // intensify on HDR 
+                Color midColor = Color.Lerp(darkGrey, Color.white, 0.2f); // intensify on HDR 
 
                 followLegsGrad.SetKeys(
                     new[]
@@ -165,7 +167,7 @@ public class Dancer : MonoBehaviour
                     }
                 );
 
-                AnimationCurve followLegsCurve = new AnimationCurve();
+                AnimationCurve followLegsCurve = new();
                 followLegsCurve.AddKey(new Keyframe(0.0f, 0.01f));
                 followLegsCurve.AddKey(new Keyframe(0.5f, 0.03f));
                 followLegsCurve.AddKey(new Keyframe(1.0f, 0.01f));
@@ -179,7 +181,7 @@ public class Dancer : MonoBehaviour
                 followShouldersRenderer.widthCurve = followLegsCurve;
                 followShouldersRenderer.colorGradient = followLegsGrad;
                 
-                AnimationCurve followArmCurve = new AnimationCurve();
+                AnimationCurve followArmCurve = new();
                 followArmCurve.AddKey(new Keyframe(0.0f, 0.01f));
                 followArmCurve.AddKey(new Keyframe(1.0f, 0.02f));
                 
@@ -201,8 +203,7 @@ public class Dancer : MonoBehaviour
                 leadArmsRenderer.transform.SetParent(transform, false);
 
                 Gradient leadArmGradient = new();
-
-                Color color = Color.red; // intensify on HDR 
+                Color color = Color.Lerp(darkGrey, Color.red, 0.2f); // intensify on HDR 
 
                 leadArmGradient.SetKeys(
                     new[]
@@ -217,7 +218,7 @@ public class Dancer : MonoBehaviour
                     }
                 );
 
-                AnimationCurve leadArmCurve = new AnimationCurve();
+                AnimationCurve leadArmCurve = new();
                 leadArmCurve.AddKey(new Keyframe(0.0f, 0.01f));
                 leadArmCurve.AddKey(new Keyframe(0.25f, 0.03f));
                 leadArmCurve.AddKey(new Keyframe(0.75f, 0.03f));
@@ -229,9 +230,9 @@ public class Dancer : MonoBehaviour
                 leadLeftLegRenderer = NewLineRenderer(0.01f, BloomMat);
                 leadLeftLegRenderer.transform.SetParent(transform, false);
                 
-                Gradient leadLegGradient = new();
+                Gradient leadGradient = new();
                 
-                leadLegGradient.SetKeys(
+                leadGradient.SetKeys(
                     new[]
                     {
                         new GradientColorKey(color, 0.0f),
@@ -244,20 +245,20 @@ public class Dancer : MonoBehaviour
                     }
                 );
 
-                AnimationCurve leadLegCurve = new AnimationCurve();
+                AnimationCurve leadLegCurve = new();
                 leadLegCurve.AddKey(new Keyframe(0.0f, 0.01f));
                 leadLegCurve.AddKey(new Keyframe(0.25f, 0.03f));
                 leadLegCurve.AddKey(new Keyframe(0.75f, 0.05f));
                 leadLegCurve.AddKey(new Keyframe(1.0f, 0.03f));
 
                 leadLeftLegRenderer.widthCurve = leadLegCurve;
-                leadLeftLegRenderer.colorGradient = leadLegGradient;
+                leadLeftLegRenderer.colorGradient = leadGradient;
                 
                 leadRightLegRenderer = NewLineRenderer(0.01f, BloomMat);
                 leadRightLegRenderer.transform.SetParent(transform, false);
 
                 leadRightLegRenderer.widthCurve = leadLegCurve;
-                leadRightLegRenderer.colorGradient = leadLegGradient;
+                leadRightLegRenderer.colorGradient = leadGradient;
 
                 break;
             default:
@@ -467,9 +468,38 @@ public class Dancer : MonoBehaviour
         }
     }
 
-    public List<Vector3> GetPoseAtFrame(int frameNumber)
+    public Vector3 GetLeftHandContact(int frameNumber)
     {
-        return PosesByFrame[frameNumber];
+        List<Vector3> pose = PosesByFrame[frameNumber];
+        return Vector3.Lerp(pose[(int)SmplJoint.L_Hand], pose[(int)SmplJoint.L_Wrist], 0.5f);
+    }
+    
+    public Vector3 GetRightHandContact(int frameNumber)
+    {
+        List<Vector3> pose = PosesByFrame[frameNumber];
+        return Vector3.Lerp(pose[(int)SmplJoint.R_Hand], pose[(int)SmplJoint.R_Wrist], 0.5f);
+    }
+
+    public Vector3 GetLeftForearm(int frameNumber)
+    {
+        List<Vector3> pose = PosesByFrame[frameNumber];
+        return Vector3.Lerp(pose[(int)SmplJoint.L_Wrist], pose[(int)SmplJoint.L_Elbow], 0.5f);
+    }
+    
+    public Vector3 GetRightForearm(int frameNumber)
+    {
+        List<Vector3> pose = PosesByFrame[frameNumber];
+        return Vector3.Lerp(pose[(int)SmplJoint.R_Wrist], pose[(int)SmplJoint.R_Elbow], 0.5f);
+    }
+
+    public Vector3 GetLeftElbow(int frameNumber)
+    {
+        return PosesByFrame[frameNumber][(int)SmplJoint.L_Elbow];
+    }
+    
+    public Vector3 GetRightElbow(int frameNumber)
+    {
+        return PosesByFrame[frameNumber][(int)SmplJoint.R_Elbow];
     }
 
     static LineRenderer NewLineRenderer(float LW, Material mat)
