@@ -142,17 +142,11 @@ public class Dancer : MonoBehaviour
         switch (role)
         {
             case Role.Follow:
-                followSpineRenderer = NewLineRenderer(0.01f, BloomMat);
-                followSpineRenderer.transform.SetParent(transform, false);
-                
-                followLegsRenderer = NewLineRenderer(0.01f, BloomMat);
-                followLegsRenderer.transform.SetParent(transform, false);
-
-                Gradient followLegsGrad = new();
-                Color endColor = Color.Lerp(darkGrey, Color.red, 0.2f); // intensify on HDR 
+                Gradient followGradient = new();
+                Color endColor = Color.Lerp(darkGrey, Color.magenta, 0.2f); // intensify on HDR 
                 Color midColor = Color.Lerp(darkGrey, Color.white, 0.2f); // intensify on HDR 
 
-                followLegsGrad.SetKeys(
+                followGradient.SetKeys(
                     new[]
                     {
                         new GradientColorKey(endColor, 0.0f),
@@ -171,15 +165,23 @@ public class Dancer : MonoBehaviour
                 followLegsCurve.AddKey(new Keyframe(0.0f, 0.01f));
                 followLegsCurve.AddKey(new Keyframe(0.5f, 0.03f));
                 followLegsCurve.AddKey(new Keyframe(1.0f, 0.01f));
+                
+                followSpineRenderer = NewLineRenderer(0.01f, BloomMat);
+                followSpineRenderer.transform.SetParent(transform, false);
+
+                followSpineRenderer.colorGradient = followGradient;
+                
+                followLegsRenderer = NewLineRenderer(0.01f, BloomMat);
+                followLegsRenderer.transform.SetParent(transform, false);
 
                 followLegsRenderer.widthCurve = followLegsCurve;
-                followLegsRenderer.colorGradient = followLegsGrad;
+                followLegsRenderer.colorGradient = followGradient;
                 
                 followShouldersRenderer = NewLineRenderer(0.01f, BloomMat);
                 followShouldersRenderer.transform.SetParent(transform, false);
                 
                 followShouldersRenderer.widthCurve = followLegsCurve;
-                followShouldersRenderer.colorGradient = followLegsGrad;
+                followShouldersRenderer.colorGradient = followGradient;
                 
                 AnimationCurve followArmCurve = new();
                 followArmCurve.AddKey(new Keyframe(0.0f, 0.01f));
@@ -189,13 +191,13 @@ public class Dancer : MonoBehaviour
                 followLeftArmRenderer.transform.SetParent(transform, false);
                 
                 followLeftArmRenderer.widthCurve = followArmCurve;
-                followLeftArmRenderer.colorGradient = followLegsGrad;
+                followLeftArmRenderer.colorGradient = followGradient;
                 
                 followRightArmRenderer = NewLineRenderer(0.01f, BloomMat);
                 followRightArmRenderer.transform.SetParent(transform, false);
                 
                 followRightArmRenderer.widthCurve = followArmCurve;
-                followRightArmRenderer.colorGradient = followLegsGrad;
+                followRightArmRenderer.colorGradient = followGradient;
                 
                 break;
             case Role.Lead:
@@ -391,23 +393,7 @@ public class Dancer : MonoBehaviour
                             int x = smplLeadArms[i];
                             if (x == -1)
                             {
-                                Vector3 lShoulder = pose[(int)SmplJoint.L_Shoulder];
-                                Vector3 rShoulder = pose[(int)SmplJoint.R_Shoulder];
-                                Vector3 shoulderMidpoint = Vector3.Lerp(lShoulder, rShoulder, 0.5f);
-                                Vector3 hipMidpoint = pose[(int)SmplJoint.Pelvis];
-
-                                // Calculate the body axis and forward vector based on the person's orientation
-                                Vector3 bodyAxis = hipMidpoint - shoulderMidpoint;
-                                Vector3 rightVector =
-                                    rShoulder - lShoulder; // Right direction from left to right shoulder
-                                Vector3 forwardVector = Vector3.Cross(bodyAxis, rightVector).normalized;
-
-                                // Ensure the forward vector is perpendicular to the plane of the shoulders and hips
-                                Vector3 upVector = Vector3.Cross(rightVector, forwardVector).normalized;
-                                forwardVector = Vector3.Cross(upVector, rightVector).normalized;
-
-                                // Offset the shoulder midpoint by the forward vector to place the point 0.125m in front of the chest
-                                armsArray[i] = shoulderMidpoint + forwardVector * 0.125f;
+                                armsArray[i] = GetChestForward(frameNumber);
                             }
                             else
                             {
@@ -501,6 +487,143 @@ public class Dancer : MonoBehaviour
     {
         return PosesByFrame[frameNumber][(int)SmplJoint.R_Elbow];
     }
+    
+    public Vector3 GetLeftUpperArm(int frameNumber)
+    {
+        List<Vector3> pose = PosesByFrame[frameNumber];
+        return Vector3.Lerp(pose[(int)SmplJoint.L_Elbow], pose[(int)SmplJoint.L_Shoulder], 0.5f);
+    }
+    
+    public Vector3 GetRightUpperArm(int frameNumber)
+    {
+        List<Vector3> pose = PosesByFrame[frameNumber];
+        return Vector3.Lerp(pose[(int)SmplJoint.R_Elbow], pose[(int)SmplJoint.R_Shoulder], 0.5f);
+    }
+    
+    public Vector3 GetLeftShoulder(int frameNumber)
+    {
+        return PosesByFrame[frameNumber][(int)SmplJoint.L_Shoulder];
+    }
+    
+    public Vector3 GetRightShoulder(int frameNumber)
+    {
+        return PosesByFrame[frameNumber][(int)SmplJoint.R_Shoulder];
+    }
+
+    public Vector3 GetRightChin(int frameNumber)
+    {
+        List<Vector3> pose = PosesByFrame[frameNumber];
+        return Vector3.Lerp(pose[(int)SmplJoint.Head], pose[(int)SmplJoint.R_Shoulder], 0.15f);
+    }
+    
+    public Vector3 GetLeftChin(int frameNumber)
+    {
+        List<Vector3> pose = PosesByFrame[frameNumber];
+        return Vector3.Lerp(pose[(int)SmplJoint.Head], pose[(int)SmplJoint.L_Shoulder], 0.15f);
+    }
+
+    public Vector3 GetRightCollar(int frameNumber)
+    {
+        return PosesByFrame[frameNumber][(int)SmplJoint.R_Collar];
+    }
+    
+    public Vector3 GetLeftCollar(int frameNumber)
+    {
+        return PosesByFrame[frameNumber][(int)SmplJoint.L_Collar];
+    }
+
+    Vector3 GetChestForward(int frameNumber)
+    {
+        List<Vector3> pose = PosesByFrame[frameNumber];
+        Vector3 lShoulder = pose[(int)SmplJoint.L_Shoulder];
+        Vector3 rShoulder = pose[(int)SmplJoint.R_Shoulder];
+        Vector3 shoulderMidpoint = Vector3.Lerp(lShoulder, rShoulder, 0.5f);
+        Vector3 hipMidpoint = pose[(int)SmplJoint.Pelvis];
+
+        // Calculate the body axis and forward vector based on the person's orientation
+        Vector3 bodyAxis = hipMidpoint - shoulderMidpoint;
+        Vector3 rightVector =
+            rShoulder - lShoulder; // Right direction from left to right shoulder
+        Vector3 forwardVector = Vector3.Cross(bodyAxis, rightVector).normalized;
+
+        // Ensure the forward vector is perpendicular to the plane of the shoulders and hips
+        Vector3 upVector = Vector3.Cross(rightVector, forwardVector).normalized;
+        forwardVector = Vector3.Cross(upVector, rightVector).normalized;
+        // Offset the shoulder midpoint by the forward vector to place the point 0.125m in front of the chest
+        return shoulderMidpoint + forwardVector * 0.125f;
+    }
+
+    public Vector3 GetNeckNape(int frameNumber)
+    {
+        Vector3 chestForward = GetChestForward(frameNumber);
+        List<Vector3> pose = PosesByFrame[frameNumber];
+        Vector3 neck = pose[(int)SmplJoint.Neck];
+        return Vector3.LerpUnclamped(chestForward, neck, 1.2f);
+    }
+
+    public Vector3 GetRightPectoral(int frameNumber)
+    {
+        Vector3 chestForward = GetChestForward(frameNumber);
+        List<Vector3> pose = PosesByFrame[frameNumber];
+        Vector3 rightCollar = pose[(int)SmplJoint.R_Collar];
+        return Vector3.Lerp(chestForward, rightCollar, .1f);
+    }
+    
+    public Vector3 GetLeftPectoral(int frameNumber)
+    {
+        Vector3 chestForward = GetChestForward(frameNumber);
+        List<Vector3> pose = PosesByFrame[frameNumber];
+        Vector3 leftCollar = pose[(int)SmplJoint.L_Collar];
+        return Vector3.Lerp(chestForward, leftCollar, .1f);
+    }
+    
+    public Vector3 GetRightHip(int frameNumber)
+    {
+        return PosesByFrame[frameNumber][(int)SmplJoint.R_Hip];
+    }
+    
+    public Vector3 GetLeftHip(int frameNumber)
+    {
+        return PosesByFrame[frameNumber][(int)SmplJoint.L_Hip];
+    }
+    
+    public Vector3 GetRightThigh(int frameNumber)
+    {
+        List<Vector3> pose = PosesByFrame[frameNumber];
+        return Vector3.Lerp(pose[(int)SmplJoint.R_Hip], pose[(int)SmplJoint.R_Knee], 0.5f);
+    }
+    
+    public Vector3 GetLeftThigh(int frameNumber)
+    {
+        List<Vector3> pose = PosesByFrame[frameNumber];
+        return Vector3.Lerp(pose[(int)SmplJoint.L_Hip], pose[(int)SmplJoint.L_Knee], 0.5f);
+    }
+    
+    public Vector3 GetRightKnee(int frameNumber)
+    {
+        return PosesByFrame[frameNumber][(int)SmplJoint.R_Knee];
+    }
+    
+    public Vector3 GetLeftKnee(int frameNumber)
+    {
+        return PosesByFrame[frameNumber][(int)SmplJoint.L_Knee];
+    }
+    
+    public Vector3 GetSpine1(int frameNumber)
+    {
+        return PosesByFrame[frameNumber][(int)SmplJoint.Spine1];
+    }
+    
+    public Vector3 GetSpine2(int frameNumber)
+    {
+        return PosesByFrame[frameNumber][(int)SmplJoint.Spine2];
+    }
+    
+    public Vector3 GetSpine3(int frameNumber)
+    {
+        return PosesByFrame[frameNumber][(int)SmplJoint.Spine3];
+    }
+
 
     static LineRenderer NewLineRenderer(float LW, Material mat)
     {
