@@ -6,6 +6,8 @@ using System.Linq;
 using Newtonsoft.Json;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.Networking;
+using VRTKLite.Controllers;
 
 [RequireComponent(typeof(ContactDetection))]
 public class HeadMovement : MonoBehaviour
@@ -15,45 +17,103 @@ public class HeadMovement : MonoBehaviour
     public static HeadMovement Instance;
 
     int FRAME_MAX = -1;
+    float totalSeconds = 0;
 
     Dancer Lead;
     Dancer Follow;
 
     ContactDetection contactDetection;
 
-    float delayBetweenFrames = .03f;
-    int frameNumber = 0;
-
     Coroutine animator;
+    public Material BloomMaterial;
+    
+    CameraControl cameraControl;
+    
+    AudioSource audioSource;
+    bool audioLoaded = false;
+    string currentFolder = "";
+    
+    Dictionary<int, int> beatByFrame;
+    List<List<float>> zoukTime;
+    int currentFrame = 0;
 
     void Awake()
     {
         Instance = this;
         const PoseType poseType = PoseType.Smpl;
-        Lead = ReadAllPosesFrom(Path.Combine(assetPath, "figure1.json"), Role.Lead, poseType);
-        Follow = ReadAllPosesFrom(Path.Combine(assetPath, "figure2.json"), Role.Follow, poseType);
+
+        string[] captures = Directory.GetDirectories(assetPath);
+        currentFolder = captures[0];
+        
+        Lead = ReadAllPosesFrom(Path.Combine(currentFolder, "figure1.json"), Role.Lead, poseType);
+        Follow = ReadAllPosesFrom(Path.Combine(currentFolder, "figure2.json"), Role.Follow, poseType);
+        
+        string zoukTimeString = File.ReadAllText(Path.Combine(currentFolder, "zouk-time-analysis.json"));
+        zoukTime = JsonConvert.DeserializeObject<List<List<float>>>(zoukTimeString);
 
         contactDetection = GetComponent<ContactDetection>();
-        contactDetection.Init(Lead, Follow, poseType);
+        contactDetection.Init(Lead, Follow, BloomMaterial);
     }
 
     void Start()
     {
-        Resume();
+        cameraControl = GameObject.Find("Simulator").GetComponent<CameraControl>();
+        StartCoroutine(LoadAudio());
+    }
+    
+    IEnumerator LoadAudio()
+    {
+        // Build the full path to the WAV file in StreamingAssets
+        string filePath = Path.Combine(currentFolder, "audio.wav");
+
+        // On most platforms, we need the "file://" prefix to read directly
+        // For Android, UnityWebRequest can handle it without the prefix, but
+        // using "file://" will work cross-platform (except WebGL).
+        if (!filePath.Contains("://"))
+        {
+            filePath = "file://" + filePath;
+        }
+
+        // Use UnityWebRequestMultimedia to download the WAV file as an AudioClip
+        using UnityWebRequest www = UnityWebRequestMultimedia.GetAudioClip(filePath, AudioType.WAV);
+        yield return www.SendWebRequest();
+
+        // Check for errors
+        if (www.result is UnityWebRequest.Result.ConnectionError or UnityWebRequest.Result.ProtocolError)
+        {
+            Debug.LogError($"Error loading audio: {www.error}");
+        }
+        else
+        {
+            // Get the AudioClip from the download handler
+            AudioClip clip = DownloadHandlerAudioClip.GetContent(www);
+
+            // Create an AudioSource (if one doesn't exist)
+            if (audioSource == null)
+            {
+                audioSource = gameObject.AddComponent<AudioSource>();
+            }
+
+            // Assign the clip and play
+            audioSource.clip = clip;
+            totalSeconds = clip.length;
+            audioLoaded = true;
+            beatByFrame = new Dictionary<int, int>();
+            foreach (List<float> floatPair in zoukTime)
+            {
+                if ((int)floatPair[1] == 3) continue; // filter out high-hat
+                
+                int frameBeat = (int)Mathf.Round((floatPair[0] / totalSeconds) * FRAME_MAX);
+                beatByFrame.TryAdd(frameBeat, (int)floatPair[1]);
+            }
+        }
     }
 
     IEnumerator Iterate()
     {
-        if (frameNumber >= FRAME_MAX)
-        {
-            frameNumber = 0;
-        }
-
         SetToFrameNumber();
 
-        yield return new WaitForSeconds(delayBetweenFrames);
-
-        frameNumber++;
+        yield return null;
 
         Resume();
     }
@@ -66,7 +126,7 @@ public class HeadMovement : MonoBehaviour
         List<List<Float3>> allPoses = JsonConvert.DeserializeObject<List<List<Float3>>>(jsonString);
         List<List<Vector3>> allPosesVector3 = allPoses
             .Select(pose => pose.Select(float3 => new Vector3(float3.x, float3.y, float3.z)).ToList()).ToList();
-        dancer.Init(role, allPosesVector3, poseType);
+        dancer.Init(role, allPosesVector3, poseType, BloomMaterial);
 
         FRAME_MAX = allPosesVector3.Count;
 
@@ -75,64 +135,37 @@ public class HeadMovement : MonoBehaviour
 
     void SetToFrameNumber()
     {
-        Lead.SetPoseToFrame(frameNumber);
-        Follow.SetPoseToFrame(frameNumber);
+        int frameNumber = GetFrameNumber();
+        if (currentFrame == frameNumber) return;
+        currentFrame = frameNumber;
+        
+        int currentBeat = beatByFrame.GetValueOrDefault(frameNumber, 0);
+        
+        Lead.SetPoseToFrame(frameNumber, currentBeat);
+        Follow.SetPoseToFrame(frameNumber, currentBeat);
 
         contactDetection.DetectContact(frameNumber);
     }
 
     public void SlowDown()
     {
-        if (animator != null)
-        {
-            // play mode
-            delayBetweenFrames += .01f;
-        }
-        else
-        {
-            // pause mode. single iteration
-            frameNumber--;
-            if (frameNumber < 0)
-            {
-                frameNumber = 0;
-            }
 
-            SetToFrameNumber();
-        }
     }
 
     public void SpeedUp()
     {
-        if (animator != null)
-        {
-            // play mode
-            delayBetweenFrames -= .01f;
-            if (delayBetweenFrames < .01f)
-            {
-                delayBetweenFrames = .01f;
-            }
-        }
-        else
-        {
-            // pause mode. single iteration
-            frameNumber++;
-            if (frameNumber >= FRAME_MAX)
-            {
-                frameNumber = 0;
-            }
-            
-            SetToFrameNumber();
-        }
     }
 
     public void TogglePlayPause()
     {
         if (animator == null)
         {
+            audioSource.Play();
             Resume();
         }
         else
         {
+            audioSource.Pause();
             Pause();
         }
     }
@@ -165,6 +198,19 @@ public class HeadMovement : MonoBehaviour
         {
             TogglePlayPause();
         }
+
+        if (audioLoaded && cameraControl.gameObject.activeInHierarchy)
+        {
+            int frameNumber = GetFrameNumber();
+            Vector3 center = Vector3.Lerp(Lead.Center(frameNumber), Follow.Center(frameNumber), .5f);
+            center = new Vector3(center.x, 0, center.z);
+            cameraControl.Center = center;
+        }
+    }
+    
+    int GetFrameNumber()
+    {
+        return (int) Mathf.Round((audioSource.time / totalSeconds) * FRAME_MAX);
     }
 
     [Serializable]

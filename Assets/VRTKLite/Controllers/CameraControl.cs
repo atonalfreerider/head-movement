@@ -8,42 +8,16 @@ namespace VRTKLite.Controllers
         // From:
         // http://answers.unity3d.com/questions/29741/mouse-look-script.html
 
-        public float Sensitivity = 1f;
-        public float Speed = 1f;
-
-        const float MinimumXRotation = -360f;
-        const float MaximumXRotation = 360f;
-
-        const float MinimumYRotation = -60f;
-        const float MaximumYRotation = 60f;
-
-        Vector2 rotation = Vector2.zero;
+        public float Speed = .3f;
+        public Vector3 Center = new(0f, 0.7f, 0f);
+        float alpha = 0;
+        float height = 0.7f;
+        float rad = 2;
 
         void Update()
         {
-            // Rotate the camera on right click
-            if (Mouse.current.rightButton.isPressed)
-            {
-                // Read the mouse input axis
-                rotation += new Vector2(
-                    Mouse.current.delta.x.ReadValue(),
-                    Mouse.current.delta.y.ReadValue()) * Sensitivity;
-                rotation.x = ClampAngle(
-                    rotation.x,
-                    MinimumXRotation,
-                    MaximumXRotation);
-                rotation.y = ClampAngle(
-                    rotation.y,
-                    MinimumYRotation,
-                    MaximumYRotation);
-                Quaternion xQuaternion =
-                    Quaternion.AngleAxis(rotation.x, Vector3.up);
-                Quaternion yQuaternion =
-                    Quaternion.AngleAxis(rotation.y, -Vector3.right);
-                transform.localRotation = xQuaternion * yQuaternion;
-            }
-
             MoveCamera();
+            transform.LookAt(new Vector3(Center.x, 0.7f, Center.z));
         }
 
         static float ClampAngle(float angle, float min, float max)
@@ -65,37 +39,51 @@ namespace VRTKLite.Controllers
         {
             if (Keyboard.current.wKey.isPressed)
             {
-                transform.position +=
-                    transform.forward.normalized * (Time.deltaTime * Speed);
+                rad -= Speed * Time.deltaTime;
+                if (rad < .3f)
+                {
+                    rad = .3f;
+                }
+            }
+            
+            if (Keyboard.current.sKey.isPressed)
+            {
+                rad += Speed * Time.deltaTime;
+                if (rad > 10f)
+                {
+                    rad = 10f;
+                }
             }
 
             if (Keyboard.current.aKey.isPressed)
             {
-                transform.position -=
-                    transform.right.normalized * (Time.deltaTime * Speed);
-            }
-
-            if (Keyboard.current.sKey.isPressed)
-            {
-                transform.position -=
-                    transform.forward.normalized * (Time.deltaTime * Speed);
+                alpha += Speed * Time.deltaTime;
+                if (alpha > Mathf.PI)
+                {
+                    alpha = -Mathf.PI;
+                }
             }
 
             if (Keyboard.current.dKey.isPressed)
             {
-                transform.position +=
-                    transform.right.normalized * (Time.deltaTime * Speed);
+                alpha -= Time.deltaTime * Speed;
+                if (alpha < -Mathf.PI)
+                {
+                    alpha = Mathf.PI;
+                }
             }
 
             if (Keyboard.current.qKey.isPressed)
             {
-                transform.position += Vector3.down * (Time.deltaTime * Speed);
+                height -= Speed * Time.deltaTime;
             }
 
             if (Keyboard.current.eKey.isPressed)
             {
-                transform.position += Vector3.up * (Time.deltaTime * Speed);
+                height += Speed * Time.deltaTime;
             }
+            
+            transform.position = Center + new Vector3(rad * Mathf.Sin(alpha), height, rad * Mathf.Cos(alpha));
         }
     }
 }
