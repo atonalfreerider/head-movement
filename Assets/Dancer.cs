@@ -139,7 +139,6 @@ public class Dancer : MonoBehaviour
         {
             hairSimulation = new GameObject("Hair Simulation").AddComponent<HairSimulation>();
             hairSimulation.transform.SetParent(transform, false);
-            hairSimulation.Init(bloomMat);
         }
     }
 
@@ -278,7 +277,9 @@ public class Dancer : MonoBehaviour
                         hairSimulation.transform.LookAt(GetNose(frameNumber));
                         hairSimulation.transform.Rotate(Vector3.right, -60f);
                         hairSimulation.transform.Rotate(Vector3.up, 180f);
-                        
+
+                        hairSimulation.Init(BloomMat);
+
                         Vector3[] spineArray = new Vector3[smplFollowSpine.Length];
                         for (int i = 0; i < smplFollowSpine.Length; i++)
                         {
