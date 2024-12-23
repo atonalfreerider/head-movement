@@ -142,24 +142,6 @@ public class Dancer : MonoBehaviour
         switch (role)
         {
             case Role.Follow:
-                Gradient followGradient = new();
-                Color endColor = Color.Lerp(darkGrey, Color.magenta, 0.2f); // intensify on HDR 
-                Color midColor = Color.Lerp(darkGrey, Color.white, 0.2f); // intensify on HDR 
-
-                followGradient.SetKeys(
-                    new[]
-                    {
-                        new GradientColorKey(endColor, 0.0f),
-                        new GradientColorKey(midColor, 0.5f),
-                        new GradientColorKey(endColor, 1.0f)
-                    },
-                    new[]
-                    {
-                        new GradientAlphaKey(alpha, 0.0f),
-                        new GradientAlphaKey(alpha, 0.5f),
-                        new GradientAlphaKey(alpha, 1.0f)
-                    }
-                );
 
                 AnimationCurve followLegsCurve = new();
                 followLegsCurve.AddKey(new Keyframe(0.0f, 0.01f));
@@ -168,20 +150,16 @@ public class Dancer : MonoBehaviour
                 
                 followSpineRenderer = NewLineRenderer(0.01f, BloomMat);
                 followSpineRenderer.transform.SetParent(transform, false);
-
-                followSpineRenderer.colorGradient = followGradient;
-                
+             
                 followLegsRenderer = NewLineRenderer(0.01f, BloomMat);
                 followLegsRenderer.transform.SetParent(transform, false);
 
                 followLegsRenderer.widthCurve = followLegsCurve;
-                followLegsRenderer.colorGradient = followGradient;
                 
                 followShouldersRenderer = NewLineRenderer(0.01f, BloomMat);
                 followShouldersRenderer.transform.SetParent(transform, false);
                 
                 followShouldersRenderer.widthCurve = followLegsCurve;
-                followShouldersRenderer.colorGradient = followGradient;
                 
                 AnimationCurve followArmCurve = new();
                 followArmCurve.AddKey(new Keyframe(0.0f, 0.01f));
@@ -191,34 +169,16 @@ public class Dancer : MonoBehaviour
                 followLeftArmRenderer.transform.SetParent(transform, false);
                 
                 followLeftArmRenderer.widthCurve = followArmCurve;
-                followLeftArmRenderer.colorGradient = followGradient;
                 
                 followRightArmRenderer = NewLineRenderer(0.01f, BloomMat);
                 followRightArmRenderer.transform.SetParent(transform, false);
                 
                 followRightArmRenderer.widthCurve = followArmCurve;
-                followRightArmRenderer.colorGradient = followGradient;
                 
                 break;
             case Role.Lead:
                 leadArmsRenderer = NewLineRenderer(0.01f, BloomMat);
                 leadArmsRenderer.transform.SetParent(transform, false);
-
-                Gradient leadArmGradient = new();
-                Color color = Color.Lerp(darkGrey, Color.red, 0.2f); // intensify on HDR 
-
-                leadArmGradient.SetKeys(
-                    new[]
-                    {
-                        new GradientColorKey(color, 0.0f),
-                        new GradientColorKey(color, 1.0f)
-                    },
-                    new[]
-                    {
-                        new GradientAlphaKey(alpha, 0.0f),
-                        new GradientAlphaKey(alpha, 1.0f)
-                    }
-                );
 
                 AnimationCurve leadArmCurve = new();
                 leadArmCurve.AddKey(new Keyframe(0.0f, 0.01f));
@@ -227,25 +187,11 @@ public class Dancer : MonoBehaviour
                 leadArmCurve.AddKey(new Keyframe(1.0f, 0.01f));
 
                 leadArmsRenderer.widthCurve = leadArmCurve;
-                leadArmsRenderer.colorGradient = leadArmGradient;
                 
                 leadLeftLegRenderer = NewLineRenderer(0.01f, BloomMat);
                 leadLeftLegRenderer.transform.SetParent(transform, false);
                 
-                Gradient leadGradient = new();
-                
-                leadGradient.SetKeys(
-                    new[]
-                    {
-                        new GradientColorKey(color, 0.0f),
-                        new GradientColorKey(color, 1.0f)
-                    },
-                    new[]
-                    {
-                        new GradientAlphaKey(alpha, 0.0f),
-                        new GradientAlphaKey(alpha, 1.0f)
-                    }
-                );
+
 
                 AnimationCurve leadLegCurve = new();
                 leadLegCurve.AddKey(new Keyframe(0.0f, 0.01f));
@@ -254,13 +200,11 @@ public class Dancer : MonoBehaviour
                 leadLegCurve.AddKey(new Keyframe(1.0f, 0.03f));
 
                 leadLeftLegRenderer.widthCurve = leadLegCurve;
-                leadLeftLegRenderer.colorGradient = leadGradient;
                 
                 leadRightLegRenderer = NewLineRenderer(0.01f, BloomMat);
                 leadRightLegRenderer.transform.SetParent(transform, false);
 
                 leadRightLegRenderer.widthCurve = leadLegCurve;
-                leadRightLegRenderer.colorGradient = leadGradient;
 
                 break;
             default:
@@ -296,10 +240,10 @@ public class Dancer : MonoBehaviour
         }
     }
 
-    public void SetPoseToFrame(int frameNumber)
+    public void SetPoseToFrame(int frameNumber, int currentBeat)
     {
         List<Vector3> pose = PosesByFrame[frameNumber];
-
+        const float alpha = 1f;
         switch (poseType)
         {
             case PoseType.Coco:
@@ -383,6 +327,28 @@ public class Dancer : MonoBehaviour
                         Vector3[] rightArmBez = CatmullRomSpline.Generate(rightArmArray);
                         followRightArmRenderer.positionCount = rightArmBez.Length;
                         followRightArmRenderer.SetPositions(rightArmBez);
+                        
+                        Gradient followGradient = new();
+                        Color endColor = Color.Lerp(darkGrey, Color.magenta, 0.2f) * Mathf.Pow(2, currentBeat); // intensify on HDR 
+                        
+                        followGradient.SetKeys(
+                            new[]
+                            {
+                                new GradientColorKey(endColor, 0.0f),
+                                new GradientColorKey(endColor, 1.0f)
+                            },
+                            new[]
+                            {
+                                new GradientAlphaKey(alpha, 0.0f),
+                                new GradientAlphaKey(alpha, 1.0f)
+                            }
+                        );
+                        
+                        followSpineRenderer.colorGradient = followGradient;
+                        followLegsRenderer.colorGradient = followGradient;
+                        followShouldersRenderer.colorGradient = followGradient;
+                        followLeftArmRenderer.colorGradient = followGradient;
+                        followRightArmRenderer.colorGradient = followGradient;
 
                         break;
                     }
@@ -442,6 +408,25 @@ public class Dancer : MonoBehaviour
 
                         leadRightLegRenderer.positionCount = rightLegBez.Length;
                         leadRightLegRenderer.SetPositions(rightLegBez);
+                        
+                        Gradient leadGradient = new();
+                        Color color = Color.Lerp(darkGrey, Color.red, 0.2f) * Mathf.Pow(2, currentBeat); // intensify on HDR 
+                        leadGradient.SetKeys(
+                            new[]
+                            {
+                                new GradientColorKey(color, 0.0f),
+                                new GradientColorKey(color, 1.0f)
+                            },
+                            new[]
+                            {
+                                new GradientAlphaKey(alpha, 0.0f),
+                                new GradientAlphaKey(alpha, 1.0f)
+                            }
+                        );
+                        
+                        leadArmsRenderer.colorGradient = leadGradient;
+                        leadLeftLegRenderer.colorGradient = leadGradient;
+                        leadRightLegRenderer.colorGradient = leadGradient;
                         
                         break;
                     default:

@@ -32,6 +32,10 @@ public class HeadMovement : MonoBehaviour
     AudioSource audioSource;
     bool audioLoaded = false;
     string currentFolder = "";
+    
+    Dictionary<int, int> beatByFrame;
+    List<List<float>> zoukTime;
+    int currentFrame = 0;
 
     void Awake()
     {
@@ -43,6 +47,9 @@ public class HeadMovement : MonoBehaviour
         
         Lead = ReadAllPosesFrom(Path.Combine(currentFolder, "figure1.json"), Role.Lead, poseType);
         Follow = ReadAllPosesFrom(Path.Combine(currentFolder, "figure2.json"), Role.Follow, poseType);
+        
+        string zoukTimeString = File.ReadAllText(Path.Combine(currentFolder, "zouk-time-analysis.json"));
+        zoukTime = JsonConvert.DeserializeObject<List<List<float>>>(zoukTimeString);
 
         contactDetection = GetComponent<ContactDetection>();
         contactDetection.Init(Lead, Follow, BloomMaterial);
@@ -91,6 +98,14 @@ public class HeadMovement : MonoBehaviour
             audioSource.clip = clip;
             totalSeconds = clip.length;
             audioLoaded = true;
+            beatByFrame = new Dictionary<int, int>();
+            foreach (List<float> floatPair in zoukTime)
+            {
+                if ((int)floatPair[1] == 3) continue; // filter out high-hat
+                
+                int frameBeat = (int)Mathf.Round((floatPair[0] / totalSeconds) * FRAME_MAX);
+                beatByFrame.TryAdd(frameBeat, (int)floatPair[1]);
+            }
         }
     }
 
@@ -121,8 +136,13 @@ public class HeadMovement : MonoBehaviour
     void SetToFrameNumber()
     {
         int frameNumber = GetFrameNumber();
-        Lead.SetPoseToFrame(frameNumber);
-        Follow.SetPoseToFrame(frameNumber);
+        if (currentFrame == frameNumber) return;
+        currentFrame = frameNumber;
+        
+        int currentBeat = beatByFrame.GetValueOrDefault(frameNumber, 0);
+        
+        Lead.SetPoseToFrame(frameNumber, currentBeat);
+        Follow.SetPoseToFrame(frameNumber, currentBeat);
 
         contactDetection.DetectContact(frameNumber);
     }
