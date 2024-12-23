@@ -26,6 +26,7 @@ public class HairSimulation : MonoBehaviour
     [Header("Side/Back Hair Generation")]
     public int sideLayerCount = 3;
     public int sideStrandsPerLayer = 10;
+    [Tooltip("Degrees of scalp coverage for side/back hair beyond the dome.")]
     public float ringAngleSpan = 60f;
     
     [Header("Strand Parameters")]
@@ -33,13 +34,24 @@ public class HairSimulation : MonoBehaviour
     public float strandThickness = 0.035f;
 
     [Header("Physics Parameters")]
+    [Tooltip("Gravity applied to hair segments (m/s^2).")]
     public Vector3 gravity = new(0, -9.81f, 0);
+
+    [Tooltip("Substeps per frame for stability.")]
     public int subSteps = 10;
+
+    [Tooltip("Constraint relaxation passes per sub-step.")]
     public int constraintIterations = 10;
-    public float damping = 6.0f;
+
+    [Tooltip("Damping factor for velocity (higher => hair settles more quickly).")]
+    public float damping = 3.0f;
+
+    [Tooltip("Friction at skull collision (0 => no sliding, 1 => full tangential speed).")]
     public float collisionFriction = 0.1f;
 
+    // ---------------- NEW ----------------
     [Header("Mass / Inertia")]
+    [Tooltip("Larger mass => hair reacts less to constraints, collisions, head motion.")]
     public float hairMass = 250f;
 
     // ---------------------- INTERNAL DATA STRUCTURES ----------------------
