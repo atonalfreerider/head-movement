@@ -109,6 +109,7 @@ public class Dancer : MonoBehaviour
 
     Material BloomMat;
     readonly Color darkGrey = new(0.1f, 0.1f, 0.1f);
+    HairSimulation hairSimulation;
 
     public void Init(Role role, List<List<Vector3>> posesByFrame, PoseType poseType, Material bloomMat)
     {
@@ -133,6 +134,13 @@ public class Dancer : MonoBehaviour
 
         Role = role;
         PosesByFrame = posesByFrame;
+
+        if (role == Role.Follow)
+        {
+            hairSimulation = new GameObject("Hair Simulation").AddComponent<HairSimulation>();
+            hairSimulation.transform.SetParent(transform, false);
+            hairSimulation.Init(bloomMat);
+        }
     }
 
     void BuildSmpl(Role role)
@@ -265,6 +273,12 @@ public class Dancer : MonoBehaviour
                 {
                     case Role.Follow:
                     {
+                        Vector3 head = pose[(int)SmplJoint.Head];
+                        hairSimulation.transform.position = head;
+                        hairSimulation.transform.LookAt(GetNose(frameNumber));
+                        hairSimulation.transform.Rotate(Vector3.right, -60f);
+                        hairSimulation.transform.Rotate(Vector3.up, 180f);
+                        
                         Vector3[] spineArray = new Vector3[smplFollowSpine.Length];
                         for (int i = 0; i < smplFollowSpine.Length; i++)
                         {
@@ -607,6 +621,21 @@ public class Dancer : MonoBehaviour
     public Vector3 GetSpine3(int frameNumber)
     {
         return PosesByFrame[frameNumber][(int)SmplJoint.Spine3];
+    }
+    
+    Vector3 GetNose(int frameNumber)
+    {
+        // Grab the relevant joints from your tracked pose
+        List<Vector3> pose = PosesByFrame[frameNumber];
+        Vector3 head = pose[(int)SmplJoint.Head];
+
+        // chestForward is a WORLD-SPACE point in front of the chest,
+        // so let's create a forward direction from the head to that point.
+        Vector3 chestForwardPoint = GetChestForward(frameNumber);
+        Vector3 forwardDir = (chestForwardPoint - head).normalized;
+
+        // Place the nose 0.2m in front of the head
+        return head + forwardDir * 0.2f;
     }
 
 
