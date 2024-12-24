@@ -1,24 +1,19 @@
 ﻿using UnityEngine;
 
-public static class ColorFormatter
+public static class ColorUtils
 {
     public static string AsHexString(this Color color) =>
-        AsHexString((Color32) color);
+        AsHexString((Color32)color);
 
     static string AsHexString(this Color32 color) =>
         $"#{color.r:X2}{color.g:X2}{color.b:X2}{color.a:X2}";
-}
 
-public static class ColorTransformer
-{
     public static Color WithAlpha(this Color color, float alpha) =>
         new(color.r, color.g, color.b, alpha);
-}
 
-public static class Viridis
-{
     // https://cran.r-project.org/web/packages/viridis/vignettes/intro-to-viridis.html
-    static readonly Color32[] viridis = {
+    static readonly Color32[] viridis =
+    {
         new(253, 231, 37, 255),
         new(220, 227, 25, 255),
         new(184, 222, 41, 255),
@@ -40,17 +35,15 @@ public static class Viridis
         new(72, 21, 103, 255),
         new(68, 1, 84, 255)
     };
-        
+
     public static Color ViridisColor(float prct)
     {
         return viridis[Mathf.RoundToInt(Mathf.Min(prct, 1) * (viridis.Length - 1))];
     }
-}
-    
-public static class Cividis
-{
+
     // https://github.com/marcosci/cividis
-    static readonly Color32[] cividis = {
+    static readonly Color32[] cividis =
+    {
         new(255, 233, 69, 255),
         new(245, 221, 77, 255),
         new(230, 208, 89, 255),
@@ -73,7 +66,7 @@ public static class Cividis
         new(0, 40, 97, 255),
         new(0, 32, 76, 255)
     };
-        
+
     public static Color CividisColor(float prct)
     {
         return cividis[Mathf.RoundToInt(Mathf.Min(prct, 1) * (cividis.Length - 1))];

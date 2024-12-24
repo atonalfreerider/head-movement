@@ -15,6 +15,8 @@ public class ContactDetection : MonoBehaviour
     LineRenderer leadRightArmContact;
     LineRenderer leadBodyContact;
     LineRenderer leadRightThighContact;
+    
+    bool isInitialized = false;
 
     public void Init(Dancer lead, Dancer follow, Material bloomMat)
     {
@@ -33,6 +35,22 @@ public class ContactDetection : MonoBehaviour
         leadRightHandOrb = Instantiate(PolygonFactory.Instance.icosahedron0).GetComponent<Polygon>();
         leadRightHandOrb.transform.localScale = Vector3.one * .01f;
         leadRightHandOrb.gameObject.SetActive(true);
+
+        isInitialized = true;
+    }
+
+    public void Reset()
+    {
+        if (!isInitialized) return;
+        
+        Destroy(leadLefHandOrb.gameObject);
+        Destroy(leadRightHandOrb.gameObject);
+        Destroy(leadLeftArmContact.gameObject);
+        Destroy(leadRightArmContact.gameObject);
+        Destroy(leadBodyContact.gameObject);
+        Destroy(leadRightThighContact.gameObject);
+        
+        isInitialized = false;
     }
 
     /// <summary>
@@ -225,8 +243,8 @@ public class ContactDetection : MonoBehaviour
         leadLefHandOrb.transform.position = leadLeftPos;
         leadRightHandOrb.transform.position = leadRightPos;
 
-        Color LRColor = Cividis.CividisColor(Mathf.Min(1, leadLeftD));
-        Color RLColor = Cividis.CividisColor(Mathf.Min(1, leadRightD));
+        Color LRColor = ColorUtils.CividisColor(Mathf.Min(1, leadLeftD));
+        Color RLColor = ColorUtils.CividisColor(Mathf.Min(1, leadRightD));
 
         LRColor *= Mathf.Pow(2, 3 - LRDistance * 2);
         RLColor *= Mathf.Pow(2, 3 - RLDistance * 2);
@@ -292,20 +310,19 @@ public class ContactDetection : MonoBehaviour
     {
         Gradient civGrad = new();
         List<GradientColorKey> civColors = new();
-        List<GradientAlphaKey> alphas = new();
+        GradientAlphaKey[] alphas = { new(1, 0), new(1, 1) };
 
         AnimationCurve widthCurve = new();
         for (int i = 0; i < distances.Length; i++)
         {
             widthCurve.AddKey(i, Mathf.Max(.1f - distances[i], 0));
 
-            civColors.Add(new GradientColorKey(Cividis.CividisColor(Mathf.Min(1, distances[i] * 8f)), i));
-            alphas.Add(new GradientAlphaKey(1, i));
+            civColors.Add(new GradientColorKey(ColorUtils.CividisColor(Mathf.Min(1, distances[i] * 8f)), i));
         }
 
         civGrad.SetKeys(
             civColors.ToArray(),
-            alphas.ToArray()
+            alphas
         );
 
         return new Tuple<AnimationCurve, Gradient>(widthCurve, civGrad);

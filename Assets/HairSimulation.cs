@@ -20,26 +20,26 @@ public class HairSimulation : MonoBehaviour
     public float cardioidScale = 0.16f;
 
     [Header("Top Hair Generation")]
-    public int topHairCount = 20;
+    public int topHairCount = 30;
     public float domeMaxAngle = 60f;
 
     [Header("Side/Back Hair Generation")]
-    public int sideLayerCount = 3;
-    public int sideStrandsPerLayer = 10;
+    public int sideLayerCount = 5;
+    public int sideStrandsPerLayer = 30;
     [Tooltip("Degrees of scalp coverage for side/back hair beyond the dome.")]
     public float ringAngleSpan = 60f;
     
     [Header("Strand Parameters")]
     public int segmentsPerStrand = 6;
-    public float strandThickness = 0.025f;
-    public float strandEndThickness = 0.04f;
+    public float strandThickness = 0.01f;
+    public float strandEndThickness = 0.001f;
 
     [Header("Physics Parameters")]
     [Tooltip("Gravity applied to hair segments (m/s^2).")]
     public Vector3 gravity = new(0, -9.81f, 0);
 
     [Tooltip("Substeps per frame for stability.")]
-    public int subSteps = 10;
+    public int subSteps = 5;
 
     [Tooltip("Constraint relaxation passes per sub-step.")]
     public int constraintIterations = 10;
@@ -180,22 +180,20 @@ public class HairSimulation : MonoBehaviour
             lr.material      = bloomMat;
             lr.useWorldSpace = true;
             
-            Gradient followGradient = new();
-            Color endColor = Color.Lerp(darkGrey, Color.magenta, 0.2f); // intensify on HDR 
-                        
-            followGradient.SetKeys(
+            GradientAlphaKey[] alphas = { new(1, 0), new(1, 1) };
+            
+            Gradient hairColorGradient = new();
+            hairColorGradient.SetKeys(
                 new[]
                 {
-                    new GradientColorKey(endColor, 0.0f),
-                    new GradientColorKey(endColor, 1.0f)
+                    new GradientColorKey(Color.black, 0.0f),
+                    new GradientColorKey(darkGrey, 0.5f),
+                    new GradientColorKey(Color.white, 0.95f),
+                    new GradientColorKey(new Color(4, 3.2f, 1.5f), 1.0f)
                 },
-                new[]
-                {
-                    new GradientAlphaKey(alpha, 0.0f),
-                    new GradientAlphaKey(alpha, 1.0f)
-                }
+                alphas
             );
-            lr.colorGradient = followGradient;
+            lr.colorGradient = hairColorGradient;
 
             lineRenderers[i] = lr;
 

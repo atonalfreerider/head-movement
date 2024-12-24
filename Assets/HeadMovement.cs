@@ -33,9 +33,9 @@ public class HeadMovement : MonoBehaviour
     bool audioLoaded = false;
     int currentFolder = -1;
 
-    Dictionary<int, int> beatByFrame;
+    Dictionary<int, float> beatIntensityByFrame;
     List<List<float>> zoukTime;
-    int currentFrame = 0;
+    int currentFrame = -1;
 
     string[] captures;
 
@@ -63,19 +63,21 @@ public class HeadMovement : MonoBehaviour
         }
 
         currentFolder = selection;
-        const PoseType poseType = PoseType.Smpl;
+        currentFrame = -1;
         
-        VideoMetadata videoMetadata = JsonConvert.DeserializeObject<VideoMetadata>(File.ReadAllText(Path.Combine(captures[currentFolder], "video_meta.json")));
+        VideoMetadata videoMetadata = JsonConvert.DeserializeObject<VideoMetadata>(
+            File.ReadAllText(Path.Combine(captures[currentFolder], "video_meta.json")));
         FrameCount = videoMetadata.frame_count;
         TotalSeconds = videoMetadata.duration;
 
-        Lead = ReadAllPosesFrom(Path.Combine(captures[currentFolder], "figure1.json"), Role.Lead, poseType);
-        Follow = ReadAllPosesFrom(Path.Combine(captures[currentFolder], "figure2.json"), Role.Follow, poseType);
+        Lead = ReadAllPosesFrom(Path.Combine(captures[currentFolder], "figure1.json"), Role.Lead);
+        Follow = ReadAllPosesFrom(Path.Combine(captures[currentFolder], "figure2.json"), Role.Follow);
 
         string zoukTimeString = File.ReadAllText(Path.Combine(captures[currentFolder], "zouk-time-analysis.json"));
         zoukTime = JsonConvert.DeserializeObject<List<List<float>>>(zoukTimeString);
 
         contactDetection = GetComponent<ContactDetection>();
+        contactDetection.Reset();
         contactDetection.Init(Lead, Follow, BloomMaterial);
 
         StartCoroutine(LoadAudio());
@@ -124,16 +126,36 @@ public class HeadMovement : MonoBehaviour
             // Assign the clip and play
             audioSource.clip = clip;
             audioLoaded = true;
-            beatByFrame = new Dictionary<int, int>();
+
+            List<int> framesWithUpOrDownbeat = new List<int>();
             foreach (List<float> floatPair in zoukTime)
             {
                 if ((int)floatPair[1] == 3) continue; // filter out high-hat
 
                 int frameBeat = (int)Mathf.Round((floatPair[0] / TotalSeconds) * FrameCount);
-                beatByFrame.TryAdd(frameBeat, (int)floatPair[1]);
+                framesWithUpOrDownbeat.Add(frameBeat);
             }
+
+            beatIntensityByFrame = new Dictionary<int, float>();
+            float currentIntensity = 0;
+            const int intensityFalloffPeriod = 5;
+            for (int i = 0; i < FrameCount; i++)
+            {
+                if (framesWithUpOrDownbeat.Contains(i))
+                {
+                    currentIntensity = 10;
+                }
+                else if (currentIntensity > 0)
+                {
+                    currentIntensity -= 10f / intensityFalloffPeriod;
+                }
+
+                beatIntensityByFrame[i] = currentIntensity;
+            }
+
+            SetToFrameNumber();
+            Debug.Log($"Loaded performance: {captures[currentFolder]}");
         }
-        Debug.Log($"Loaded performance: {captures[currentFolder]}");
     }
 
     IEnumerator Iterate()
@@ -145,7 +167,7 @@ public class HeadMovement : MonoBehaviour
         Resume();
     }
 
-    Dancer ReadAllPosesFrom(string jsonPath, Role role, PoseType poseType)
+    Dancer ReadAllPosesFrom(string jsonPath, Role role)
     {
         Dancer dancer = new GameObject(role.ToString()).AddComponent<Dancer>();
 
@@ -153,7 +175,7 @@ public class HeadMovement : MonoBehaviour
         List<List<Float3>> allPoses = JsonConvert.DeserializeObject<List<List<Float3>>>(jsonString);
         List<List<Vector3>> allPosesVector3 = allPoses
             .Select(pose => pose.Select(float3 => new Vector3(float3.x, float3.y, float3.z)).ToList()).ToList();
-        dancer.Init(role, allPosesVector3, poseType, BloomMaterial, TotalSeconds);
+        dancer.Init(role, allPosesVector3, BloomMaterial, TotalSeconds);
 
         return dancer;
     }
@@ -164,10 +186,10 @@ public class HeadMovement : MonoBehaviour
         if (currentFrame == frameNumber) return;
         currentFrame = frameNumber;
 
-        int currentBeat = beatByFrame.GetValueOrDefault(frameNumber, 0);
+        float currentBeatIntensity = beatIntensityByFrame.GetValueOrDefault(frameNumber, 0);
 
-        Lead.SetPoseToFrame(frameNumber, currentBeat);
-        Follow.SetPoseToFrame(frameNumber, currentBeat);
+        Lead.SetPoseToFrame(frameNumber, currentBeatIntensity);
+        Follow.SetPoseToFrame(frameNumber, currentBeatIntensity);
 
         contactDetection.DetectContact(frameNumber);
     }
@@ -218,7 +240,7 @@ public class HeadMovement : MonoBehaviour
         {
             SlowDown();
         }
-        else if (Keyboard.current.spaceKey.wasPressedThisFrame)
+        else if (audioLoaded && Keyboard.current.spaceKey.wasPressedThisFrame)
         {
             TogglePlayPause();
         }
