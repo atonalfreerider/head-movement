@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Shapes;
 using UnityEngine;
+using Util;
 
 public enum Role
 {
@@ -12,7 +13,7 @@ public enum Role
 
 public class Dancer : MonoBehaviour
 {
-    List<List<Vector3>> PosesByFrame = new();
+    List<Vector3>[] PosesByFrame;
     readonly Dictionary<int, Polygon> jointPolys = new();
     Role Role;
     PoseType poseType;
@@ -110,13 +111,13 @@ public class Dancer : MonoBehaviour
     Material BloomMat;
     readonly Color darkGrey = new(0.1f, 0.1f, 0.1f);
     HairSimulation hairSimulation;
+    readonly Dictionary<SmplJoint, float[]> jerkByFrameByJoint = new();
 
-    public void Init(Role role, List<List<Vector3>> posesByFrame, PoseType poseType, Material bloomMat)
+    public void Init(Role role, List<List<Vector3>> posesByFrame, PoseType poseType, Material bloomMat, float totalSeconds)
     {
         this.poseType = poseType;
         BloomMat = bloomMat;
-
-
+        
         switch (poseType)
         {
             case PoseType.Coco:
@@ -133,8 +134,16 @@ public class Dancer : MonoBehaviour
         }
 
         Role = role;
-        PosesByFrame = posesByFrame;
-
+        PosesByFrame = posesByFrame.ToArray();
+        
+        // get an array of positions by each joint and populate jerkByFrameByJoint with the jerk for each joint across frame
+        for (int j = 0; j < Enum.GetNames(typeof(SmplJoint)).Length; j++)
+        {
+            SmplJoint joint = (SmplJoint) j;
+            Vector3[] jointPositions = PosesByFrame.Select(pose => pose[j]).ToArray();
+            jerkByFrameByJoint[joint] = RhythmPhysics.CalculateJerk(jointPositions, totalSeconds);
+        }
+        
         if (role == Role.Follow)
         {
             hairSimulation = new GameObject("Hair Simulation").AddComponent<HairSimulation>();
@@ -251,6 +260,7 @@ public class Dancer : MonoBehaviour
     {
         List<Vector3> pose = PosesByFrame[frameNumber];
         const float alpha = 1f;
+        float intensity = currentBeat is 1 or 2 ? 3f : 0f;
         switch (poseType)
         {
             case PoseType.Coco:
@@ -344,7 +354,7 @@ public class Dancer : MonoBehaviour
                         followRightArmRenderer.SetPositions(rightArmBez);
                         
                         Gradient followGradient = new();
-                        Color endColor = Color.Lerp(darkGrey, Color.magenta, 0.2f) * Mathf.Pow(2, currentBeat); // intensify on HDR 
+                        Color endColor = Color.Lerp(darkGrey, Color.magenta, 0.2f); // intensify on HDR 
                         
                         followGradient.SetKeys(
                             new[]
@@ -360,10 +370,33 @@ public class Dancer : MonoBehaviour
                         );
                         
                         followSpineRenderer.colorGradient = followGradient;
-                        followLegsRenderer.colorGradient = followGradient;
                         followShouldersRenderer.colorGradient = followGradient;
                         followLeftArmRenderer.colorGradient = followGradient;
                         followRightArmRenderer.colorGradient = followGradient;
+                        
+                        // for each of the smpl joints in the legs, from left foot to right foot, through the hips
+                        // retrieve the jerk. if the current beat is 1 or 2, intensify the color of the line renderer
+                        // at that point along the line renderer
+                        List<GradientColorKey> colorKeys = new();
+                        List<GradientAlphaKey> alphaKeys = new();
+                        
+
+                        for (int i = 0; i < smplFollowLegs.Length; i++)
+                        {
+                            int x = smplFollowLegs[i];
+                            if (x is -1 or (int) SmplJoint.L_Ankle or (int) SmplJoint.R_Ankle) continue;
+                            float jerk = jerkByFrameByJoint[(SmplJoint)x][frameNumber] / 1000;
+                            float jerkIntensity = jerk * intensity;
+                            Color followLegBaseColor = Color.Lerp(darkGrey, Color.magenta, 0.2f) * Mathf.Pow(2, jerkIntensity);
+                            colorKeys.Add(new GradientColorKey(followLegBaseColor, i / (float)(smplFollowLegs.Length-3)));
+                            alphaKeys.Add(new GradientAlphaKey(alpha, i / (float)(smplFollowLegs.Length-3)));
+                        }
+
+                        followLegsRenderer.colorGradient = new Gradient
+                        {
+                            colorKeys = colorKeys.ToArray(),
+                            alphaKeys = alphaKeys.ToArray()
+                        };
 
                         break;
                     }
@@ -405,6 +438,29 @@ public class Dancer : MonoBehaviour
                         leadLeftLegRenderer.positionCount = leftLegBez.Length;
                         leadLeftLegRenderer.SetPositions(leftLegBez);
                         
+                        // for each of the smpl joints in the legs, from left foot to right foot, through the hips
+                        // retrieve the jerk. if the current beat is 1 or 2, intensify the color of the line renderer
+                        // at that point along the line renderer
+                        List<GradientColorKey> leftLegColorKeys = new();
+                        List<GradientAlphaKey> leftLegAlphaKeys = new();
+                        
+                        for (int i = 0; i < smplLeadLeftLeg.Length; i++)
+                        {
+                            int x = smplLeadLeftLeg[i];
+                            if (x is 0) continue;
+                            float jerk = jerkByFrameByJoint[(SmplJoint)x][frameNumber] / 1000;
+                            float jerkIntensity = jerk * intensity;
+                            Color leadLeftLegBaseColor = Color.Lerp(darkGrey, Color.red, 0.2f) * Mathf.Pow(2, jerkIntensity);
+                            leftLegColorKeys.Add(new GradientColorKey(leadLeftLegBaseColor, i / (float)(smplLeadLeftLeg.Length-1)));
+                            leftLegAlphaKeys.Add(new GradientAlphaKey(alpha, i / (float)(smplLeadLeftLeg.Length-1)));
+                        }
+                        
+                        leadLeftLegRenderer.colorGradient = new Gradient
+                        {
+                            colorKeys = leftLegColorKeys.ToArray(),
+                            alphaKeys = leftLegAlphaKeys.ToArray()
+                        };
+                        
                         // RIGHT LEG
                         Vector3[] rightLegArray = new Vector3[smplLeadRightLeg.Length];
                         for (int i = 0; i < smplLeadRightLeg.Length; i++)
@@ -424,24 +480,51 @@ public class Dancer : MonoBehaviour
                         leadRightLegRenderer.positionCount = rightLegBez.Length;
                         leadRightLegRenderer.SetPositions(rightLegBez);
                         
-                        Gradient leadGradient = new();
-                        Color color = Color.Lerp(darkGrey, Color.red, 0.2f) * Mathf.Pow(2, currentBeat); // intensify on HDR 
-                        leadGradient.SetKeys(
-                            new[]
-                            {
-                                new GradientColorKey(color, 0.0f),
-                                new GradientColorKey(color, 1.0f)
-                            },
-                            new[]
-                            {
-                                new GradientAlphaKey(alpha, 0.0f),
-                                new GradientAlphaKey(alpha, 1.0f)
-                            }
-                        );
+                        // for each of the smpl joints in the legs, from left foot to right foot, through the hips
+                        // retrieve the jerk. if the current beat is 1 or 2, intensify the color of the line renderer
+                        // at that point along the line renderer
+                        List<GradientColorKey> rightLegColorKeys = new();
+                        List<GradientAlphaKey> rightLegAlphaKeys = new();
                         
-                        leadArmsRenderer.colorGradient = leadGradient;
-                        leadLeftLegRenderer.colorGradient = leadGradient;
-                        leadRightLegRenderer.colorGradient = leadGradient;
+                        for (int i = 0; i < smplLeadRightLeg.Length; i++)
+                        {
+                            int x = smplLeadRightLeg[i];
+                            if (x is 0) continue;
+                            float jerk = jerkByFrameByJoint[(SmplJoint)x][frameNumber] / 1000;
+                            float jerkIntensity = jerk * intensity;
+                            Color leadLeftLegBaseColor = Color.Lerp(darkGrey, Color.red, 0.2f) * Mathf.Pow(2, jerkIntensity);
+                            rightLegColorKeys.Add(new GradientColorKey(leadLeftLegBaseColor, i / (float)(smplLeadRightLeg.Length-1)));
+                            rightLegAlphaKeys.Add(new GradientAlphaKey(alpha, i / (float)(smplLeadRightLeg.Length-1)));
+                        }
+                        
+                        leadRightLegRenderer.colorGradient = new Gradient
+                        {
+                            colorKeys = rightLegColorKeys.ToArray(),
+                            alphaKeys = rightLegAlphaKeys.ToArray()
+                        };
+                        
+                        // for each of the smpl joints in the legs, from left foot to right foot, through the hips
+                        // retrieve the jerk. if the current beat is 1 or 2, intensify the color of the line renderer
+                        // at that point along the line renderer
+                        List<GradientColorKey> leadArmsColorKeys = new();
+                        List<GradientAlphaKey> leadArmsAlphaKeys = new();
+                        
+                        for (int i = 0; i < smplLeadArms.Length; i++)
+                        {
+                            int x = smplLeadArms[i];
+                            if (x is -1) continue;
+                            float jerk = jerkByFrameByJoint[(SmplJoint)x][frameNumber] / 1000;
+                            float jerkIntensity = jerk * intensity;
+                            Color leadArmsBaseColor = Color.Lerp(darkGrey, Color.red, 0.2f) * Mathf.Pow(2, jerkIntensity);
+                            leadArmsColorKeys.Add(new GradientColorKey(leadArmsBaseColor, i / (float)(smplLeadArms.Length-1)));
+                            leadArmsAlphaKeys.Add(new GradientAlphaKey(alpha, i / (float)smplLeadArms.Length-1));
+                        }
+                        
+                        leadArmsRenderer.colorGradient = new Gradient
+                        {
+                            colorKeys = leadArmsColorKeys.ToArray(),
+                            alphaKeys = leadArmsAlphaKeys.ToArray()
+                        };
                         
                         break;
                     default:

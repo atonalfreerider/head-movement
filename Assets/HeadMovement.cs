@@ -16,8 +16,8 @@ public class HeadMovement : MonoBehaviour
 
     public static HeadMovement Instance;
 
-    int FRAME_MAX = -1;
-    float totalSeconds = 0;
+    int FrameCount = -1;
+    float TotalSeconds = -1;
 
     Dancer Lead;
     Dancer Follow;
@@ -26,45 +26,72 @@ public class HeadMovement : MonoBehaviour
 
     Coroutine animator;
     public Material BloomMaterial;
-    
+
     CameraControl cameraControl;
-    
+
     AudioSource audioSource;
     bool audioLoaded = false;
-    string currentFolder = "";
-    
+    int currentFolder = -1;
+
     Dictionary<int, int> beatByFrame;
     List<List<float>> zoukTime;
     int currentFrame = 0;
 
+    string[] captures;
+
     void Awake()
     {
         Instance = this;
-        const PoseType poseType = PoseType.Smpl;
-
-        string[] captures = Directory.GetDirectories(assetPath);
-        currentFolder = captures[0];
-        
-        Lead = ReadAllPosesFrom(Path.Combine(currentFolder, "figure1.json"), Role.Lead, poseType);
-        Follow = ReadAllPosesFrom(Path.Combine(currentFolder, "figure2.json"), Role.Follow, poseType);
-        
-        string zoukTimeString = File.ReadAllText(Path.Combine(currentFolder, "zouk-time-analysis.json"));
-        zoukTime = JsonConvert.DeserializeObject<List<List<float>>>(zoukTimeString);
-
-        contactDetection = GetComponent<ContactDetection>();
-        contactDetection.Init(Lead, Follow, BloomMaterial);
+        captures = Directory.GetDirectories(assetPath);
     }
 
     void Start()
     {
         cameraControl = GameObject.Find("Simulator").GetComponent<CameraControl>();
+    }
+
+    void LoadCapture(int selection)
+    {
+        if (Lead != null)
+        {
+            Destroy(Lead.gameObject);
+        }
+
+        if (Follow != null)
+        {
+            Destroy(Follow.gameObject);
+        }
+
+        currentFolder = selection;
+        const PoseType poseType = PoseType.Smpl;
+        
+        VideoMetadata videoMetadata = JsonConvert.DeserializeObject<VideoMetadata>(File.ReadAllText(Path.Combine(captures[currentFolder], "video_meta.json")));
+        FrameCount = videoMetadata.frame_count;
+        TotalSeconds = videoMetadata.duration;
+
+        Lead = ReadAllPosesFrom(Path.Combine(captures[currentFolder], "figure1.json"), Role.Lead, poseType);
+        Follow = ReadAllPosesFrom(Path.Combine(captures[currentFolder], "figure2.json"), Role.Follow, poseType);
+
+        string zoukTimeString = File.ReadAllText(Path.Combine(captures[currentFolder], "zouk-time-analysis.json"));
+        zoukTime = JsonConvert.DeserializeObject<List<List<float>>>(zoukTimeString);
+
+        contactDetection = GetComponent<ContactDetection>();
+        contactDetection.Init(Lead, Follow, BloomMaterial);
+
         StartCoroutine(LoadAudio());
     }
     
+    [Serializable]
+    public class VideoMetadata
+    {
+        public float duration;
+        public int frame_count;
+    }
+
     IEnumerator LoadAudio()
     {
         // Build the full path to the WAV file in StreamingAssets
-        string filePath = Path.Combine(currentFolder, "audio.wav");
+        string filePath = Path.Combine(captures[currentFolder], "audio.wav");
 
         // On most platforms, we need the "file://" prefix to read directly
         // For Android, UnityWebRequest can handle it without the prefix, but
@@ -96,17 +123,17 @@ public class HeadMovement : MonoBehaviour
 
             // Assign the clip and play
             audioSource.clip = clip;
-            totalSeconds = clip.length;
             audioLoaded = true;
             beatByFrame = new Dictionary<int, int>();
             foreach (List<float> floatPair in zoukTime)
             {
                 if ((int)floatPair[1] == 3) continue; // filter out high-hat
-                
-                int frameBeat = (int)Mathf.Round((floatPair[0] / totalSeconds) * FRAME_MAX);
+
+                int frameBeat = (int)Mathf.Round((floatPair[0] / TotalSeconds) * FrameCount);
                 beatByFrame.TryAdd(frameBeat, (int)floatPair[1]);
             }
         }
+        Debug.Log($"Loaded performance: {captures[currentFolder]}");
     }
 
     IEnumerator Iterate()
@@ -126,9 +153,7 @@ public class HeadMovement : MonoBehaviour
         List<List<Float3>> allPoses = JsonConvert.DeserializeObject<List<List<Float3>>>(jsonString);
         List<List<Vector3>> allPosesVector3 = allPoses
             .Select(pose => pose.Select(float3 => new Vector3(float3.x, float3.y, float3.z)).ToList()).ToList();
-        dancer.Init(role, allPosesVector3, poseType, BloomMaterial);
-
-        FRAME_MAX = allPosesVector3.Count;
+        dancer.Init(role, allPosesVector3, poseType, BloomMaterial, TotalSeconds);
 
         return dancer;
     }
@@ -138,9 +163,9 @@ public class HeadMovement : MonoBehaviour
         int frameNumber = GetFrameNumber();
         if (currentFrame == frameNumber) return;
         currentFrame = frameNumber;
-        
+
         int currentBeat = beatByFrame.GetValueOrDefault(frameNumber, 0);
-        
+
         Lead.SetPoseToFrame(frameNumber, currentBeat);
         Follow.SetPoseToFrame(frameNumber, currentBeat);
 
@@ -149,7 +174,6 @@ public class HeadMovement : MonoBehaviour
 
     public void SlowDown()
     {
-
     }
 
     public void SpeedUp()
@@ -206,11 +230,42 @@ public class HeadMovement : MonoBehaviour
             center = new Vector3(center.x, 0, center.z);
             cameraControl.Center = center;
         }
+
+        int selection = -1;
+        if (Keyboard.current.digit1Key.wasPressedThisFrame)
+        {
+            selection = 0;
+        }
+
+        if (Keyboard.current.digit2Key.wasPressedThisFrame)
+        {
+            selection = 1;
+        }
+
+        if (Keyboard.current.digit3Key.wasPressedThisFrame)
+        {
+            selection = 2;
+        }
+
+        if (Keyboard.current.digit4Key.wasPressedThisFrame)
+        {
+            selection = 3;
+        }
+
+        if (Keyboard.current.digit5Key.wasPressedThisFrame)
+        {
+            selection = 4;
+        }
+
+        if (selection > -1)
+        {
+            LoadCapture(selection);
+        }
     }
-    
+
     int GetFrameNumber()
     {
-        return (int) Mathf.Round((audioSource.time / totalSeconds) * FRAME_MAX);
+        return (int)Mathf.Round((audioSource.time / TotalSeconds) * FrameCount);
     }
 
     [Serializable]

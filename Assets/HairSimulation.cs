@@ -31,7 +31,8 @@ public class HairSimulation : MonoBehaviour
     
     [Header("Strand Parameters")]
     public int segmentsPerStrand = 6;
-    public float strandThickness = 0.035f;
+    public float strandThickness = 0.025f;
+    public float strandEndThickness = 0.04f;
 
     [Header("Physics Parameters")]
     [Tooltip("Gravity applied to hair segments (m/s^2).")]
@@ -175,7 +176,7 @@ public class HairSimulation : MonoBehaviour
             LineRenderer lr = lrObj.AddComponent<LineRenderer>();
             lr.positionCount = segmentsPerStrand;
             lr.startWidth    = strandThickness;
-            lr.endWidth      = strandThickness * 0.3f;
+            lr.endWidth      = strandEndThickness;
             lr.material      = bloomMat;
             lr.useWorldSpace = true;
             
@@ -200,7 +201,7 @@ public class HairSimulation : MonoBehaviour
 
             // Cardioid rest length
             float alphaVal = strandAlphas[i];
-            float length   = cardioidScale * (1f - Mathf.Cos(alphaVal));
+            float length   = Mathf.Max(0.2f, cardioidScale * (1f - Mathf.Cos(alphaVal)));
             float segLen   = length / (segmentsPerStrand - 1);
 
             for (int r = 0; r < (segmentsPerStrand - 1); r++)
