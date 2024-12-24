@@ -10,6 +10,7 @@ using UnityEngine.Networking;
 using VRTKLite.Controllers;
 
 [RequireComponent(typeof(ContactDetection))]
+[RequireComponent(typeof(FloorCraft))]
 public class HeadMovement : MonoBehaviour
 {
     static readonly string assetPath = Application.streamingAssetsPath;
@@ -23,6 +24,7 @@ public class HeadMovement : MonoBehaviour
     Dancer Follow;
 
     ContactDetection contactDetection;
+    FloorCraft floorCraft;
 
     Coroutine animator;
     public Material BloomMaterial;
@@ -79,6 +81,9 @@ public class HeadMovement : MonoBehaviour
         contactDetection = GetComponent<ContactDetection>();
         contactDetection.Reset();
         contactDetection.Init(Lead, Follow, BloomMaterial);
+        
+        floorCraft = GetComponent<FloorCraft>();
+        floorCraft.Init(Lead, Follow, BloomMaterial, FrameCount);
 
         StartCoroutine(LoadAudio());
     }

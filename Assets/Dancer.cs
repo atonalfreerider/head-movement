@@ -677,6 +677,24 @@ public class Dancer : MonoBehaviour
         return head + forwardDir * 0.2f;
     }
     
+    public Vector3 GetLeftFoot(int frameNumber)
+    {
+        if(PosesByFrame.Length <= frameNumber)
+        {
+            return Vector3.zero;
+        }
+        return PosesByFrame[frameNumber][(int)SmplJoint.L_Foot];
+    }
+    
+    public Vector3 GetRightFoot(int frameNumber)
+    {
+        if(PosesByFrame.Length <= frameNumber)
+        {
+            return Vector3.zero;
+        }
+        return PosesByFrame[frameNumber][(int)SmplJoint.R_Foot];
+    }
+    
     #endregion
 
     static LineRenderer NewLineRenderer(float LW, Material mat)
