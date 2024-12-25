@@ -215,7 +215,12 @@ public class ContactDetection : MonoBehaviour
 
         leadRightThighContact.widthCurve = thighWidthCurve;
         leadRightThighContact.colorGradient = thighCividisGradient;
+        
+        UpdateHandOrbs(leadLeftHandPos, leadRightHandPos, followLeftHandPos, followRightHandPos, leadLeftElbowPos, leadRightElbowPos);
+    }
 
+    void UpdateHandOrbs(Vector3 leadLeftHandPos, Vector3 leadRightHandPos, Vector3 followLeftHandPos, Vector3 followRightHandPos, Vector3 leadLeftElbowPos, Vector3 leadRightElbowPos)
+    {
         float LRDistance = Vector3.Distance(leadLeftHandPos, followRightHandPos);
         float LLDistance = Vector3.Distance(leadLeftHandPos, followLeftHandPos);
         float leadLeftD = LRDistance;
@@ -262,6 +267,22 @@ public class ContactDetection : MonoBehaviour
         else if (!leftNormal && rightNormal && leadRightD < leadLeftD)
         {
             leadLefHandOrb.gameObject.SetActive(false);
+        }
+        
+        // if the vector that points from the left elbow to the left hand, as it extends away from the left hand is
+        // pointing away from the current left orb position, hide the left orb
+        Vector3 leftElbowToHand = leadLeftHandPos - leadLeftElbowPos;
+        Vector3 leftOrbToHand = leadLefHandOrb.transform.position - leadLeftHandPos;
+        if (leadLeftD > .12f && Vector3.Dot(leftElbowToHand, leftOrbToHand) < 0)
+        {
+            leadLefHandOrb.gameObject.SetActive(false);
+        }
+
+        Vector3 rightElbowToHand = leadRightHandPos - leadRightElbowPos;
+        Vector3 rightOrbToHand = leadRightHandOrb.transform.position - leadRightHandPos;
+        if (leadRightD > .12f && Vector3.Dot(rightElbowToHand, rightOrbToHand) < 0)
+        {
+            leadRightHandOrb.gameObject.SetActive(false);
         }
     }
 
