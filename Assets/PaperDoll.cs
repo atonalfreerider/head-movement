@@ -105,26 +105,40 @@ public class PaperDoll : MonoBehaviour
         Vector2 head2D = poses2D[frameNumber][(int)SmplJoint.Head];
         Vector2 pelvis2D = poses2D[frameNumber][(int)SmplJoint.Pelvis];
 
-        // Position and orient body quad
         float bodyHeight = Vector3.Distance(headPos, pelvisPos);
         float pixel2DHeight = Vector2.Distance(head2D, pelvis2D);
-        float scale = bodyHeight / pixel2DHeight;
-        float aspectRatio = (float)texture.width / texture.height;
+        float worldToPixelRatio = bodyHeight / pixel2DHeight;
+        
+        // Calculate width using same approach as limbs but wider for torso
+        float widthPixels = pixel2DHeight * 0.25f;
+        float widthWorld = widthPixels * worldToPixelRatio;
 
-        Vector3 centerPos = (headPos + pelvisPos) * 0.5f;
+        // Position from pelvis up to head (reversed from before)
+        Vector3 centerPos = pelvisPos + (headPos - pelvisPos) * 0.5f;
         bodyQuad.transform.position = centerPos;
+        
+        // Make sure we're facing the camera but oriented upright
         bodyQuad.transform.LookAt(cameraPosition);
-        bodyQuad.transform.localScale = new Vector3(scale * aspectRatio, bodyHeight, 1);
+        bodyQuad.transform.up = (headPos - pelvisPos).normalized;
+        
+        bodyQuad.transform.localScale = new Vector3(widthWorld * 2.0f, bodyHeight, 1);
 
-        // Calculate UV coordinates to map texture along torso
-        float startU = head2D.x / texture.width;
-        float endU = pelvis2D.x / texture.width;
-        float startV = 1 - head2D.y / texture.height; // Flip V coordinate
-        float endV = 1 - pelvis2D.y / texture.height; // Flip V coordinate
+        // Calculate texture coordinates with corrected mirroring
+        Vector2 torsoCenter2D = (head2D + pelvis2D) * 0.5f;
+        float uvWidth = (widthPixels * 2) / texture.width;
+        
+        // Calculate V coordinates (unchanged)
+        float bottomV = 1 - pelvis2D.y / texture.height;
+        float topV = 1 - head2D.y / texture.height;
 
-        // Apply UV transformation to material
+        // Calculate U coordinates with corrected orientation
+        float centerU = torsoCenter2D.x / texture.width;
+        float leftU = centerU - uvWidth * 0.5f;
+        
+        // Apply texture coordinates with flipped U scale to correct mirroring
         bodyMaterial.mainTexture = texture;
-        bodyMaterial.mainTextureScale = new Vector2(1, endV - startV); // Keep the texture scale constant
-        bodyMaterial.mainTextureOffset = new Vector2(startU, startV);
+        bodyMaterial.mainTextureScale = new Vector2(-uvWidth, topV - bottomV); // Negative U scale to flip horizontally
+        bodyMaterial.mainTextureOffset = new Vector2(centerU + uvWidth * 0.5f, bottomV); // Adjusted offset to compensate for negative scale
+        bodyMaterial.mainTexture.wrapMode = TextureWrapMode.Clamp;
     }
 }
