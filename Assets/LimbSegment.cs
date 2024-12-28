@@ -11,14 +11,40 @@ public class LimbSegment
     {
         this.startJoint = startJoint;
         this.endJoint = endJoint;
-        
-        quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
+
+        quad = new GameObject("LimbSegment");
         quad.transform.SetParent(parent, false);
+
+        MeshFilter meshFilter = quad.AddComponent<MeshFilter>();
+        MeshRenderer meshRenderer = quad.AddComponent<MeshRenderer>();
+
+        Mesh mesh = new Mesh();
+        mesh.vertices = new Vector3[]
+        {
+            new Vector3(-2f, -0.5f, 0),
+            new Vector3(2f, -0.5f, 0),
+            new Vector3(-2f, 0.5f, 0),
+            new Vector3(2f, 0.5f, 0)
+        };
+        mesh.uv = new Vector2[]
+        {
+            new Vector2(0, 0),
+            new Vector2(1, 0),
+            new Vector2(0, 1),
+            new Vector2(1, 1)
+        };
+        mesh.triangles = new int[]
+        {
+            0, 2, 1,
+            2, 3, 1
+        };
+        meshFilter.mesh = mesh;
+
         material = new Material(Shader.Find("Custom/DoubleSidedTransparent"))
         {
             color = new Color(1, 1, 1, 0.5f)
         };
-        quad.GetComponent<Renderer>().material = material;
+        meshRenderer.material = material;
     }
 
     public void UpdateSegment(Vector3 startPos3D, Vector3 endPos3D, Vector2 startPos2D, Vector2 endPos2D, 
@@ -38,9 +64,7 @@ public class LimbSegment
         Vector3 forward = Vector3.Cross(right, segmentDirNorm).normalized;
         quad.transform.rotation = Quaternion.LookRotation(forward, segmentDirNorm);
 
-        // Calculate scale        
-        float pixel2DLength = Vector2.Distance(startPos2D, endPos2D);
-        float aspectRatio = (float)texture.width / texture.height;        
+        // Calculate scale
         float heightScale = segmentLength; // Scale height based on segment length
 
         // Apply overextension only for calves and forearms
@@ -49,7 +73,10 @@ public class LimbSegment
                                  (startJoint == SmplJoint.L_Elbow && endJoint == SmplJoint.L_Wrist) ||
                                  (startJoint == SmplJoint.R_Elbow && endJoint == SmplJoint.R_Wrist) ? 1.2f : 1.0f;
 
-        quad.transform.localScale = new Vector3(heightScale * overextendFactor * 3, heightScale * overextendFactor, 1);
+        // Adjust the quad shape to be 1:4 width-to-height ratio
+        float widthScale = heightScale / 4;
+
+        quad.transform.localScale = new Vector3(widthScale, heightScale * overextendFactor, 1);
 
         // Calculate UV coordinates to map texture along segment
         float startU = startPos2D.x / texture.width;
@@ -57,13 +84,16 @@ public class LimbSegment
         float startV = 1 - startPos2D.y / texture.height; // Flip V coordinate
         float endV = 1 - endPos2D.y / texture.height; // Flip V coordinate
 
+        // Calculate the aspect ratio
+        float aspectRatio = (float)texture.width / texture.height;
+
         // Calculate the scale ratio to achieve 1:1 optical scale
-        float uvWidthScale = 1 / aspectRatio;
+        float uvWidthScale = aspectRatio * 0.25f; // Make the texture width scale much wider
 
         // Apply UV transformation to material
         material.mainTexture = texture;
         material.mainTextureScale = new Vector2(uvWidthScale, endV - startV); // Adjust the texture scale to achieve 1:1 optical scale
-        material.mainTextureOffset = new Vector2((startU + endU) / 2 - uvWidthScale / 2, startV); // Center the texture width
+        material.mainTextureOffset = new Vector2(startU - (uvWidthScale / 2), startV); // Center the texture width
 
         // Set texture wrap mode to clamp to prevent repeating
         material.mainTexture.wrapMode = TextureWrapMode.Clamp;
