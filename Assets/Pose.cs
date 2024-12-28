@@ -177,4 +177,36 @@ public static class Extensions
             _ => throw new ArgumentOutOfRangeException(nameof(poseType), poseType, null)
         };
     }
+
+    public static int GetSmplJointIndex(string jointName)
+    {
+        return jointName switch
+        {
+            "Pelvis" => (int)SmplJoint.Pelvis,
+            "L_Hip" => (int)SmplJoint.L_Hip,
+            "R_Hip" => (int)SmplJoint.R_Hip,
+            "Spine1" => (int)SmplJoint.Spine1,
+            "L_Knee" => (int)SmplJoint.L_Knee,
+            "R_Knee" => (int)SmplJoint.R_Knee,
+            "Spine2" => (int)SmplJoint.Spine2,
+            "L_Ankle" => (int)SmplJoint.L_Ankle,
+            "R_Ankle" => (int)SmplJoint.R_Ankle,
+            "Spine3" => (int)SmplJoint.Spine3,
+            "L_Foot" => (int)SmplJoint.L_Foot,
+            "R_Foot" => (int)SmplJoint.R_Foot,
+            "Neck" => (int)SmplJoint.Neck,
+            "L_Collar" => (int)SmplJoint.L_Collar,
+            "R_Collar" => (int)SmplJoint.R_Collar,
+            "Head" => (int)SmplJoint.Head,
+            "L_Shoulder" => (int)SmplJoint.L_Shoulder,
+            "R_Shoulder" => (int)SmplJoint.R_Shoulder,
+            "L_Elbow" => (int)SmplJoint.L_Elbow,
+            "R_Elbow" => (int)SmplJoint.R_Elbow,
+            "L_Wrist" => (int)SmplJoint.L_Wrist,
+            "R_Wrist" => (int)SmplJoint.R_Wrist,
+            "L_Hand" => (int)SmplJoint.L_Hand,
+            "R_Hand" => (int)SmplJoint.R_Hand,
+            _ => throw new ArgumentOutOfRangeException(nameof(jointName), jointName, null)
+        };
+    }
 }

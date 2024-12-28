@@ -73,6 +73,15 @@ public class HeadMovement : MonoBehaviour
         Lead = ReadAllPosesFrom(Path.Combine(captures[currentFolder], "figure1.json"), Role.Lead);
         Follow = ReadAllPosesFrom(Path.Combine(captures[currentFolder], "figure2.json"), Role.Follow);
 
+        // Load 2D poses
+        List<List<List<int>>> leadPoses2D = JsonConvert.DeserializeObject<List<List<List<int>>>>(
+            File.ReadAllText(Path.Combine(captures[currentFolder], "fig1_poses2d.json")));
+        List<List<List<int>>> followPoses2D = JsonConvert.DeserializeObject<List<List<List<int>>>>(
+            File.ReadAllText(Path.Combine(captures[currentFolder], "fig2_poses2d.json")));
+
+        Lead.gameObject.GetComponent<PaperDoll>().Init(leadPoses2D, "file://" + Path.Combine(captures[currentFolder], "fig1"));
+        Follow.gameObject.GetComponent<PaperDoll>().Init(followPoses2D, "file://" + Path.Combine(captures[currentFolder], "fig2"));
+
         string zoukTimeString = File.ReadAllText(Path.Combine(captures[currentFolder], "zouk-time-analysis.json"));
         zoukTime = JsonConvert.DeserializeObject<List<List<float>>>(zoukTimeString);
 

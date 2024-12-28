@@ -10,6 +10,7 @@ public enum Role
     Follow = 1
 }
 
+[RequireComponent(typeof(PaperDoll))]
 public class Dancer : MonoBehaviour
 {
     List<Vector3>[] PosesByFrame;
@@ -460,6 +461,8 @@ public class Dancer : MonoBehaviour
             default:
                 throw new ArgumentOutOfRangeException();
         }
+
+        GetComponent<PaperDoll>().SetToFrame(frameNumber, pose[(int)SmplJoint.L_Shoulder], pose[(int)SmplJoint.R_Hip]);
     }
 
     /// <summary>
