@@ -40,8 +40,7 @@ public class LimbSegment
 
         // Calculate scale        
         float pixel2DLength = Vector2.Distance(startPos2D, endPos2D);
-        float aspectRatio = (float)texture.width / texture.height;
-        float widthScale = segmentLength / pixel2DLength; // Maintain 1:1 pixel ratio
+        float aspectRatio = (float)texture.width / texture.height;        
         float heightScale = segmentLength; // Scale height based on segment length
 
         // Apply overextension only for calves and forearms
@@ -50,7 +49,7 @@ public class LimbSegment
                                  (startJoint == SmplJoint.L_Elbow && endJoint == SmplJoint.L_Wrist) ||
                                  (startJoint == SmplJoint.R_Elbow && endJoint == SmplJoint.R_Wrist) ? 1.2f : 1.0f;
 
-        quad.transform.localScale = new Vector3(1, heightScale * overextendFactor, 1);
+        quad.transform.localScale = new Vector3(heightScale * overextendFactor * 3, heightScale * overextendFactor, 1);
 
         // Calculate UV coordinates to map texture along segment
         float startU = startPos2D.x / texture.width;
@@ -65,5 +64,8 @@ public class LimbSegment
         material.mainTexture = texture;
         material.mainTextureScale = new Vector2(uvWidthScale, endV - startV); // Adjust the texture scale to achieve 1:1 optical scale
         material.mainTextureOffset = new Vector2((startU + endU) / 2 - uvWidthScale / 2, startV); // Center the texture width
+
+        // Set texture wrap mode to clamp to prevent repeating
+        material.mainTexture.wrapMode = TextureWrapMode.Clamp;
     }
 }
