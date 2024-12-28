@@ -90,13 +90,13 @@ public class LimbSegment
         Vector2 uvBottomLeft = new(textureBottomLeft.x / texture.width, 1 - textureBottomLeft.y / texture.height);
         Vector2 uvBottomRight = new(textureBottomRight.x / texture.width, 1 - textureBottomRight.y / texture.height);
 
-        // Update mesh UVs
+        // Update mesh UVs - flip topLeft/bottomLeft and topRight/bottomRight
         Mesh mesh = quad.GetComponent<MeshFilter>().mesh;
         mesh.uv = new[] {
-            uvBottomLeft,
-            uvBottomRight,
-            uvTopLeft,
-            uvTopRight
+            uvTopLeft,      // Was uvBottomLeft
+            uvTopRight,     // Was uvBottomRight
+            uvBottomLeft,   // Was uvTopLeft
+            uvBottomRight   // Was uvTopRight
         };
 
         // Apply texture
