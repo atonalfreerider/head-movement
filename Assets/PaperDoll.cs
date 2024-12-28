@@ -9,8 +9,21 @@ public class PaperDoll : MonoBehaviour
 {
     List<List<Vector2>> poses2D;
     string imageFolderPath;
-    GameObject quad;
-    Material material;
+    Dictionary<(SmplJoint, SmplJoint), LimbSegment> limbSegments;
+    GameObject bodyQuad;
+    Material bodyMaterial;
+
+    private static readonly (SmplJoint, SmplJoint)[] limbDefinitions = new[]
+    {
+        (SmplJoint.L_Shoulder, SmplJoint.L_Elbow),    // Left upper arm
+        (SmplJoint.L_Elbow, SmplJoint.L_Wrist),       // Left lower arm
+        (SmplJoint.L_Hip, SmplJoint.L_Knee),          // Left thigh
+        (SmplJoint.L_Knee, SmplJoint.L_Ankle),        // Left calf
+        (SmplJoint.R_Shoulder, SmplJoint.R_Elbow),    // Right upper arm
+        (SmplJoint.R_Elbow, SmplJoint.R_Wrist),       // Right lower arm
+        (SmplJoint.R_Hip, SmplJoint.R_Knee),          // Right thigh
+        (SmplJoint.R_Knee, SmplJoint.R_Ankle),        // Right calf
+    };
 
     public void Init(List<List<List<int>>> intPoses, string imageFolderPath)
     {
@@ -29,65 +42,89 @@ public class PaperDoll : MonoBehaviour
 
     void Awake()
     {
-        quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
-        quad.transform.SetParent(transform, false);
-        material = new Material(Shader.Find("Custom/DoubleSidedTransparent"))
+        limbSegments = new Dictionary<(SmplJoint, SmplJoint), LimbSegment>();
+        foreach (var (start, end) in limbDefinitions)
         {
-            color = new Color(1, 1, 1, 0.1f)
+            limbSegments.Add((start, end), new LimbSegment(start, end, transform));
+        }
+
+        // Create body quad
+        bodyQuad = GameObject.CreatePrimitive(PrimitiveType.Quad);
+        bodyQuad.transform.SetParent(transform, false);
+        bodyMaterial = new Material(Shader.Find("Custom/DoubleSidedTransparent"))
+        {
+            color = new Color(1, 1, 1, 0.5f)
         };
-        quad.GetComponent<Renderer>().material = material;
+        bodyQuad.GetComponent<Renderer>().material = bodyMaterial;
     }
 
-    public void SetToFrame(int frameNumber, Vector3 leftShoulder3D, Vector3 rightHip3D)
+    public void SetToFrame(int frameNumber, List<Vector3> pose3D)
     {
         if (frameNumber < 0 || frameNumber >= poses2D.Count) return;
 
         string imagePath = Path.Combine(imageFolderPath, frameNumber.ToString("D4") + ".png");
-        StartCoroutine(LoadImage(imagePath, frameNumber, leftShoulder3D, rightHip3D));
+        StartCoroutine(LoadImage(imagePath, frameNumber, pose3D));
     }
 
-    IEnumerator LoadImage(string imagePath, int frameNumber, Vector3 leftShoulder3D, Vector3 rightHip3D)
+    IEnumerator LoadImage(string imagePath, int frameNumber, List<Vector3> pose3D)
     {
-        using UnityWebRequest www = UnityWebRequestTexture.GetTexture(imagePath);
-        yield return www.SendWebRequest();
-        if (www.result is UnityWebRequest.Result.ConnectionError or UnityWebRequest.Result.ProtocolError)
+        using (UnityWebRequest www = UnityWebRequestTexture.GetTexture(imagePath))
         {
-            Debug.LogError(www.error);
-        }
-        else
-        {
-            Texture2D texture = DownloadHandlerTexture.GetContent(www);
-            material.mainTexture = texture;
+            yield return www.SendWebRequest();
+            if (www.result == UnityWebRequest.Result.ConnectionError || www.result == UnityWebRequest.Result.ProtocolError)
+            {
+                Debug.LogError(www.error);
+            }
+            else
+            {
+                Texture2D texture = DownloadHandlerTexture.GetContent(www);
+                Vector3 cameraPosition = new Vector3(0, 1.2f, 0);
 
-            Vector2 leftShoulder2D = poses2D[frameNumber][Extensions.GetSmplJointIndex("L_Shoulder")];
-            Vector2 rightHip2D = poses2D[frameNumber][Extensions.GetSmplJointIndex("R_Hip")];
+                // Update all limb segments
+                foreach (var (start, end) in limbDefinitions)
+                {
+                    Vector3 startPos3D = pose3D[(int)start];
+                    Vector3 endPos3D = pose3D[(int)end];
+                    Vector2 startPos2D = poses2D[frameNumber][(int)start];
+                    Vector2 endPos2D = poses2D[frameNumber][(int)end];
 
-            Vector3 cameraPosition = new Vector3(0, 1.2f, 0);
-            Vector3 forward = (leftShoulder3D - cameraPosition).normalized;
-                
-            // Calculate scale first
-            float imageHeight = texture.height;
-            float worldDistance = Vector3.Distance(leftShoulder3D, rightHip3D);
-            float pixelDistance = Vector2.Distance(leftShoulder2D, rightHip2D);
-            float scale = worldDistance / (pixelDistance / imageHeight);
-            float aspectRatio = (float)texture.width / texture.height;
-                
-            // Calculate UV coordinates of the shoulder (normalized 0-1 space)
-            Vector2 shoulderUV = new Vector2(
-                leftShoulder2D.x / texture.width,
-                leftShoulder2D.y / texture.height
-            );
-                
-            // Calculate offset from center to shoulder in world units
-            Vector3 offsetX = quad.transform.right * (shoulderUV.x - 0.5f) * scale * aspectRatio;
-            Vector3 offsetY = quad.transform.up * (shoulderUV.y - 0.5f) * scale;
-                
-            // Position the quad
-            quad.transform.rotation = Quaternion.LookRotation(forward);
-            quad.transform.position = leftShoulder3D + offsetX + offsetY;
-                
-            // Apply the scale
-            quad.transform.localScale = new Vector3(scale * aspectRatio, scale, 1);
+                    limbSegments[(start, end)].UpdateSegment(
+                        startPos3D, endPos3D, startPos2D, endPos2D, texture, cameraPosition);
+                }
+
+                // Update body quad
+                UpdateBodyQuad(frameNumber, pose3D, texture, cameraPosition);
+            }
         }
+    }
+
+    private void UpdateBodyQuad(int frameNumber, List<Vector3> pose3D, Texture2D texture, Vector3 cameraPosition)
+    {
+        Vector3 headPos = pose3D[(int)SmplJoint.Head];
+        Vector3 pelvisPos = pose3D[(int)SmplJoint.Pelvis];
+        Vector2 head2D = poses2D[frameNumber][(int)SmplJoint.Head];
+        Vector2 pelvis2D = poses2D[frameNumber][(int)SmplJoint.Pelvis];
+
+        // Position and orient body quad
+        float bodyHeight = Vector3.Distance(headPos, pelvisPos);
+        float pixel2DHeight = Vector2.Distance(head2D, pelvis2D);
+        float scale = bodyHeight / pixel2DHeight;
+        float aspectRatio = (float)texture.width / texture.height;
+
+        Vector3 centerPos = (headPos + pelvisPos) * 0.5f;
+        bodyQuad.transform.position = centerPos;
+        bodyQuad.transform.LookAt(cameraPosition);
+        bodyQuad.transform.localScale = new Vector3(scale * aspectRatio, bodyHeight, 1);
+
+        // Calculate UV coordinates to map texture along torso
+        float startU = head2D.x / texture.width;
+        float endU = pelvis2D.x / texture.width;
+        float startV = 1 - head2D.y / texture.height; // Flip V coordinate
+        float endV = 1 - pelvis2D.y / texture.height; // Flip V coordinate
+
+        // Apply UV transformation to material
+        bodyMaterial.mainTexture = texture;
+        bodyMaterial.mainTextureScale = new Vector2(1, endV - startV);
+        bodyMaterial.mainTextureOffset = new Vector2(startU, startV);
     }
 }
