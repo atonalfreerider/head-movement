@@ -54,48 +54,58 @@ public class LimbSegment
         float segmentLength = segmentDir.magnitude;
         Vector3 center = (startPos3D + endPos3D) * 0.5f;
 
-        // Position at center of segment
+        // Position and orientation
         quad.transform.position = center;
-
-        // Orient towards camera while maintaining segment direction
         Vector3 toCamera = (cameraPosition - center).normalized;
         Vector3 segmentDirNorm = segmentDir.normalized;
         Vector3 right = Vector3.Cross(segmentDirNorm, toCamera).normalized;
         Vector3 forward = Vector3.Cross(right, segmentDirNorm).normalized;
         quad.transform.rotation = Quaternion.LookRotation(forward, segmentDirNorm);
 
-        // Calculate scale
-        float heightScale = segmentLength; // Scale height based on segment length
+        // Calculate pixel length of the segment in 2D
+        float pixelLength2D = Vector2.Distance(startPos2D, endPos2D);
+        
+        // Calculate the world-to-pixel ratio
+        float worldToPixelRatio = segmentLength / pixelLength2D;
+        
+        // Use a much smaller width ratio (0.05 = 1/20th of the length)
+        float widthPixels = pixelLength2D * 0.05f;
+        float widthWorld = widthPixels * worldToPixelRatio;
 
-        // Apply overextension only for calves and forearms
-        float overextendFactor = (startJoint == SmplJoint.L_Knee && endJoint == SmplJoint.L_Ankle) ||
-                                 (startJoint == SmplJoint.R_Knee && endJoint == SmplJoint.R_Ankle) ||
-                                 (startJoint == SmplJoint.L_Elbow && endJoint == SmplJoint.L_Wrist) ||
-                                 (startJoint == SmplJoint.R_Elbow && endJoint == SmplJoint.R_Wrist) ? 1.2f : 1.0f;
+        quad.transform.localScale = new Vector3(widthWorld, segmentLength, 1);
 
-        // Adjust the quad shape to be 1:4 width-to-height ratio
-        float widthScale = heightScale / 4;
+        // Calculate the direction in 2D texture space
+        Vector2 segmentDir2D = (endPos2D - startPos2D).normalized;
+        Vector2 perpDir2D = new Vector2(-segmentDir2D.y, segmentDir2D.x);
 
-        quad.transform.localScale = new Vector3(widthScale, heightScale * overextendFactor, 1);
+        // Calculate UV coordinates
+        float halfWidthPixels = pixelLength2D * 0.125f; // Half of the 1:4 ratio width in pixels
 
-        // Calculate UV coordinates to map texture along segment
-        float startU = startPos2D.x / texture.width;
-        float endU = endPos2D.x / texture.width;
-        float startV = 1 - startPos2D.y / texture.height; // Flip V coordinate
-        float endV = 1 - endPos2D.y / texture.height; // Flip V coordinate
+        // Calculate corner points in texture space
+        Vector2 textureTopLeft = startPos2D + perpDir2D * halfWidthPixels;
+        Vector2 textureTopRight = startPos2D - perpDir2D * halfWidthPixels;
+        Vector2 textureBottomLeft = endPos2D + perpDir2D * halfWidthPixels;
+        Vector2 textureBottomRight = endPos2D - perpDir2D * halfWidthPixels;
 
-        // Calculate the aspect ratio
-        float aspectRatio = (float)texture.width / texture.height;
+        // Convert to UV coordinates (0-1 range)
+        Vector2 uvTopLeft = new Vector2(textureTopLeft.x / texture.width, 1 - textureTopLeft.y / texture.height);
+        Vector2 uvTopRight = new Vector2(textureTopRight.x / texture.width, 1 - textureTopRight.y / texture.height);
+        Vector2 uvBottomLeft = new Vector2(textureBottomLeft.x / texture.width, 1 - textureBottomLeft.y / texture.height);
+        Vector2 uvBottomRight = new Vector2(textureBottomRight.x / texture.width, 1 - textureBottomRight.y / texture.height);
 
-        // Calculate the scale ratio to achieve 1:1 optical scale
-        float uvWidthScale = aspectRatio * 0.25f; // Make the texture width scale much wider
+        // Update mesh UVs
+        Mesh mesh = quad.GetComponent<MeshFilter>().mesh;
+        mesh.uv = new Vector2[] {
+            uvBottomLeft,
+            uvBottomRight,
+            uvTopLeft,
+            uvTopRight
+        };
 
-        // Apply UV transformation to material
+        // Apply texture
         material.mainTexture = texture;
-        material.mainTextureScale = new Vector2(uvWidthScale, endV - startV); // Adjust the texture scale to achieve 1:1 optical scale
-        material.mainTextureOffset = new Vector2(startU - (uvWidthScale / 2), startV); // Center the texture width
-
-        // Set texture wrap mode to clamp to prevent repeating
+        material.mainTextureScale = Vector2.one;
+        material.mainTextureOffset = Vector2.zero;
         material.mainTexture.wrapMode = TextureWrapMode.Clamp;
     }
 }
