@@ -2,47 +2,44 @@ using UnityEngine;
 
 public class LimbSegment
 {
-    public GameObject quad;
-    public Material material;
-    private readonly SmplJoint startJoint;
-    private readonly SmplJoint endJoint;
+    readonly GameObject quad;
+    readonly Material material;
 
-    public LimbSegment(SmplJoint startJoint, SmplJoint endJoint, Transform parent)
+    public LimbSegment(Transform parent)
     {
-        this.startJoint = startJoint;
-        this.endJoint = endJoint;
-
         quad = new GameObject("LimbSegment");
         quad.transform.SetParent(parent, false);
 
         MeshFilter meshFilter = quad.AddComponent<MeshFilter>();
         MeshRenderer meshRenderer = quad.AddComponent<MeshRenderer>();
 
-        Mesh mesh = new Mesh();
-        mesh.vertices = new Vector3[]
+        Mesh mesh = new()
         {
-            new Vector3(-2f, -0.5f, 0),
-            new Vector3(2f, -0.5f, 0),
-            new Vector3(-2f, 0.5f, 0),
-            new Vector3(2f, 0.5f, 0)
-        };
-        mesh.uv = new Vector2[]
-        {
-            new Vector2(0, 0),
-            new Vector2(1, 0),
-            new Vector2(0, 1),
-            new Vector2(1, 1)
-        };
-        mesh.triangles = new int[]
-        {
-            0, 2, 1,
-            2, 3, 1
+            vertices = new Vector3[]
+            {
+                new(-2f, -0.5f, 0),
+                new(2f, -0.5f, 0),
+                new(-2f, 0.5f, 0),
+                new(2f, 0.5f, 0)
+            },
+            uv = new Vector2[]
+            {
+                new(0, 0),
+                new(1, 0),
+                new(0, 1),
+                new(1, 1)
+            },
+            triangles = new int[]
+            {
+                0, 2, 1,
+                2, 3, 1
+            }
         };
         meshFilter.mesh = mesh;
 
         material = new Material(Shader.Find("Custom/DoubleSidedTransparent"))
         {
-            color = new Color(1, 1, 1, 0.5f)
+            color = new Color(1, 1, 1, 0.03f)
         };
         meshRenderer.material = material;
     }
@@ -68,15 +65,15 @@ public class LimbSegment
         // Calculate the world-to-pixel ratio
         float worldToPixelRatio = segmentLength / pixelLength2D;
         
-        // Use a much smaller width ratio (0.05 = 1/20th of the length)
-        float widthPixels = pixelLength2D * 0.05f;
+        // Increase width ratio for limbs
+        float widthPixels = pixelLength2D * 0.1f; 
         float widthWorld = widthPixels * worldToPixelRatio;
 
         quad.transform.localScale = new Vector3(widthWorld, segmentLength, 1);
 
         // Calculate the direction in 2D texture space
         Vector2 segmentDir2D = (endPos2D - startPos2D).normalized;
-        Vector2 perpDir2D = new Vector2(-segmentDir2D.y, segmentDir2D.x);
+        Vector2 perpDir2D = new(-segmentDir2D.y, segmentDir2D.x);
 
         // Calculate UV coordinates
         float halfWidthPixels = pixelLength2D * 0.125f; // Half of the 1:4 ratio width in pixels
@@ -88,14 +85,14 @@ public class LimbSegment
         Vector2 textureBottomRight = endPos2D - perpDir2D * halfWidthPixels;
 
         // Convert to UV coordinates (0-1 range)
-        Vector2 uvTopLeft = new Vector2(textureTopLeft.x / texture.width, 1 - textureTopLeft.y / texture.height);
-        Vector2 uvTopRight = new Vector2(textureTopRight.x / texture.width, 1 - textureTopRight.y / texture.height);
-        Vector2 uvBottomLeft = new Vector2(textureBottomLeft.x / texture.width, 1 - textureBottomLeft.y / texture.height);
-        Vector2 uvBottomRight = new Vector2(textureBottomRight.x / texture.width, 1 - textureBottomRight.y / texture.height);
+        Vector2 uvTopLeft = new(textureTopLeft.x / texture.width, 1 - textureTopLeft.y / texture.height);
+        Vector2 uvTopRight = new(textureTopRight.x / texture.width, 1 - textureTopRight.y / texture.height);
+        Vector2 uvBottomLeft = new(textureBottomLeft.x / texture.width, 1 - textureBottomLeft.y / texture.height);
+        Vector2 uvBottomRight = new(textureBottomRight.x / texture.width, 1 - textureBottomRight.y / texture.height);
 
         // Update mesh UVs
         Mesh mesh = quad.GetComponent<MeshFilter>().mesh;
-        mesh.uv = new Vector2[] {
+        mesh.uv = new[] {
             uvBottomLeft,
             uvBottomRight,
             uvTopLeft,

@@ -43,9 +43,9 @@ public class PaperDoll : MonoBehaviour
     void Awake()
     {
         limbSegments = new Dictionary<(SmplJoint, SmplJoint), LimbSegment>();
-        foreach (var (start, end) in limbDefinitions)
+        foreach ((SmplJoint start, SmplJoint end) in limbDefinitions)
         {
-            limbSegments.Add((start, end), new LimbSegment(start, end, transform));
+            limbSegments.Add((start, end), new LimbSegment(transform));
         }
 
         // Create body quad
@@ -53,7 +53,7 @@ public class PaperDoll : MonoBehaviour
         bodyQuad.transform.SetParent(transform, false);
         bodyMaterial = new Material(Shader.Find("Custom/DoubleSidedTransparent"))
         {
-            color = new Color(1, 1, 1, 0.5f)
+            color = new Color(1, 1, 1, 0.03f)
         };
         bodyQuad.GetComponent<Renderer>().material = bodyMaterial;
     }
@@ -68,33 +68,31 @@ public class PaperDoll : MonoBehaviour
 
     IEnumerator LoadImage(string imagePath, int frameNumber, List<Vector3> pose3D)
     {
-        using (UnityWebRequest www = UnityWebRequestTexture.GetTexture(imagePath))
+        using UnityWebRequest www = UnityWebRequestTexture.GetTexture(imagePath);
+        yield return www.SendWebRequest();
+        if (www.result is UnityWebRequest.Result.ConnectionError or UnityWebRequest.Result.ProtocolError)
         {
-            yield return www.SendWebRequest();
-            if (www.result == UnityWebRequest.Result.ConnectionError || www.result == UnityWebRequest.Result.ProtocolError)
+            Debug.LogError(www.error);
+        }
+        else
+        {
+            Texture2D texture = DownloadHandlerTexture.GetContent(www);
+            Vector3 cameraPosition = new Vector3(0, 1.2f, 0);
+
+            // Update all limb segments
+            foreach ((SmplJoint start, SmplJoint end) in limbDefinitions)
             {
-                Debug.LogError(www.error);
+                Vector3 startPos3D = pose3D[(int)start];
+                Vector3 endPos3D = pose3D[(int)end];
+                Vector2 startPos2D = poses2D[frameNumber][(int)start];
+                Vector2 endPos2D = poses2D[frameNumber][(int)end];
+
+                limbSegments[(start, end)].UpdateSegment(
+                    startPos3D, endPos3D, startPos2D, endPos2D, texture, cameraPosition);
             }
-            else
-            {
-                Texture2D texture = DownloadHandlerTexture.GetContent(www);
-                Vector3 cameraPosition = new Vector3(0, 1.2f, 0);
 
-                // Update all limb segments
-                foreach (var (start, end) in limbDefinitions)
-                {
-                    Vector3 startPos3D = pose3D[(int)start];
-                    Vector3 endPos3D = pose3D[(int)end];
-                    Vector2 startPos2D = poses2D[frameNumber][(int)start];
-                    Vector2 endPos2D = poses2D[frameNumber][(int)end];
-
-                    limbSegments[(start, end)].UpdateSegment(
-                        startPos3D, endPos3D, startPos2D, endPos2D, texture, cameraPosition);
-                }
-
-                // Update body quad
-                UpdateBodyQuad(frameNumber, pose3D, texture, cameraPosition);
-            }
+            // Update body quad
+            UpdateBodyQuad(frameNumber, pose3D, texture, cameraPosition);
         }
     }
 
@@ -105,8 +103,16 @@ public class PaperDoll : MonoBehaviour
         Vector2 head2D = poses2D[frameNumber][(int)SmplJoint.Head];
         Vector2 pelvis2D = poses2D[frameNumber][(int)SmplJoint.Pelvis];
 
-        float bodyHeight = Vector3.Distance(headPos, pelvisPos);
-        float pixel2DHeight = Vector2.Distance(head2D, pelvis2D);
+        // Calculate base dimensions first
+        float baseHeight = Vector3.Distance(headPos, pelvisPos);
+        float basePixelHeight = Vector2.Distance(head2D, pelvis2D);
+        
+        // Calculate extended dimensions
+        Vector2 extendedHead2D = head2D - new Vector2(0, basePixelHeight * 0.3f);
+        float pixel2DHeight = Vector2.Distance(extendedHead2D, pelvis2D);
+        float bodyHeight = baseHeight * 1.3f;  // Extend height by 30%
+        
+        // Rest of calculations
         float worldToPixelRatio = bodyHeight / pixel2DHeight;
         
         // Calculate width using same approach as limbs but wider for torso
@@ -129,12 +135,11 @@ public class PaperDoll : MonoBehaviour
         
         // Calculate V coordinates (unchanged)
         float bottomV = 1 - pelvis2D.y / texture.height;
-        float topV = 1 - head2D.y / texture.height;
+        float topV = 1 - extendedHead2D.y / texture.height;  // Use extended head position
 
         // Calculate U coordinates with corrected orientation
         float centerU = torsoCenter2D.x / texture.width;
-        float leftU = centerU - uvWidth * 0.5f;
-        
+
         // Apply texture coordinates with flipped U scale to correct mirroring
         bodyMaterial.mainTexture = texture;
         bodyMaterial.mainTextureScale = new Vector2(-uvWidth, topV - bottomV); // Negative U scale to flip horizontally
