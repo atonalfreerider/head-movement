@@ -38,11 +38,19 @@ public class LimbSegment
         Vector3 forward = Vector3.Cross(right, segmentDirNorm).normalized;
         quad.transform.rotation = Quaternion.LookRotation(forward, segmentDirNorm);
 
-        // Calculate scale
+        // Calculate scale        
         float pixel2DLength = Vector2.Distance(startPos2D, endPos2D);
-        float widthScale = segmentLength / 3f; // Adjust this ratio as needed
-        float overextendFactor = 1.2f; // Overextend the quad for calves and forearms
-        quad.transform.localScale = new Vector3(widthScale, segmentLength * overextendFactor, 1);
+        float aspectRatio = (float)texture.width / texture.height;
+        float widthScale = segmentLength / pixel2DLength; // Maintain 1:1 pixel ratio
+        float heightScale = segmentLength; // Scale height based on segment length
+
+        // Apply overextension only for calves and forearms
+        float overextendFactor = (startJoint == SmplJoint.L_Knee && endJoint == SmplJoint.L_Ankle) ||
+                                 (startJoint == SmplJoint.R_Knee && endJoint == SmplJoint.R_Ankle) ||
+                                 (startJoint == SmplJoint.L_Elbow && endJoint == SmplJoint.L_Wrist) ||
+                                 (startJoint == SmplJoint.R_Elbow && endJoint == SmplJoint.R_Wrist) ? 1.2f : 1.0f;
+
+        quad.transform.localScale = new Vector3(1, heightScale * overextendFactor, 1);
 
         // Calculate UV coordinates to map texture along segment
         float startU = startPos2D.x / texture.width;
@@ -50,9 +58,12 @@ public class LimbSegment
         float startV = 1 - startPos2D.y / texture.height; // Flip V coordinate
         float endV = 1 - endPos2D.y / texture.height; // Flip V coordinate
 
+        // Calculate the scale ratio to achieve 1:1 optical scale
+        float uvWidthScale = 1 / aspectRatio;
+
         // Apply UV transformation to material
         material.mainTexture = texture;
-        material.mainTextureScale = new Vector2(endU - startU, endV - startV);
-        material.mainTextureOffset = new Vector2(startU, startV);
+        material.mainTextureScale = new Vector2(uvWidthScale, endV - startV); // Adjust the texture scale to achieve 1:1 optical scale
+        material.mainTextureOffset = new Vector2((startU + endU) / 2 - uvWidthScale / 2, startV); // Center the texture width
     }
 }

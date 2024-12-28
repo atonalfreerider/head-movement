@@ -124,7 +124,7 @@ public class PaperDoll : MonoBehaviour
 
         // Apply UV transformation to material
         bodyMaterial.mainTexture = texture;
-        bodyMaterial.mainTextureScale = new Vector2(1, endV - startV);
+        bodyMaterial.mainTextureScale = new Vector2(1, endV - startV); // Keep the texture scale constant
         bodyMaterial.mainTextureOffset = new Vector2(startU, startV);
     }
 }
