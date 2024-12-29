@@ -5,57 +5,46 @@ using System.Linq;
 using UnityEngine;
 using UnityEngine.Networking;
 
-public class PaperDoll : MonoBehaviour
+public class PaperDoll : MonoBehaviour 
 {
     List<List<Vector2>> poses2D;
     string imageFolderPath;
-    Dictionary<(SmplJoint, SmplJoint), LimbSegment> limbSegments;
-    GameObject bodyQuad;
-    Material bodyMaterial;
+    GameObject projectionPlane;
+    Material projectionMaterial;
+    SkeletonColliders skeletonColliders;
 
-    private static readonly (SmplJoint, SmplJoint)[] limbDefinitions = new[]
-    {
-        (SmplJoint.L_Shoulder, SmplJoint.L_Elbow),    // Left upper arm
-        (SmplJoint.L_Elbow, SmplJoint.L_Wrist),       // Left lower arm
-        (SmplJoint.L_Hip, SmplJoint.L_Knee),          // Left thigh
-        (SmplJoint.L_Knee, SmplJoint.L_Ankle),        // Left calf
-        (SmplJoint.R_Shoulder, SmplJoint.R_Elbow),    // Right upper arm
-        (SmplJoint.R_Elbow, SmplJoint.R_Wrist),       // Right lower arm
-        (SmplJoint.R_Hip, SmplJoint.R_Knee),          // Right thigh
-        (SmplJoint.R_Knee, SmplJoint.R_Ankle),        // Right calf
-    };
+    Vector2 lastScale = Vector2.one;
+    float lastRotation = 0f;
+    static readonly Vector3 CameraPosition = new(0, 1.2f, 0);
 
     public void Init(List<List<List<int>>> intPoses, string imageFolderPath)
     {
-        // Convert List<List<int>> to List<List<Vector2>>
+        // Convert List<List<int>> to List<List<Vector2>> and flip Y coordinates
         poses2D = new List<List<Vector2>>();
-        foreach (List<Vector2> pose2DVector2 in intPoses
-                     .Select(pose2D => pose2D.Select(joint2D => new Vector2(
-                         joint2D[0], 
-                         joint2D[1])).ToList()))
+        foreach (var pose2D in intPoses)
         {
+            List<Vector2> pose2DVector2 = new List<Vector2>();
+            foreach (var joint2D in pose2D)
+            {
+                // Flip Y coordinate since texture coordinates are bottom-up
+                pose2DVector2.Add(new Vector2(joint2D[0], joint2D[1]));
+            }
             poses2D.Add(pose2DVector2);
         }
 
         this.imageFolderPath = imageFolderPath;
-    }
 
-    void Awake()
-    {
-        limbSegments = new Dictionary<(SmplJoint, SmplJoint), LimbSegment>();
-        foreach ((SmplJoint start, SmplJoint end) in limbDefinitions)
+        // Create projection plane with double-sided material
+        projectionPlane = GameObject.CreatePrimitive(PrimitiveType.Quad);
+        projectionPlane.transform.SetParent(transform, false);
+        projectionMaterial = new Material(Shader.Find("Custom/ProjectedTexture"))
         {
-            limbSegments.Add((start, end), new LimbSegment(transform));
-        }
-
-        // Create body quad
-        bodyQuad = GameObject.CreatePrimitive(PrimitiveType.Quad);
-        bodyQuad.transform.SetParent(transform, false);
-        bodyMaterial = new Material(Shader.Find("Custom/DoubleSidedTransparent"))
-        {
-            color = new Color(1, 1, 1, 0.03f)
+            renderQueue = 3000 // Ensure transparent rendering
         };
-        bodyQuad.GetComponent<Renderer>().material = bodyMaterial;
+        projectionPlane.GetComponent<Renderer>().material = projectionMaterial;
+
+        // Initialize skeleton colliders
+        skeletonColliders = gameObject.AddComponent<SkeletonColliders>();
     }
 
     public void SetToFrame(int frameNumber, List<Vector3> pose3D)
@@ -70,80 +59,68 @@ public class PaperDoll : MonoBehaviour
     {
         using UnityWebRequest www = UnityWebRequestTexture.GetTexture(imagePath);
         yield return www.SendWebRequest();
+        
         if (www.result is UnityWebRequest.Result.ConnectionError or UnityWebRequest.Result.ProtocolError)
         {
             Debug.LogError(www.error);
+            yield break;
         }
-        else
-        {
-            Texture2D texture = DownloadHandlerTexture.GetContent(www);
-            Vector3 cameraPosition = new Vector3(0, 1.2f, 0);
 
-            // Update all limb segments
-            foreach ((SmplJoint start, SmplJoint end) in limbDefinitions)
-            {
-                Vector3 startPos3D = pose3D[(int)start];
-                Vector3 endPos3D = pose3D[(int)end];
-                Vector2 startPos2D = poses2D[frameNumber][(int)start];
-                Vector2 endPos2D = poses2D[frameNumber][(int)end];
+        Texture2D texture = DownloadHandlerTexture.GetContent(www);
+        List<Vector2> pose2D = poses2D[frameNumber];
 
-                limbSegments[(start, end)].UpdateSegment(
-                    startPos3D, endPos3D, startPos2D, endPos2D, texture, cameraPosition);
-            }
+        // Update skeleton colliders with expanded collision volumes
+        skeletonColliders.UpdateColliders(pose3D);
 
-            // Update body quad
-            UpdateBodyQuad(frameNumber, pose3D, texture, cameraPosition);
-        }
-    }
-
-    private void UpdateBodyQuad(int frameNumber, List<Vector3> pose3D, Texture2D texture, Vector3 cameraPosition)
-    {
-        Vector3 headPos = pose3D[(int)SmplJoint.Head];
-        Vector3 pelvisPos = pose3D[(int)SmplJoint.Pelvis];
-        Vector2 head2D = poses2D[frameNumber][(int)SmplJoint.Head];
-        Vector2 pelvis2D = poses2D[frameNumber][(int)SmplJoint.Pelvis];
-
-        // Calculate base dimensions first
-        float baseHeight = Vector3.Distance(headPos, pelvisPos);
-        float basePixelHeight = Vector2.Distance(head2D, pelvis2D);
+        // Find closest point and corresponding 2D point
+        Vector3 spine3D = pose3D[(int)SmplJoint.Spine2];
+        Vector2 spine2D = pose2D[(int)SmplJoint.Spine2];
         
-        // Calculate extended dimensions
-        Vector2 extendedHead2D = head2D - new Vector2(0, basePixelHeight * 0.3f);
-        float pixel2DHeight = Vector2.Distance(extendedHead2D, pelvis2D);
-        float bodyHeight = baseHeight * 1.3f;  // Extend height by 30%
-        
-        // Rest of calculations
-        float worldToPixelRatio = bodyHeight / pixel2DHeight;
-        
-        // Calculate width using same approach as limbs but wider for torso
-        float widthPixels = pixel2DHeight * 0.25f;
-        float widthWorld = widthPixels * worldToPixelRatio;
+        // Convert 2D coordinates to match Unity's coordinate system
+        spine2D.y = texture.height - spine2D.y; // Flip Y coordinate
 
-        // Position from pelvis up to head (reversed from before)
-        Vector3 centerPos = pelvisPos + (headPos - pelvisPos) * 0.5f;
-        bodyQuad.transform.position = centerPos;
+        // Calculate scale using corrected coordinates
+        Vector2 head2D = new Vector2(
+            pose2D[(int)SmplJoint.Head].x,
+            texture.height - pose2D[(int)SmplJoint.Head].y
+        );
+        Vector2 foot2D = new Vector2(
+            (pose2D[(int)SmplJoint.L_Ankle].x + pose2D[(int)SmplJoint.R_Ankle].x) * 0.5f,
+            texture.height - ((pose2D[(int)SmplJoint.L_Ankle].y + pose2D[(int)SmplJoint.R_Ankle].y) * 0.5f)
+        );
         
-        // Make sure we're facing the camera but oriented upright
-        bodyQuad.transform.LookAt(cameraPosition);
-        bodyQuad.transform.up = (headPos - pelvisPos).normalized;
+        float imageHeight = Vector2.Distance(head2D, foot2D);
+        float personHeight3D = Vector3.Distance(pose3D[(int)SmplJoint.Head], 
+            (pose3D[(int)SmplJoint.L_Ankle] + pose3D[(int)SmplJoint.R_Ankle]) * 0.5f);
         
-        bodyQuad.transform.localScale = new Vector3(widthWorld * 2.0f, bodyHeight, 1);
+        float scale = personHeight3D / imageHeight;
 
-        // Calculate texture coordinates with corrected mirroring
-        Vector2 torsoCenter2D = (head2D + pelvis2D) * 0.5f;
-        float uvWidth = (widthPixels * 2) / texture.width;
+        // Position and orient the plane
+        projectionPlane.transform.position = spine3D;
+        projectionPlane.transform.LookAt(2 * spine3D - CameraPosition); // Face away from camera
         
-        // Calculate V coordinates (unchanged)
-        float bottomV = 1 - pelvis2D.y / texture.height;
-        float topV = 1 - extendedHead2D.y / texture.height;  // Use extended head position
+        // Calculate UV coordinates
+        Vector2 texCenter = new Vector2(
+            spine2D.x / texture.width,
+            spine2D.y / texture.height
+        );
 
-        // Calculate U coordinates with corrected orientation
-        float centerU = torsoCenter2D.x / texture.width;
+        projectionMaterial.mainTextureScale = Vector2.one;
+        projectionMaterial.mainTextureOffset = -texCenter;
+        
+        // Scale plane
+        projectionPlane.transform.localScale = new Vector3(
+            scale * texture.width,
+            scale * texture.height,
+            1
+        );
 
-        // Apply texture coordinates with flipped U scale to correct mirroring
-        bodyMaterial.mainTexture = texture;
-        bodyMaterial.mainTextureScale = new Vector2(-uvWidth, topV - bottomV); // Negative U scale to flip horizontally
-        bodyMaterial.mainTextureOffset = new Vector2(centerU + uvWidth * 0.5f, bottomV); // Adjusted offset to compensate for negative scale
-        bodyMaterial.mainTexture.wrapMode = TextureWrapMode.Clamp;
+        // Update shader parameters
+        projectionMaterial.mainTexture = texture;
+        projectionMaterial.SetVector("_CameraPosition", CameraPosition);
+        projectionMaterial.SetMatrix("_CollisionPrimitives", skeletonColliders.GetCollisionMatrix());
+        projectionMaterial.SetFloat("_DepthFade", 0.05f);
+        projectionMaterial.SetFloat("_CollisionSoftness", 0.02f); // Tighter collision boundary
+        projectionMaterial.SetFloat("_DeformStrength", 1.0f); // Stronger deformation
     }
 }
