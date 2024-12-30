@@ -249,7 +249,7 @@ public class HeadMovement : MonoBehaviour
         {
             int frameNumber = GetFrameNumber();
             Vector3 center = Vector3.Lerp(Lead.Center(frameNumber), Follow.Center(frameNumber), .5f);
-            center = new Vector3(center.x, 0, center.z);
+            center = new Vector3(center.x, center.y - 0.5f, center.z);
             cameraControl.Center = center;
         }
 
