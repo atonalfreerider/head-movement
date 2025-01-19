@@ -179,42 +179,7 @@ public class ContactDetection : MonoBehaviour
             followSpine3Pos
         };
 
-        (Vector3[] catmulLeftArm, float[] leftDistances) = ContactLine(leadLeftArm, allFollowPoints);
 
-        leadLeftArmContact.positionCount = catmulLeftArm.Length;
-        leadLeftArmContact.SetPositions(catmulLeftArm);
-
-        (AnimationCurve leftArmWidthCurve, Gradient leftCividisGradient) = CurveAnimationGrad(leftDistances);
-
-        leadLeftArmContact.widthCurve = leftArmWidthCurve;
-        leadLeftArmContact.colorGradient = leftCividisGradient;
-
-        (Vector3[] catmulRightArm, float[] rightDistances) = ContactLine(leadRightArm, allFollowPoints);
-        leadRightArmContact.positionCount = catmulRightArm.Length;
-        leadRightArmContact.SetPositions(catmulRightArm);
-
-        (AnimationCurve rightArmWidthCurve, Gradient rightCividisGradient) = CurveAnimationGrad(rightDistances);
-
-        leadRightArmContact.widthCurve = rightArmWidthCurve;
-        leadRightArmContact.colorGradient = rightCividisGradient;
-
-        (Vector3[] catmulBody, float[] bodyDistances) = ContactLine(leadBody, allFollowPoints);
-        leadBodyContact.positionCount = catmulBody.Length;
-        leadBodyContact.SetPositions(catmulBody);
-
-        (AnimationCurve bodyWidthCurve, Gradient bodyCividisGradient) = CurveAnimationGrad(bodyDistances);
-
-        leadBodyContact.widthCurve = bodyWidthCurve;
-        leadBodyContact.colorGradient = bodyCividisGradient;
-
-        (Vector3[] catmulRightThigh, float[] thighDistances) = ContactLine(leadRightThigh, allFollowPoints);
-        leadRightThighContact.positionCount = catmulRightThigh.Length;
-        leadRightThighContact.SetPositions(catmulRightThigh);
-
-        (AnimationCurve thighWidthCurve, Gradient thighCividisGradient) = CurveAnimationGrad(thighDistances);
-
-        leadRightThighContact.widthCurve = thighWidthCurve;
-        leadRightThighContact.colorGradient = thighCividisGradient;
         
         UpdateHandOrbs(leadLeftHandPos, leadRightHandPos, followLeftHandPos, followRightHandPos, leadLeftElbowPos, leadRightElbowPos);
     }

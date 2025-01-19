@@ -279,6 +279,31 @@ public class HeadMovement : MonoBehaviour
             selection = 4;
         }
 
+        if (Keyboard.current.digit6Key.wasPressedThisFrame)
+        {
+            selection = 5;
+        }
+
+        if (Keyboard.current.digit7Key.wasPressedThisFrame)
+        {
+            selection = 6;
+        }
+
+        if (Keyboard.current.digit8Key.wasPressedThisFrame)
+        {
+            selection = 7;
+        }
+
+        if (Keyboard.current.digit9Key.wasPressedThisFrame)
+        {
+            selection = 8;
+        }
+
+        if (Keyboard.current.digit0Key.wasPressedThisFrame)
+        {
+            selection = 9;
+        }
+
         if (selection > -1)
         {
             LoadCapture(selection);
