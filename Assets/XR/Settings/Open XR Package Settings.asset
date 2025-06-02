@@ -98,7 +98,7 @@ MonoBehaviour:
   nameUi: 'Meta Quest: Planes'
   version: 0.1.0
   featureIdInternal: com.unity.openxr.feature.arfoundation-meta-plane
-  openxrExtensionStrings: XR_FB_spatial_entity XR_FB_scene XR_META_spatial_entity_discovery
+  openxrExtensionStrings: XR_FB_scene XR_FB_spatial_entity XR_META_spatial_entity_discovery
   company: Unity Technologies
   priority: 0
   required: 0
@@ -836,7 +836,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 323d71788dcf5ca4b9cb3c4a90e38335, type: 3}
   m_Name: OpenXRLifeCycleFeature Android
   m_EditorClassIdentifier: 
-  m_enabled: 0
+  m_enabled: 1
   nameUi: 
   version: 0.1.0
   featureIdInternal: MetaOpenXR-OpenXRLifeCycle
@@ -1109,8 +1109,8 @@ MonoBehaviour:
   nameUi: 'Meta Quest: Meshing'
   version: 0.1.0
   featureIdInternal: com.unity.openxr.feature.arfoundation-meta-mesh
-  openxrExtensionStrings: XR_FB_spatial_entity XR_FB_scene XR_META_spatial_entity_mesh
-    XR_META_spatial_entity_discovery
+  openxrExtensionStrings: XR_FB_scene XR_FB_spatial_entity XR_META_spatial_entity_discovery
+    XR_META_spatial_entity_mesh
   company: Unity Technologies
   priority: 0
   required: 0
@@ -1443,18 +1443,18 @@ MonoBehaviour:
   - {fileID: -6502891174485887071}
   - {fileID: -2136229507616655429}
   - {fileID: -8995373406322648706}
-  - {fileID: 470287497363167869}
+  - {fileID: -5108926410888323551}
   - {fileID: -5267808481207183094}
   - {fileID: 9056711724292341958}
-  - {fileID: 7203744661709911638}
-  - {fileID: 931813378195394102}
+  - {fileID: -3700571367574913362}
+  - {fileID: 1066009464435003755}
   - {fileID: -5839628621075157067}
   - {fileID: 3160594814430546273}
-  - {fileID: 5872573975570171868}
-  - {fileID: -3710770088191821844}
-  - {fileID: 6975147932509699451}
+  - {fileID: -8928327792652037404}
+  - {fileID: -2372219275992780054}
+  - {fileID: 8360827747846075219}
   - {fileID: -6095969653510069658}
-  - {fileID: 4318181072031164674}
+  - {fileID: 3135426577018121230}
   - {fileID: -7521863091759822397}
   - {fileID: -4202465578935744006}
   - {fileID: 7664484590443582627}
@@ -1691,7 +1691,7 @@ MonoBehaviour:
   nameUi: 'Meta Quest: Camera (Passthrough)'
   version: 0.1.0
   featureIdInternal: com.unity.openxr.feature.arfoundation-meta-camera
-  openxrExtensionStrings: XR_FB_passthrough XR_FB_composition_layer_alpha_blend
+  openxrExtensionStrings: XR_FB_passthrough
   company: Unity Technologies
   priority: 0
   required: 0
@@ -1942,7 +1942,7 @@ MonoBehaviour:
   m_Name: XboxOne
   m_EditorClassIdentifier: 
   features:
-  - {fileID: 2736230221396980519}
+  - {fileID: 1009550104029149674}
   m_renderMode: 1
   m_autoColorSubmissionMode: 1
   m_colorSubmissionModes:
@@ -2454,7 +2454,7 @@ MonoBehaviour:
   nameUi: 'Meta Quest: Planes'
   version: 0.1.0
   featureIdInternal: com.unity.openxr.feature.arfoundation-meta-plane
-  openxrExtensionStrings: XR_FB_spatial_entity XR_FB_scene XR_META_spatial_entity_discovery
+  openxrExtensionStrings: XR_FB_scene XR_FB_spatial_entity XR_META_spatial_entity_discovery
   company: Unity Technologies
   priority: 0
   required: 0
@@ -2676,7 +2676,7 @@ MonoBehaviour:
   nameUi: 'Meta Quest: Bounding Boxes'
   version: 0.1.0
   featureIdInternal: com.unity.openxr.feature.arfoundation-meta-bounding-boxes
-  openxrExtensionStrings: XR_FB_spatial_entity XR_FB_scene XR_META_spatial_entity_discovery
+  openxrExtensionStrings: XR_FB_scene XR_FB_spatial_entity XR_META_spatial_entity_discovery
   company: Unity Technologies
   priority: 0
   required: 0
@@ -4282,8 +4282,8 @@ MonoBehaviour:
   nameUi: 'Meta Quest: Meshing'
   version: 0.1.0
   featureIdInternal: com.unity.openxr.feature.arfoundation-meta-mesh
-  openxrExtensionStrings: XR_FB_spatial_entity XR_FB_scene XR_META_spatial_entity_mesh
-    XR_META_spatial_entity_discovery
+  openxrExtensionStrings: XR_FB_scene XR_FB_spatial_entity XR_META_spatial_entity_discovery
+    XR_META_spatial_entity_mesh
   company: Unity Technologies
   priority: 0
   required: 0
@@ -5064,7 +5064,7 @@ MonoBehaviour:
   nameUi: 'Meta Quest: Bounding Boxes'
   version: 0.1.0
   featureIdInternal: com.unity.openxr.feature.arfoundation-meta-bounding-boxes
-  openxrExtensionStrings: XR_FB_spatial_entity XR_FB_scene XR_META_spatial_entity_discovery
+  openxrExtensionStrings: XR_FB_scene XR_FB_spatial_entity XR_META_spatial_entity_discovery
   company: Unity Technologies
   priority: 0
   required: 0
