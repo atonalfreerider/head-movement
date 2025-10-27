@@ -17,7 +17,7 @@ public class Dancer : MonoBehaviour
     Color[] colorSpectrum;
     
     Material BloomMat;
-    HairSimulation hairSimulation;
+    AdvancedHairSimulation hairSimulation;
     readonly Dictionary<SmplJoint, float[]> jerkByFrameByJoint = new();
 
     LineRenderer followSpineRenderer;
@@ -141,8 +141,58 @@ public class Dancer : MonoBehaviour
                     colorSpectrum[i] = new Color(.2f, .2f, .2f) * multiplier;
                 }
 
-                hairSimulation = new GameObject("Hair Simulation").AddComponent<HairSimulation>();
+                // Create advanced hair simulation for female follow
+                hairSimulation = new GameObject("Hair Simulation").AddComponent<AdvancedHairSimulation>();
                 hairSimulation.transform.SetParent(transform, false);
+                
+                // Configure hair style and properties
+                hairSimulation.hairstyle = AdvancedHairSimulation.HairstyleType.Long;
+                hairSimulation.texture = AdvancedHairSimulation.HairTexture.Wavy;
+                hairSimulation.bangs = AdvancedHairSimulation.BangStyle.LongSweptBack;
+                
+                // Adjust strand count and density for performance
+                hairSimulation.strandCount = 250;
+                hairSimulation.hairDensity = 0.85f;
+                hairSimulation.segmentsPerStrand = 14;
+                
+                // Set hair length
+                hairSimulation.baseHairLength = 0.35f;
+                hairSimulation.lengthVariation = 0.12f;
+                
+                // Physics tuning - LOOSENED for more natural movement
+                hairSimulation.stiffness = 4.0f;
+                hairSimulation.damping = 2.0f;
+                hairSimulation.mass = 0.5f;
+                hairSimulation.subSteps = 5;
+                hairSimulation.constraintIterations = 8;
+                
+                // Cohesion settings - REDUCED for more freedom
+                hairSimulation.strandCohesion = 0.25f;
+                hairSimulation.cohesionRadius = 0.04f;
+                hairSimulation.velocitySmoothing = 0.2f;
+                hairSimulation.globalVelocityDamping = 0.8f;
+                
+                // Head and neck collision
+                hairSimulation.headRadius = 0.09f;
+                hairSimulation.neckRadius = 0.045f;
+                hairSimulation.neckLength = 0.13f;
+                hairSimulation.collisionFriction = 0.5f;
+                
+                // Wind disabled for now
+                hairSimulation.enableWind = false;
+                hairSimulation.windStrength = 0f;
+                hairSimulation.windFrequency = 0.4f;
+                hairSimulation.windDirection = new Vector3(1, 0, 0.3f);
+                
+                // Curl/wave settings
+                hairSimulation.curlAmount = 0.35f;
+                hairSimulation.curlFrequency = 0.12f;
+                hairSimulation.curlPhaseOffset = 60f;
+                
+                // Visual settings
+                hairSimulation.strandThickness = 0.008f;
+                hairSimulation.strandEndThickness = 0.002f;
+                
                 break;
             }
             case Role.Lead:
