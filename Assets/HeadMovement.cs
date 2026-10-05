@@ -18,31 +18,50 @@ public class HeadMovement : MonoBehaviour
 
     int FrameCount = -1;
     float TotalSeconds = -1;
+    float Fps = 30;
+    float AudioOffset;
 
     Dancer Lead;
     Dancer Follow;
 
     ContactDetection contactDetection;
+    FloorPatterns floorPatterns;
+    PartnerConnection partnerConnection;
+    SplatCloud splatCloud;
+    VirtualCameraRig virtualCameraRig;
 
-    Coroutine animator;
     public Material BloomMaterial;
 
     CameraControl cameraControl;
 
     AudioSource audioSource;
     bool audioLoaded = false;
+    bool playing = false;
     int currentFolder = -1;
 
+    CaptureManifest manifest;
+    BeatGrid beatGrid;
     Dictionary<int, float> beatIntensityByFrame;
-    List<List<float>> zoukTime;
     int currentFrame = -1;
+
+    // lesson transport
+    static readonly float[] Speeds = { 0.5f, 0.75f, 1f };
+    int speedIndex = Speeds.Length - 1;
+    bool loopMeasure;
+    int loopedMeasure;
+    bool showFloor = true, showConnection = true, showSplats = true, showCameras = false, showHud = true;
 
     string[] captures;
 
     void Awake()
     {
         Instance = this;
-        captures = Directory.GetDirectories(assetPath);
+        captures = Directory.GetDirectories(assetPath).OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToArray();
+
+        floorPatterns = gameObject.AddComponent<FloorPatterns>();
+        partnerConnection = gameObject.AddComponent<PartnerConnection>();
+        splatCloud = new GameObject("Splats").AddComponent<SplatCloud>();
+        virtualCameraRig = new GameObject("Virtual Cameras").AddComponent<VirtualCameraRig>();
     }
 
     void Start()
@@ -52,6 +71,11 @@ public class HeadMovement : MonoBehaviour
 
     void LoadCapture(int selection)
     {
+        if (selection >= captures.Length) return;
+
+        Pause();
+        audioLoaded = false;
+
         if (Lead != null)
         {
             Destroy(Lead.gameObject);
@@ -64,25 +88,50 @@ public class HeadMovement : MonoBehaviour
 
         currentFolder = selection;
         currentFrame = -1;
-        
-        VideoMetadata videoMetadata = JsonConvert.DeserializeObject<VideoMetadata>(
-            File.ReadAllText(Path.Combine(captures[currentFolder], "video_meta.json")));
-        FrameCount = videoMetadata.frame_count;
-        TotalSeconds = videoMetadata.duration;
+        loopMeasure = false;
 
-        Lead = ReadAllPosesFrom(Path.Combine(captures[currentFolder], "figure1.json"), Role.Lead);
-        Follow = ReadAllPosesFrom(Path.Combine(captures[currentFolder], "figure2.json"), Role.Follow);
+        manifest = CaptureManifest.Load(captures[currentFolder]);
+        FrameCount = manifest.frame_count;
+        TotalSeconds = manifest.duration > 0 ? manifest.duration : FrameCount / manifest.fps;
+        Fps = manifest.fps;
+        AudioOffset = manifest.audio_offset;
 
-        string zoukTimeString = File.ReadAllText(Path.Combine(captures[currentFolder], "zouk-time-analysis.json"));
-        zoukTime = JsonConvert.DeserializeObject<List<List<float>>>(zoukTimeString);
+        Lead = ReadAllPosesFrom(manifest.JointsPath(Role.Lead), Role.Lead);
+        Follow = ReadAllPosesFrom(manifest.JointsPath(Role.Follow), Role.Follow);
+        FrameCount = Mathf.Min(FrameCount, Mathf.Min(Lead.FrameCount, Follow.FrameCount));
+
+        beatGrid = null;
+        if (manifest.beats != null)
+        {
+            string zoukTimeString = File.ReadAllText(manifest.PathOf(manifest.beats));
+            beatGrid = new BeatGrid(JsonConvert.DeserializeObject<List<List<float>>>(zoukTimeString));
+        }
+        else
+        {
+            Debug.LogWarning($"{manifest.DisplayName}: no zouk-time-analysis.json - timing checks disabled");
+        }
 
         contactDetection = GetComponent<ContactDetection>();
         contactDetection.Reset();
         contactDetection.Init(Lead, Follow, BloomMaterial);
 
+        floorPatterns.Init(Lead, Follow, BloomMaterial, beatGrid, Fps, AudioOffset);
+        floorPatterns.SetVisible(showFloor);
+        partnerConnection.Init(Lead, Follow, BloomMaterial, Fps);
+        partnerConnection.SetVisible(showConnection);
+        virtualCameraRig.Load(manifest.PathOf(manifest.virtual_cameras), BloomMaterial);
+        virtualCameraRig.SetVisible(showCameras);
+        StartCoroutine(LoadSplats());
+
         StartCoroutine(LoadAudio());
     }
-    
+
+    IEnumerator LoadSplats()
+    {
+        yield return splatCloud.Load(manifest);
+        splatCloud.SetVisible(showSplats);
+    }
+
     [Serializable]
     public class VideoMetadata
     {
@@ -93,7 +142,7 @@ public class HeadMovement : MonoBehaviour
     IEnumerator LoadAudio()
     {
         // Build the full path to the WAV file in StreamingAssets
-        string filePath = Path.Combine(captures[currentFolder], "audio.wav");
+        string filePath = manifest.PathOf(manifest.audio ?? "audio.wav");
 
         // On most platforms, we need the "file://" prefix to read directly
         // For Android, UnityWebRequest can handle it without the prefix, but
@@ -125,15 +174,19 @@ public class HeadMovement : MonoBehaviour
 
             // Assign the clip and play
             audioSource.clip = clip;
+            audioSource.pitch = Speeds[speedIndex];
+            audioSource.time = Mathf.Clamp(AudioOffset, 0, clip.length - 0.01f);
             audioLoaded = true;
 
-            List<int> framesWithUpOrDownbeat = new List<int>();
-            foreach (List<float> floatPair in zoukTime)
+            HashSet<int> framesWithUpOrDownbeat = new();
+            if (beatGrid != null)
             {
-                if ((int)floatPair[1] == 3) continue; // filter out high-hat
+                for (int i = 0; i < beatGrid.Count; i++)
+                {
+                    if (beatGrid.Types[i] == 3) continue; // filter out high-hat
 
-                int frameBeat = (int)Mathf.Round((floatPair[0] / TotalSeconds) * FrameCount);
-                framesWithUpOrDownbeat.Add(frameBeat);
+                    framesWithUpOrDownbeat.Add(Mathf.RoundToInt((beatGrid.Times[i] - AudioOffset) * Fps));
+                }
             }
 
             beatIntensityByFrame = new Dictionary<int, float>();
@@ -156,15 +209,6 @@ public class HeadMovement : MonoBehaviour
             SetToFrameNumber();
             Debug.Log($"Loaded performance: {captures[currentFolder]}");
         }
-    }
-
-    IEnumerator Iterate()
-    {
-        SetToFrameNumber();
-
-        yield return null;
-
-        Resume();
     }
 
     Dancer ReadAllPosesFrom(string jsonPath, Role role)
@@ -192,127 +236,227 @@ public class HeadMovement : MonoBehaviour
         Follow.SetPoseToFrame(frameNumber, currentBeatIntensity);
 
         contactDetection.DetectContact(frameNumber);
+        floorPatterns.SetFrame(frameNumber);
+        partnerConnection.SetFrame(frameNumber);
+        splatCloud.SetFrame(frameNumber, Fps);
     }
 
-    public void SlowDown()
-    {
-    }
+    #region LESSON TRANSPORT
 
-    public void SpeedUp()
+    public void SlowDown() => SetSpeed(speedIndex - 1);
+
+    public void SpeedUp() => SetSpeed(speedIndex + 1);
+
+    void SetSpeed(int index)
     {
+        speedIndex = Mathf.Clamp(index, 0, Speeds.Length - 1);
+        // pitch drops with speed; an AudioMixer pitch-shifter would keep it (TODO for lessons with vocals)
+        if (audioSource != null) audioSource.pitch = Speeds[speedIndex];
     }
 
     public void TogglePlayPause()
     {
-        if (animator == null)
+        if (!audioLoaded) return;
+
+        if (playing)
         {
-            audioSource.Play();
-            Resume();
+            Pause();
         }
         else
         {
-            audioSource.Pause();
-            Pause();
+            Resume();
         }
     }
 
     void Pause()
     {
-        if (animator != null)
-        {
-            StopCoroutine(animator);
-            animator = null;
-        }
+        playing = false;
+        if (audioSource != null) audioSource.Pause();
     }
 
     void Resume()
     {
-        animator = StartCoroutine(Iterate());
+        if (GetFrameNumber() >= FrameCount - 1) Seek(AudioOffset); // play at the end restarts the take
+        if (loopMeasure && audioSource.time >= beatGrid.MeasureEnd(loopedMeasure))
+        {
+            audioSource.time = beatGrid.MeasureStart(loopedMeasure);
+        }
+
+        playing = true;
+        audioSource.Play();
     }
+
+    /// <summary>jump to an audio-timeline time; keeps the play/pause state so paused lessons stay paused</summary>
+    public void Seek(float audioTime)
+    {
+        if (!audioLoaded) return;
+
+        float firstPose = AudioOffset;
+        float lastPose = AudioOffset + (FrameCount - 1) / Fps;
+        audioSource.time = Mathf.Clamp(audioTime, Mathf.Max(0, firstPose), Mathf.Min(lastPose, audioSource.clip.length - 0.01f));
+        SetToFrameNumber();
+    }
+
+    public void StepBeat(int direction)
+    {
+        if (beatGrid == null || !audioLoaded) return;
+
+        Pause();
+        Seek(direction > 0 ? beatGrid.NextBeat(audioSource.time) : beatGrid.PreviousBeat(audioSource.time));
+    }
+
+    public void StepMeasure(int direction)
+    {
+        if (beatGrid == null || !audioLoaded) return;
+
+        int measure = beatGrid.MeasureIndex(audioSource.time);
+        float start = beatGrid.MeasureStart(measure);
+        // "previous" from a little way into a measure restarts it, like a media player
+        if (direction < 0 && audioSource.time - start > 0.25f) direction = 0;
+        int target = Mathf.Clamp(measure + direction, 0, beatGrid.MeasureCount - 1);
+        if (loopMeasure) loopedMeasure = target;
+        Seek(beatGrid.MeasureStart(target));
+    }
+
+    public void ToggleLoopMeasure()
+    {
+        if (beatGrid == null || !audioLoaded) return;
+
+        loopMeasure = !loopMeasure;
+        loopedMeasure = beatGrid.MeasureIndex(audioSource.time);
+    }
+
+    public void Restart() => Seek(AudioOffset);
+
+    #endregion
 
     void Update()
     {
-        if (Keyboard.current.rightArrowKey.wasPressedThisFrame)
+        HandleKeyboard();
+
+        if (!audioLoaded) return;
+
+        if (playing)
         {
-            SpeedUp();
-        }
-        else if (Keyboard.current.leftArrowKey.wasPressedThisFrame)
-        {
-            SlowDown();
-        }
-        else if (audioLoaded && Keyboard.current.spaceKey.wasPressedThisFrame)
-        {
-            TogglePlayPause();
+            if (loopMeasure && audioSource.time >= beatGrid.MeasureEnd(loopedMeasure))
+            {
+                audioSource.time = beatGrid.MeasureStart(loopedMeasure);
+            }
+
+            bool pastLastFrame = (audioSource.time - AudioOffset) * Fps >= FrameCount - 1;
+            if (!audioSource.isPlaying || pastLastFrame)
+            {
+                Pause();
+                Seek(AudioOffset + (FrameCount - 1) / Fps);
+            }
+
+            SetToFrameNumber();
         }
 
-        if (audioLoaded && cameraControl.gameObject.activeInHierarchy)
+        if (cameraControl.gameObject.activeInHierarchy)
         {
             int frameNumber = GetFrameNumber();
             Vector3 center = Vector3.Lerp(Lead.Center(frameNumber), Follow.Center(frameNumber), .5f);
             center = new Vector3(center.x, center.y - 0.5f, center.z);
             cameraControl.Center = center;
         }
+    }
 
-        int selection = -1;
-        if (Keyboard.current.digit1Key.wasPressedThisFrame)
+    void HandleKeyboard()
+    {
+        Keyboard keyboard = Keyboard.current;
+        if (keyboard == null) return;
+
+        if (keyboard.rightArrowKey.wasPressedThisFrame)
         {
-            selection = 0;
+            SpeedUp();
+        }
+        else if (keyboard.leftArrowKey.wasPressedThisFrame)
+        {
+            SlowDown();
+        }
+        else if (keyboard.spaceKey.wasPressedThisFrame)
+        {
+            TogglePlayPause();
         }
 
-        if (Keyboard.current.digit2Key.wasPressedThisFrame)
-        {
-            selection = 1;
-        }
+        if (keyboard.periodKey.wasPressedThisFrame) StepBeat(1);
+        if (keyboard.commaKey.wasPressedThisFrame) StepBeat(-1);
+        if (keyboard.rightBracketKey.wasPressedThisFrame) StepMeasure(1);
+        if (keyboard.leftBracketKey.wasPressedThisFrame) StepMeasure(-1);
+        if (keyboard.lKey.wasPressedThisFrame) ToggleLoopMeasure();
+        if (keyboard.homeKey.wasPressedThisFrame || keyboard.rKey.wasPressedThisFrame) Restart();
 
-        if (Keyboard.current.digit3Key.wasPressedThisFrame)
-        {
-            selection = 2;
-        }
+        if (keyboard.fKey.wasPressedThisFrame) floorPatterns.SetVisible(showFloor = !showFloor);
+        if (keyboard.tKey.wasPressedThisFrame) partnerConnection.SetVisible(showConnection = !showConnection);
+        if (keyboard.gKey.wasPressedThisFrame) splatCloud.SetVisible(showSplats = !showSplats);
+        if (keyboard.cKey.wasPressedThisFrame) virtualCameraRig.SetVisible(showCameras = !showCameras);
+        if (keyboard.hKey.wasPressedThisFrame) showHud = !showHud;
 
-        if (Keyboard.current.digit4Key.wasPressedThisFrame)
+        Key[] digits =
         {
-            selection = 3;
-        }
-
-        if (Keyboard.current.digit5Key.wasPressedThisFrame)
+            Key.Digit1, Key.Digit2, Key.Digit3, Key.Digit4, Key.Digit5,
+            Key.Digit6, Key.Digit7, Key.Digit8, Key.Digit9, Key.Digit0
+        };
+        for (int i = 0; i < digits.Length; i++)
         {
-            selection = 4;
-        }
-
-        if (Keyboard.current.digit6Key.wasPressedThisFrame)
-        {
-            selection = 5;
-        }
-
-        if (Keyboard.current.digit7Key.wasPressedThisFrame)
-        {
-            selection = 6;
-        }
-
-        if (Keyboard.current.digit8Key.wasPressedThisFrame)
-        {
-            selection = 7;
-        }
-
-        if (Keyboard.current.digit9Key.wasPressedThisFrame)
-        {
-            selection = 8;
-        }
-
-        if (Keyboard.current.digit0Key.wasPressedThisFrame)
-        {
-            selection = 9;
-        }
-
-        if (selection > -1)
-        {
-            LoadCapture(selection);
+            if (keyboard[digits[i]].wasPressedThisFrame)
+            {
+                LoadCapture(i);
+                break;
+            }
         }
     }
 
     int GetFrameNumber()
     {
-        return (int)Mathf.Round((audioSource.time / TotalSeconds) * FrameCount);
+        return Mathf.Clamp(Mathf.RoundToInt((audioSource.time - AudioOffset) * Fps), 0, FrameCount - 1);
+    }
+
+    void OnGUI()
+    {
+        if (!showHud) return;
+
+        GUILayout.BeginArea(new Rect(12, 12, 460, 400), GUI.skin.box);
+        if (manifest == null)
+        {
+            GUILayout.Label("Press 1-9/0 to load a performance:");
+            for (int i = 0; i < Mathf.Min(captures.Length, 10); i++)
+            {
+                GUILayout.Label($"  {(i + 1) % 10}  {Path.GetFileName(captures[i])}");
+            }
+        }
+        else if (audioLoaded)
+        {
+            float t = audioSource.time;
+            string measure = beatGrid != null
+                ? $"measure {beatGrid.MeasureIndex(t) + 1}/{beatGrid.MeasureCount}  eighth {Mathf.Max(0, beatGrid.IndexAtOrBefore(t)) % BeatGrid.BeatsPerMeasure + 1}"
+                : "no beats";
+            GUILayout.Label($"{manifest.DisplayName}   {(playing ? "playing" : "paused")}   x{Speeds[speedIndex]:0.##}" +
+                            (loopMeasure ? $"   loop m{loopedMeasure + 1}" : ""));
+            GUILayout.Label($"{t - AudioOffset:0.00}s   frame {currentFrame}/{FrameCount}   {measure}");
+            foreach (Role role in new[] { Role.Lead, Role.Follow })
+            {
+                if (floorPatterns.LatestStep(role, currentFrame, out FloorPatterns.Step step) && !float.IsNaN(step.ErrorMs))
+                {
+                    GUILayout.Label($"{role} last step: {(step.ErrorMs >= 0 ? "+" : "")}{step.ErrorMs:0} ms " +
+                                    $"({(Mathf.Abs(step.ErrorMs) <= floorPatterns.OnBeatMs ? "on beat" : step.ErrorMs > 0 ? "late" : "early")})");
+                }
+            }
+
+            foreach (PartnerConnection.Connection c in partnerConnection.Connections)
+            {
+                if (c.Active != null && currentFrame < c.Active.Length && c.Active[currentFrame])
+                {
+                    float s = c.Signal[currentFrame];
+                    GUILayout.Label($"{c.Name}: {(s >= 0 ? "tension" : "compression")} {Mathf.Abs(s):0.00}");
+                }
+            }
+        }
+
+        GUILayout.Label("space play/pause   , . beat   [ ] measure   L loop   R restart   <- -> speed\n" +
+                        "WASD/QE orbit   F floor   T tension   G splats   C cameras   H hud");
+        GUILayout.EndArea();
     }
 
     [Serializable]

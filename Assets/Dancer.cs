@@ -693,4 +693,20 @@ public class Dancer : MonoBehaviour
     }
 
     public Vector3 Center(int frameNumber) => PosesByFrame[frameNumber][(int)SmplJoint.Spine3];
+
+    public int FrameCount => PosesByFrame.Length;
+
+    public Role DancerRole => Role;
+
+    public Vector3 Joint(int frameNumber, SmplJoint joint) => PosesByFrame[frameNumber][(int)joint];
+
+    /// <summary>
+    /// Mass-weighted torso centre (pelvis/spine), a rough centre of mass for connection physics
+    /// </summary>
+    public Vector3 CenterOfMass(int frameNumber)
+    {
+        List<Vector3> pose = PosesByFrame[frameNumber];
+        return pose[(int)SmplJoint.Pelvis] * 0.4f + pose[(int)SmplJoint.Spine1] * 0.3f +
+               pose[(int)SmplJoint.Spine2] * 0.2f + pose[(int)SmplJoint.Spine3] * 0.1f;
+    }
 }
