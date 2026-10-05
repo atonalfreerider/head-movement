@@ -69,9 +69,20 @@ public class HeadMovement : MonoBehaviour
         cameraControl = GameObject.Find("Simulator").GetComponent<CameraControl>();
     }
 
-    void LoadCapture(int selection)
+    public IReadOnlyList<string> CaptureNames => captures.Select(Path.GetFileName).ToList();
+
+    /// <summary>load a capture by folder name (CLI playtests, menus)</summary>
+    public bool LoadCapture(string folderName)
     {
-        if (selection >= captures.Length) return;
+        int index = Array.FindIndex(captures, c => string.Equals(Path.GetFileName(c), folderName, StringComparison.OrdinalIgnoreCase));
+        if (index < 0) return false;
+        LoadCapture(index);
+        return true;
+    }
+
+    public void LoadCapture(int selection)
+    {
+        if (selection < 0 || selection >= captures.Length) return;
 
         Pause();
         audioLoaded = false;
@@ -328,6 +339,67 @@ public class HeadMovement : MonoBehaviour
 
     public void Restart() => Seek(AudioOffset);
 
+    public void Play()
+    {
+        if (audioLoaded && !playing) Resume();
+    }
+
+    public void Stop() => Pause();
+
+    /// <summary>show/hide a visual layer: floor | tension | splats | cameras | hud. Returns the new state.</summary>
+    public bool SetLayerVisible(string layer, bool visible)
+    {
+        switch (layer.ToLowerInvariant())
+        {
+            case "floor": floorPatterns.SetVisible(showFloor = visible); break;
+            case "tension": partnerConnection.SetVisible(showConnection = visible); break;
+            case "splats": splatCloud.SetVisible(showSplats = visible); break;
+            case "cameras": virtualCameraRig.SetVisible(showCameras = visible); break;
+            case "hud": showHud = visible; break;
+            default: throw new ArgumentException($"unknown layer '{layer}' (floor|tension|splats|cameras|hud)");
+        }
+
+        return visible;
+    }
+
+    /// <summary>machine-readable state for CLI playtests</summary>
+    public Dictionary<string, object> State()
+    {
+        Dictionary<string, object> state = new()
+        {
+            ["captures"] = CaptureNames,
+            ["capture"] = manifest?.DisplayName,
+            ["audioLoaded"] = audioLoaded,
+            ["playing"] = playing,
+            ["frame"] = currentFrame,
+            ["frameCount"] = FrameCount,
+            ["fps"] = Fps,
+            ["speed"] = Speeds[speedIndex],
+            ["loopMeasure"] = loopMeasure,
+            ["layers"] = new Dictionary<string, bool>
+            {
+                ["floor"] = showFloor, ["tension"] = showConnection, ["splats"] = showSplats,
+                ["cameras"] = showCameras, ["hud"] = showHud
+            }
+        };
+        if (!audioLoaded) return state;
+
+        state["audioTime"] = audioSource.time;
+        if (beatGrid != null)
+        {
+            state["measure"] = beatGrid.MeasureIndex(audioSource.time) + 1;
+            state["measureCount"] = beatGrid.MeasureCount;
+        }
+
+        state["steps"] = floorPatterns.Steps.Count;
+        state["stepsOnBeat"] = floorPatterns.Steps.Count(s => !float.IsNaN(s.ErrorMs) && Mathf.Abs(s.ErrorMs) <= floorPatterns.OnBeatMs);
+        state["activeConnections"] = partnerConnection.Connections
+            .Where(c => c.Active != null && currentFrame >= 0 && currentFrame < c.Active.Length && c.Active[currentFrame])
+            .Select(c => $"{c.Name}:{c.Signal[currentFrame]:+0.00;-0.00}").ToList();
+        state["splatsLoaded"] = splatCloud.HasContent;
+        return state;
+    }
+
     #endregion
 
     void Update()
@@ -430,7 +502,7 @@ public class HeadMovement : MonoBehaviour
         {
             float t = audioSource.time;
             string measure = beatGrid != null
-                ? $"measure {beatGrid.MeasureIndex(t) + 1}/{beatGrid.MeasureCount}  eighth {Mathf.Max(0, beatGrid.IndexAtOrBefore(t)) % BeatGrid.BeatsPerMeasure + 1}"
+                ? $"measure {beatGrid.MeasureIndex(t) + 1}/{beatGrid.MeasureCount}  eighth {beatGrid.BeatIndex(t) % BeatGrid.BeatsPerMeasure + 1}"
                 : "no beats";
             GUILayout.Label($"{manifest.DisplayName}   {(playing ? "playing" : "paused")}   x{Speeds[speedIndex]:0.##}" +
                             (loopMeasure ? $"   loop m{loopedMeasure + 1}" : ""));

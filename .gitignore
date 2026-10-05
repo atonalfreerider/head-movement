@@ -66,3 +66,6 @@ UserSettings
 .utmp
 
 Assets/StreamingAssets/*
+# CLI playtest screenshots (Tools/playtest.ps1)
+/Assets/Screenshots/
+/Assets/Screenshots.meta

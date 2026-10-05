@@ -10,6 +10,12 @@ public class BeatGrid
 {
     public const int BeatsPerMeasure = 8;
 
+    /// <summary>
+    /// AudioSource.time is sample-quantised, so seeking to a beat can land microseconds before it. Lookups treat
+    /// anything within this window as on the beat (an eighth note is ~340 ms at zouk tempo).
+    /// </summary>
+    public const float SnapTolerance = 0.005f;
+
     public readonly float[] Times;
     public readonly int[] Types;
 
@@ -66,7 +72,10 @@ public class BeatGrid
         return i >= 0 ? Times[i] : 0;
     }
 
-    public int MeasureIndex(float t) => Mathf.Max(0, IndexAtOrBefore(t)) / BeatsPerMeasure;
+    /// <summary>index of the beat at or before t, snapping onto a beat within SnapTolerance</summary>
+    public int BeatIndex(float t) => Mathf.Max(0, IndexAtOrBefore(t + SnapTolerance));
+
+    public int MeasureIndex(float t) => BeatIndex(t) / BeatsPerMeasure;
 
     public float MeasureStart(int measure)
     {

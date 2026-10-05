@@ -89,6 +89,18 @@ namespace VRTKLite.Controllers
         }
 
         /// <summary>
+        /// Jump to an orbit: azimuth phi and polar angle alpha (from +Y) in radians, radius in metres.
+        /// </summary>
+        public void SetOrbit(float azimuth, float polar, float radius)
+        {
+            phi = NormalizeAngle(azimuth);
+            alpha = Mathf.Clamp(polar, 0.01f, Mathf.PI - 0.01f);
+            rad = Mathf.Clamp(radius, 0.3f, 10f);
+            UpdateCameraPosition();
+            transform.LookAt(Center);
+        }
+
+        /// <summary>
         /// Updates the camera's position based on the current spherical coordinates.
         /// </summary>
         void UpdateCameraPosition()
