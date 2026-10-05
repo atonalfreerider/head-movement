@@ -47,14 +47,20 @@ public static class HeadMovementCliCommands
         return "loading (audio loads asynchronously; poll hm_state until audioLoaded=true)";
     }
 
-    [CliCommand("hm_transport", "Lesson transport: play | pause | toggle | restart | beat+ | beat- | measure+ | measure- | loop | faster | slower | seek")]
+    [CliCommand("hm_transport", "Lesson transport: play | pause | toggle | restart | beat+ | beat- | measure+ | measure- | measure (--measure N) | loop | loop_on | loop_off | faster | slower | speed (--speed x) | seek (--time s)")]
     public static string Transport(
-        [CliArg("action", "play|pause|toggle|restart|beat+|beat-|measure+|measure-|loop|faster|slower|seek")] string action,
-        [CliArg("time", "audio-timeline seconds for seek")] float time = 0f)
+        [CliArg("action", "play|pause|toggle|restart|beat+|beat-|measure+|measure-|measure|loop|loop_on|loop_off|faster|slower|speed|seek")] string action,
+        [CliArg("time", "audio-timeline seconds for seek")] float time = 0f,
+        [CliArg("measure", "1-based measure number for action=measure")] int measure = 1,
+        [CliArg("speed", "playback speed for action=speed (0.5 | 0.75 | 1)")] float speed = 1f)
     {
         HeadMovement hm = Require();
         switch (action)
         {
+            case "measure": hm.GotoMeasure(measure); break;
+            case "speed": hm.SetPlaybackSpeed(speed); break;
+            case "loop_on": hm.SetLoopMeasure(true); break;
+            case "loop_off": hm.SetLoopMeasure(false); break;
             case "play": hm.Play(); break;
             case "pause": hm.Stop(); break;
             case "toggle": hm.TogglePlayPause(); break;
@@ -82,17 +88,19 @@ public static class HeadMovementCliCommands
         return $"{layer}={visible}";
     }
 
-    [CliCommand("hm_orbit", "Place the desktop orbit camera: azimuth/elevation in degrees, radius in metres (centre follows the dancers)")]
+    [CliCommand("hm_orbit", "Place the desktop orbit camera: azimuth/elevation in degrees, radius in metres (centre follows the dancers). Omitted values keep the current orbit.")]
     public static string Orbit(
-        [CliArg("azimuth", "degrees around the vertical axis")] float azimuth = 90f,
-        [CliArg("elevation", "degrees above the horizon")] float elevation = 15f,
-        [CliArg("radius", "metres from the dancers")] float radius = 2.5f)
+        [CliArg("azimuth", "degrees around the vertical axis")] float azimuth = float.NaN,
+        [CliArg("elevation", "degrees above the horizon")] float elevation = float.NaN,
+        [CliArg("radius", "metres from the dancers")] float radius = float.NaN)
     {
         Require();
         GameObject simulator = GameObject.Find("Simulator");
         CameraControl control = simulator != null ? simulator.GetComponent<CameraControl>() : null;
         if (control == null) throw new InvalidOperationException("no Simulator/CameraControl in the scene");
-        control.SetOrbit(azimuth * Mathf.Deg2Rad, (90f - elevation) * Mathf.Deg2Rad, radius);
-        return $"azimuth={azimuth} elevation={elevation} radius={radius}";
+        float phi = float.IsNaN(azimuth) ? control.Azimuth : azimuth * Mathf.Deg2Rad;
+        float alpha = float.IsNaN(elevation) ? control.Polar : (90f - elevation) * Mathf.Deg2Rad;
+        control.SetOrbit(phi, alpha, float.IsNaN(radius) ? control.Radius : radius);
+        return $"azimuth={control.Azimuth * Mathf.Rad2Deg:0} elevation={90f - control.Polar * Mathf.Rad2Deg:0} radius={control.Radius:0.0}";
     }
 }

@@ -68,6 +68,13 @@ Assert ($s.steps -gt 0) "floor steps detected: $($s.steps) ($($s.stepsOnBeat) on
 Invoke-Unity hm_orbit --azimuth 60 --elevation 20 --radius 3 | Out-Null
 Shot "pt_loaded"
 
+Write-Host "== seek before first play (fresh AudioSource is stopped, not paused)"
+$s = (Invoke-Unity hm_transport --action measure --measure 3) | ConvertFrom-Json | ConvertFrom-Json
+Assert ($s.measure -eq 3 -and $s.frame -gt 0) "jump to measure 3 right after load (measure $($s.measure), frame $($s.frame))"
+$s = (Invoke-Unity hm_transport --action seek --time 2.0) | ConvertFrom-Json | ConvertFrom-Json
+Assert ([math]::Abs($s.audioTime - 2.0) -lt 0.05) "seek to 2.0 s while paused ($($s.audioTime))"
+Invoke-Unity hm_transport --action restart | Out-Null
+
 Write-Host "== playback"
 Invoke-Unity hm_transport --action play | Out-Null
 Start-Sleep -Seconds 3

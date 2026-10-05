@@ -304,7 +304,14 @@ public class HeadMovement : MonoBehaviour
 
         float firstPose = AudioOffset;
         float lastPose = AudioOffset + (FrameCount - 1) / Fps;
-        audioSource.time = Mathf.Clamp(audioTime, Mathf.Max(0, firstPose), Mathf.Min(lastPose, audioSource.clip.length - 0.01f));
+        float target = Mathf.Clamp(audioTime, Mathf.Max(0, firstPose), Mathf.Min(lastPose, audioSource.clip.length - 0.01f));
+
+        // Unity ignores AudioSource.time on a stopped source (fresh load, or after the clip ended), so seek
+        // while playing and re-pause in the same frame - nothing is audible.
+        bool wasPlaying = audioSource.isPlaying;
+        if (!wasPlaying) audioSource.Play();
+        audioSource.time = target;
+        if (!wasPlaying) audioSource.Pause();
         SetToFrameNumber();
     }
 
@@ -338,6 +345,34 @@ public class HeadMovement : MonoBehaviour
     }
 
     public void Restart() => Seek(AudioOffset);
+
+    /// <summary>jump to a 1-based measure number (as shown in the HUD)</summary>
+    public void GotoMeasure(int measureNumber)
+    {
+        if (beatGrid == null || !audioLoaded) return;
+
+        int target = Mathf.Clamp(measureNumber - 1, 0, beatGrid.MeasureCount - 1);
+        if (loopMeasure) loopedMeasure = target;
+        Seek(beatGrid.MeasureStart(target));
+    }
+
+    /// <summary>nearest supported speed (0.5, 0.75, 1)</summary>
+    public void SetPlaybackSpeed(float speed)
+    {
+        int best = 0;
+        for (int i = 1; i < Speeds.Length; i++)
+        {
+            if (Mathf.Abs(Speeds[i] - speed) < Mathf.Abs(Speeds[best] - speed)) best = i;
+        }
+
+        SetSpeed(best);
+    }
+
+    public void SetLoopMeasure(bool on)
+    {
+        if (beatGrid == null || !audioLoaded) return;
+        if (on != loopMeasure) ToggleLoopMeasure();
+    }
 
     public void Play()
     {

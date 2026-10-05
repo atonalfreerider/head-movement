@@ -88,6 +88,10 @@ namespace VRTKLite.Controllers
             }
         }
 
+        public float Azimuth => phi;
+        public float Polar => alpha;
+        public float Radius => rad;
+
         /// <summary>
         /// Jump to an orbit: azimuth phi and polar angle alpha (from +Y) in radians, radius in metres.
         /// </summary>
