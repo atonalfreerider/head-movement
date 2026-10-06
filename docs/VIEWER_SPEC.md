@@ -10,6 +10,9 @@ Changes in v3: dance placed at the origin in every mode (§3.0); source videos a
 always shown full-frame (§3.4, §5.3); Quest records the POV only and the user walks freely (§9);
 counterbalance indicators (§3.9); the zouk dance graph — path through the state machine and the
 time-independent fingerprint (§3.10, §3.11); new tour order (§6); dance-move labels (§10, §11).
+v3.1: every dance is titled as a reaction "Leader + Follower × Song" that produces its fingerprint (§3.13);
+move caption with a confidence score and a graph inset throughout directed playback (§3.12); library
+silos by level (Professional / Intermediate / Novice) and categories (Demo / Lesson / Jack and Jill) (§2).
 
 ---
 
@@ -54,11 +57,25 @@ optional layer exists.
 | Room (Quest mesh / splats) | optional | room |
 | 4D Gaussian splat sequence | optional, future | — |
 
-### 2.2 Library UI
+### 2.2 Dance metadata, silos and categories
+- Every dance carries: **leader**, **follower**, **song** (title, artist), **level**, **category**, date,
+  venue (optional). Its title is the reaction label **"Leader + Follower × Song"** (§3.13), e.g.
+  "Kadu + Larissa × ‹song›".
+- **Level silos: Professional, Intermediate, Novice.** Data is kept siloed by level end to end: the
+  library shows one shelf per level, and analysis (move classifiers, fingerprint comparisons, averages)
+  never mixes levels unless a comparison across levels is explicitly requested. Today only Professional
+  dances exist.
+- **Categories: Demo, Lesson, Jack and Jill competition.** Shown as a badge and a library filter; carried
+  into the analysis as metadata (lessons include talking and demonstration pauses; Jack and Jill dances are
+  improvised with a random partner).
 
-- Grid of dance cards: thumbnail (poster frame), title, dancers, duration, BPM, date, the **dance
-  fingerprint** miniature when labelled (§3.11), **layer badges** (textures, hair, camera tour, room,
-  moves, 4DGS) and a **quality badge** from the capture's QA numbers (reprojection error, sync residual).
+### 2.3 Library UI
+
+- One shelf per level silo (Professional / Intermediate / Novice), filterable by category.
+- Grid of dance cards: the reaction title (§3.13), thumbnail (poster frame), category badge, duration, BPM,
+  date, the **dance fingerprint** miniature when labelled (§3.11), **layer badges** (textures, hair, camera
+  tour, room, moves, 4DGS) and a **quality badge** from the capture's QA numbers (reprojection error, sync
+  residual).
 - Select → loading screen (progress per layer) → default view (§3, state **Orbit**).
 - Desktop: mouse/keyboard. VR: hand-tracked or controller-pointed panel, anchored in passthrough
   (§9.3). Natural-language commands ("open the Larissa and Kadu demo") use the existing TypeSafe router.
@@ -236,7 +253,36 @@ floor and walks a full circle around her, pivoting her in place.
 - Side panel: total time per energy band (graph height), number of distinct moves, transitions, the
   share of time in counterbalance, and the longest phrase.
 - This is the **dance fingerprint**: the same picture for two dances compares their content at a glance.
-  It is exported as an image for the library card (§2.2) and is the closing shot of the directed tour.
+  It is exported as an image for the library card (§2.3) and is the closing shot of the directed tour —
+  the **product** of the dance's reaction (§3.13).
+
+### 3.12 Move caption and graph inset (directed playback)
+- Throughout directed playback (desktop, renders and the VR presentation) a **move caption** shows the
+  current move: the Brazilian Portuguese name, the English alias smaller beneath, and a **confidence
+  score**. It changes at segment boundaries with a short cross-fade; the next move can be previewed in the
+  last beat of a segment.
+- **Confidence** is shown as a percentage with a small bar and is defined by the label's provenance
+  (§10): human-confirmed labels show "labelled" instead of a number; narration-mapped labels show the
+  mapping confidence; automatic labels show the classifier's **calibrated** probability (top alternatives
+  on demand); placeholder timelines show "placeholder". Below a threshold (default 50 %) the caption reads
+  "uncertain" with the top two candidates rather than a confident single name.
+- A **graph inset** (the state machine, §3.10, as a small live minimap) sits beside the caption: the current
+  node highlighted, the path so far as a fading trail, the candidate next moves glowing faintly. In the
+  Dance graph and Fingerprint states the inset is hidden (the full graph is on screen).
+- Layout: 16:9 — caption lower-left, inset lower-right; 9:16 — caption above the bottom safe area, inset
+  below the top safe area (§8.3). VR — a small panel that follows the user's gaze at a comfortable
+  distance, never in front of the dancers.
+
+### 3.13 The dance as a reaction — "Leader + Follower × Song → fingerprint"
+- Each dance is presented like a chemical reaction. The reactants are the two dancers, the song is what
+  drives the reaction, and the product is the dance fingerprint (§3.11):
+  **Kadu + Larissa × ‹Song› → [fingerprint]**.
+- Typeset like an equation: dancer names in their skeleton colours (lead red, follow white), "×" and the
+  song in the accent colour, and **reaction conditions above the arrow** — level and category (e.g.
+  "Professional · Demo").
+- **Opening title card** of the directed tour shows the left-hand side with an empty product slot; the
+  **closing fingerprint shot** completes the equation with the fingerprint as the product. The same label
+  titles the library card and the rendered video file names.
 
 ---
 
@@ -306,7 +352,10 @@ dwells; never clips through nodes.
   audio track.
 - The script is **generated** from a JSON shot list (`direction.json`) with defaults derived from the
   dance (duration, beat grid, counterbalance intervals, move timeline) and can be edited and re-rendered.
+- **Throughout**: the move caption with its confidence and the graph inset (§3.12).
 - **Default script order** (measure-aligned cuts):
+  0. **Title card** — the reaction "Leader + Follower × Song →" with the level and category above the
+     arrow and an empty product slot (§3.13), over the opening orbit.
   1. **Orbit** — mostly transparent avatars, opaque coloured skeletons conducting the beat.
   2. **Camera tour** (desktop/renders) — pass through every source camera POV; each video fills the frame
      and fades in and out as the camera passes through it.
@@ -315,7 +364,8 @@ dwells; never clips through nodes.
   4. **Geometry** — leader axis + follower spirals / head axis; counterbalance spirals emphasised.
   5. **Physics** — limb tension/compression, floor and contact forces through time.
   6. **Dance graph** — the couple travels through the zouk state machine, the camera following its path.
-  7. **Fingerprint** — the time-independent heat map of the whole dance; the closing shot.
+  7. **Fingerprint** — the time-independent heat map of the whole dance; the closing shot completes the
+     reaction: the fingerprint lands in the product slot of "Leader + Follower × Song → [fingerprint]".
 - The same script drives the desktop show and the rendered videos (§8). In VR the director changes view
   states and layers around the user (the user walks freely; the director never moves the user).
 - Prototype stage: until Timeline lands, a lightweight sequencer (`hm_tour`) plays the same state list.
@@ -355,7 +405,9 @@ perfectly smooth, and frames render at full quality regardless of real-time spee
 - Camera tour: source videos are always full-frame (§3.4) — filling a 9:16 frame, centred at full height
   in 16:9 with the 3D world continuing at the sides.
 - Title-safe areas: top 14% / bottom 20% of 9:16 frames kept free of key action (platform UI overlays);
-  optional captions (dance name, state labels, current move) placed inside safe areas.
+  the reaction title, move caption and graph inset (§3.12, §3.13) and any state labels sit inside the safe
+  areas.
+- File names: `<Leader>+<Follower>x<Song>_<preset>_<date>.mp4` (ASCII-folded).
 
 ### 8.4 Audio in recordings
 - Real-time segments: original music, sample-accurate with dance time.
@@ -424,6 +476,11 @@ narrated labels, then a trained classifier) is specified in `dancecap/docs/MOVES
   band totals, counterbalance share.
 - Until a dance has human labels, any displayed timeline is marked on screen: **"placeholder — not an
   analysis"** (provenance `placeholder`) or **"automatic — unreviewed"** (provenance `auto`).
+- **Confidence per segment** (feeds the caption, §3.12): `human` → none shown ("labelled");
+  `narration` → the phrase-to-move mapping confidence; `auto` → the classifier's calibrated probability,
+  with `alternatives: [{move, p}]` (top 3) and the calibration record it came from; `placeholder` → none.
+  Automatic labels come from the classifier plan in `dancecap/docs/TMR_SOMA_PLAN.md` (TMR-SOMA motion
+  embeddings + our own small, per-silo classifier, decoded along the graph).
 
 ---
 
@@ -441,6 +498,7 @@ v4 extends v3 (times, SMPL-X motion + skins, timing, physics) with:
 | Key | Content |
 |---|---|
 | `title`, `dancers`, `bpm`, `poster` | library card data |
+| `dance` | `{leader, follower, song: {title, artist}, level: professional\|intermediate\|novice, category: demo\|lesson\|jack_and_jill, date, venue}`; `title` = "Leader + Follower × Song" |
 | `layers` | flags for every layer of §2.1 + QA numbers (reprojection px, sync residual ms) |
 | `origin` | the dance offset of §3.0 (computed by the exporter from the first frame, applied by the viewer) |
 | `cameras/` | per source phone: `video.mp4` (rotation baked, trimmed to the take, re-encoded at a **constant** 30 fps from the phone's variable-rate PTS, full resolution for desktop/recording; not packaged for Quest builds), `track.json` (per frame: reference time, Unity-space position + rotation, vertical FOV, principal point, k1), `clock` (reference → video time mapping) |
@@ -498,6 +556,10 @@ pipeline (MOVES.md).
   interval and the dot sits under the combined COM (≤ 2 cm); pivot ring at the anchored foot (≤ 3 cm).
 - Graph path: every label segment maps to one node; the miniature couple reaches each node by the
   segment start; new links are dashed; fingerprint dwell seconds sum to the labelled duration.
+- Caption: at every segment boundary the caption shows the new move within 1 frame; the confidence shown
+  matches the label's provenance rule (§10); below the threshold it reads "uncertain" with two candidates.
+- Reaction title: the opening card and the closing fingerprint read "Leader + Follower × Song", with level
+  and category above the arrow; the library shelf matches the dance's level.
 - Leader axis long side within 3° of the shoulder line projection, short axis perpendicular.
 - Recorder: both aspect presets produce MP4s with exact resolution, fps, duration and an audio track.
 - Speeds 0.1×–1.0× keep avatars, video and beats in sync (frame for time).
@@ -515,7 +577,12 @@ Decided by the user (2026-10-06):
   the floor craft; follower spirals emphasised.
 - The zouk graph (Zouk1.json) is the scaffold; the tour shows the path through it and the fingerprint.
 - Graph icon/colour legend confirmed (§3.10).
-- Move names use established Brazilian Portuguese terminology; "Lateral" is renamed **Corredor**.
+- Move names use established Brazilian Portuguese terminology; "Lateral" is renamed **Corredor**; "cicada" was
+  **Sarrada**; Little Turn is the **Viradinha**.
+- Directed playback shows the move caption with a confidence score and the graph inset (§3.12).
+- Each dance is a reaction "Leader + Follower × Song" producing its fingerprint (§3.13).
+- Data siloed by level (Professional / Intermediate / Novice; only Professional so far); categories Demo,
+  Lesson, Jack and Jill (§2.2).
 
 Defaults (change any of these):
 - Avatar opacity 0.3 (Physics 0.1); floor alpha 0.6 (0.25 in passthrough); teal #19C3D6.
@@ -526,4 +593,4 @@ Defaults (change any of these):
 
 Open:
 1. Brand/captions on rendered videos (title card, dancer names, watermark)?
-2. "cicada" — Sacada? Chicote? — spelling to confirm (terminology research in progress).
+2. Song title and artist for the Larissa/Kadu demo (needed for its reaction title).
