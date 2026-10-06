@@ -203,11 +203,15 @@ floor and walks a full circle around her, pivoting her in place.
     body rolls); moves grow out of that grounded state into travelling steps and open moves; the top
     holds the high-kinetic-energy moves (pirouettes, spins, downswing).
   - **Icons and colours** as in Zouk1.json: node shape (Cylinder, Hourglass, Diamond, Plus, Star, Tetra,
-    Ball) and tone (blue, green, yellow, orange). Inferred legend, to be confirmed by the user: Cylinder =
+    Ball) and tone (blue, green, yellow, orange). Legend (confirmed by the user 2026-10-06): Cylinder =
     standing rest, Hourglass = holds / embraces / isolations, Diamond = steps and basics, Plus = open /
     hand-connection moves, Star = turns and spins, Tetra = head movements (howls) and dips, Ball =
     special wave moves; blue = connection/position states, green = moves, yellow and orange = advanced /
     high-commitment moves.
+  - **Names in Brazilian Portuguese**: each move is labelled with its established Brazilian Portuguese
+    term (researched, with sources), the user's original English name kept as an alias for search and
+    narration. Where no Portuguese term is attested, the user's name stays. **Corredor** replaces
+    "Lateral" (the follower walking a repeating line back and forth in front of the leader).
   - Directed links drawn as thin lines with arrowheads; move names as billboard labels (fade with distance).
   - Displayed **in the dance environment**, centred on the origin at true scale (the graph spans ≈ 4 × 4 m
     and ≈ 3 m high, bottom ≈ 0.2 m above the floor); in VR the user walks through it.
@@ -510,6 +514,8 @@ Decided by the user (2026-10-06):
 - Counterbalance: yellow floor dot + vertical axis to the shared COM; pivot + leader-circle indicator in
   the floor craft; follower spirals emphasised.
 - The zouk graph (Zouk1.json) is the scaffold; the tour shows the path through it and the fingerprint.
+- Graph icon/colour legend confirmed (§3.10).
+- Move names use established Brazilian Portuguese terminology; "Lateral" is renamed **Corredor**.
 
 Defaults (change any of these):
 - Avatar opacity 0.3 (Physics 0.1); floor alpha 0.6 (0.25 in passthrough); teal #19C3D6.
@@ -520,5 +526,4 @@ Defaults (change any of these):
 
 Open:
 1. Brand/captions on rendered videos (title card, dancer names, watermark)?
-2. Confirm the inferred icon/colour legend of the graph (§3.10).
-3. Move names to add: Corredor (not in Zouk1.json); "cicada" — Sacada? Chicote? — spelling to confirm.
+2. "cicada" — Sacada? Chicote? — spelling to confirm (terminology research in progress).
