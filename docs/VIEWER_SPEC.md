@@ -54,8 +54,8 @@ optional layer exists.
 | Photoreal avatar textures | optional | texture bake |
 | Hair groom + simulation parameters | optional | hair |
 | Source camera videos + per-frame camera tracks | optional (desktop camera tour only) | ingest + cameras |
-| Room (Quest mesh / splats) | optional | room |
-| 4D Gaussian splat sequence | optional, future | — |
+| Gaussian splats of the **dancers only** (4D sequence) | optional, future; layer **off by default** | — |
+| Room reconstruction (mesh / splats) | not displayed (kept only as alignment reference) | room |
 
 ### 2.2 Dance metadata, silos and categories
 - Every dance carries: **leader**, **follower**, **song** (title, artist), **level**, **category**, date,
@@ -108,7 +108,20 @@ optional layer exists.
   a neutral shaded material (lead warm grey, follow cool grey). Depth-correct transparency (depth
   pre-pass) so a translucent body doesn't show its own back faces.
 - Opacity is a per-state parameter (§4): ≈ 0.3 default, ≈ 0.1 in Physics, up to 1.0 when requested.
-- Hair (follow) inherits the avatar's opacity, slightly higher (+0.15) so the hair motion reads.
+- Hair (follow) inherits the avatar's opacity, slightly higher (+0.15) so the hair motion reads. It must
+  **match Larissa's real hair in shape and colour** (length, volume, parting and layering from the video and
+  her portrait; dyed red with its root-to-tip variation) and **keep the glowing tip bloom** of the original
+  head-movement hair: strand tips emit a soft bloom that traces the hair's whip through space.
+- **Faces**: photoreal faces from the dancers' portrait photos (identity shape + frontal face texture),
+  blended with the video-baked texture, plus per-frame **facial expressions** (jaw + expression
+  coefficients) estimated from the closest cameras where the face is visible enough; neutral otherwise.
+- **Hands**: articulated fingers from multi-view hand estimates, and **hand contact** that actually touches
+  (hand-hand and hand-body connections between the dancers are refined so contacting hands meet).
+
+### 3.2a Gaussian splats — dancers only
+- Splats show **only the dancers** — literally nothing else: no floor, no room, no spectators. The splat
+  layer is **off by default**; when switched on it replaces or overlays the avatars (4D dancer splats are
+  future work). The room reconstruction is not displayed in any mode.
 
 ### 3.3 Skeletons — always on, always opaque
 - The stylised glowing skeletons are drawn **inside** the avatars, **fully opaque and bright** in every
@@ -236,7 +249,7 @@ floor and walks a full circle around her, pivoting her in place.
   body rotation and limb motion kept — and shown as a **miniature couple** (≈ 0.15 scale, skeletons +
   translucent avatars) standing at the node of the current move. When the move changes, the couple glides
   along the link to the next node over the transition time; a fading trail marks the path taken. The
-  **camera follows the couple through the graph** (chase camera above and behind, looking ahead along the
+  **camera follows the couple through the graph** (chase camera zoomed far out above and behind, looking ahead along the
   path). The current move name and the next move are shown as a caption.
   - Duplicate move names (e.g. "Lateral" appears twice) are different contexts: the path picks the node
     instance linked from the previous node; a transition with no link in the graph is drawn as a **dashed
@@ -339,9 +352,10 @@ Top-down view above the dance area; fits both dancers' full floor coverage; nort
 an option to rotate to the leader's floor axis.
 
 ### 5.5 Graph chase
-Follows the miniature couple through the dance graph (§3.10): behind and above the direction of travel,
-looking ahead to the next node; pulls back to show the neighbourhood of the current node while the couple
-dwells; never clips through nodes.
+Follows the miniature couple through the dance graph (§3.10) **zoomed far out** (≈ 2.6–3.4 m behind and
+1.1–1.5 m above the couple, so a whole neighbourhood of the graph is in frame), looking ahead to the next
+node; the camera may sit a little **inside the graph** among the nodes; it pulls back further while the
+couple dwells.
 
 ---
 
@@ -455,7 +469,8 @@ perfectly smooth, and frames render at full quality regardless of real-time spee
   rendered as one ribbon mesh.
 - No video decoding (no source videos in VR).
 - Dance graph: nodes GPU-instanced per icon shape, labels pooled; ≤ 300 nodes at full rate.
-- Room: Quest mesh (≤ 80k tris) or ≤ 150k splats; default off in passthrough (the real room is visible).
+- No room reconstruction (the real room is visible in passthrough); dancer splats, when they exist, are off
+  by default.
 - Transparency: limit overdraw (depth pre-pass avatars, no full-screen transparent layers).
 
 ---
@@ -508,7 +523,7 @@ v4 extends v3 (times, SMPL-X motion + skins, timing, physics) with:
 | `timing.json` | beats, touchdowns, accents (with reliability), asynchrony stats |
 | `moves/` | `labels.json`, `graph.json`, `path.json`, `fingerprint.json` (§10) |
 | `direction.json` | optional authored shot list; generated if absent |
-| `room/` | Quest mesh / splats + scene_to_unity |
+| `room/` | not displayed; kept as an alignment reference only |
 
 Derived in the viewer (no export needed): leader floor axis, follower spirals and head axis, footprint
 history, coverage, the miniature isolated couple for the graph path.
@@ -581,6 +596,10 @@ Decided by the user (2026-10-06):
   **Sarrada**; Little Turn is the **Viradinha**.
 - Directed playback shows the move caption with a confidence score and the graph inset (§3.12).
 - Each dance is a reaction "Leader + Follower × Song" producing its fingerprint (§3.13).
+- Splats show the dancers only (no floor or room), off by default; the room reconstruction is not shown.
+- Hair matches Larissa's shape and colour and keeps the tip bloom; faces from portraits; expressions and hand
+  contact refined (§3.2).
+- Graph chase camera zoomed far out, may be slightly inside the graph (§5.5).
 - Data siloed by level (Professional / Intermediate / Novice; only Professional so far); categories Demo,
   Lesson, Jack and Jill (§2.2).
 
