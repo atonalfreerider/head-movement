@@ -60,7 +60,7 @@ optional layer exists.
 ### 2.2 Dance metadata, silos and categories
 - Every dance carries: **leader**, **follower**, **song** (title, artist), **level**, **category**, date,
   venue (optional). Its title is the reaction label **"Leader + Follower × Song"** (§3.13), e.g.
-  "Kadu + Larissa × ‹song›".
+  "Kadu + Larissa × Ficar Sem Você" (Davi Sabbag feat. Urias).
 - **Level silos: Professional, Intermediate, Novice.** Data is kept siloed by level end to end: the
   library shows one shelf per level, and analysis (move classifiers, fingerprint comparisons, averages)
   never mixes levels unless a comparison across levels is explicitly requested. Today only Professional
@@ -276,7 +276,7 @@ floor and walks a full circle around her, pivoting her in place.
 ### 3.13 The dance as a reaction — "Leader + Follower × Song → fingerprint"
 - Each dance is presented like a chemical reaction. The reactants are the two dancers, the song is what
   drives the reaction, and the product is the dance fingerprint (§3.11):
-  **Kadu + Larissa × ‹Song› → [fingerprint]**.
+  **Kadu + Larissa × Ficar Sem Você → [fingerprint]**.
 - Typeset like an equation: dancer names in their skeleton colours (lead red, follow white), "×" and the
   song in the accent colour, and **reaction conditions above the arrow** — level and category (e.g.
   "Professional · Demo").
@@ -593,4 +593,3 @@ Defaults (change any of these):
 
 Open:
 1. Brand/captions on rendered videos (title card, dancer names, watermark)?
-2. Song title and artist for the Larissa/Kadu demo (needed for its reaction title).
