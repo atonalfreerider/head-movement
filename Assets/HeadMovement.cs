@@ -17,12 +17,21 @@ public class HeadMovement : MonoBehaviour
     public static HeadMovement Instance;
 
     int FrameCount = -1;
-    float TotalSeconds = -1;
     float Fps = 30;
     float AudioOffset;
 
+    /// <summary>audio time of every pose frame (times.json for v3 captures, else a uniform fps grid)</summary>
+    CaptureTimeline timeline;
+
     Dancer Lead;
     Dancer Follow;
+
+    // v3: skinned SMPL-X bodies and analysis overlays (only when the capture provides the files)
+    readonly Dictionary<Role, SmplxAvatar> avatars = new();
+    TimingOverlay timingOverlay;
+    PhysicsOverlay physicsOverlay;
+    TimingData timingData;
+    readonly List<string> loadWarnings = new();
 
     ContactDetection contactDetection;
     FloorPatterns floorPatterns;
@@ -50,6 +59,7 @@ public class HeadMovement : MonoBehaviour
     bool loopMeasure;
     int loopedMeasure;
     bool showFloor = true, showConnection = true, showSplats = true, showCameras = false, showHud = true;
+    bool showAvatars = true, showTiming = true, showPhysics = true;
 
     string[] captures;
 
@@ -97,19 +107,39 @@ public class HeadMovement : MonoBehaviour
             Destroy(Follow.gameObject);
         }
 
+        ClearV3();
+
         currentFolder = selection;
         currentFrame = -1;
         loopMeasure = false;
 
         manifest = CaptureManifest.Load(captures[currentFolder]);
-        FrameCount = manifest.frame_count;
-        TotalSeconds = manifest.duration > 0 ? manifest.duration : FrameCount / manifest.fps;
         Fps = manifest.fps;
-        AudioOffset = manifest.audio_offset;
 
-        Lead = ReadAllPosesFrom(manifest.JointsPath(Role.Lead), Role.Lead);
-        Follow = ReadAllPosesFrom(manifest.JointsPath(Role.Follow), Role.Follow);
-        FrameCount = Mathf.Min(FrameCount, Mathf.Min(Lead.FrameCount, Follow.FrameCount));
+        List<List<Vector3>> leadPoses = ReadPoses(manifest.JointsPath(Role.Lead));
+        List<List<Vector3>> followPoses = ReadPoses(manifest.JointsPath(Role.Follow));
+        FrameCount = Mathf.Min(manifest.frame_count, Mathf.Min(leadPoses.Count, followPoses.Count));
+        timeline = manifest.BuildTimeline(FrameCount);
+        FrameCount = timeline.Count;
+        AudioOffset = timeline.First;
+
+        string timingPath = manifest.OptionalPath(manifest.timing);
+        timingData = null;
+        if (timingPath != null)
+        {
+            try
+            {
+                timingData = TimingData.Load(timingPath);
+            }
+            catch (Exception e)
+            {
+                Warn($"timing.json unreadable ({e.Message}) - timing layer disabled");
+            }
+        }
+
+        float[] frameSeconds = timeline.RelativeSeconds();
+        Lead = NewDancer(Role.Lead, leadPoses, frameSeconds);
+        Follow = NewDancer(Role.Follow, followPoses, frameSeconds);
 
         beatGrid = null;
         if (manifest.beats != null)
@@ -134,7 +164,81 @@ public class HeadMovement : MonoBehaviour
         virtualCameraRig.SetVisible(showCameras);
         StartCoroutine(LoadSplats());
 
+        LoadV3();
+
         StartCoroutine(LoadAudio());
+    }
+
+    /// <summary>skinned SMPL-X avatars + timing/physics overlays, each only when the capture has its files</summary>
+    void LoadV3()
+    {
+        foreach (Role role in new[] { Role.Lead, Role.Follow })
+        {
+            string skin = manifest.RolePath(manifest.smplx_skin, role);
+            string motion = manifest.RolePath(manifest.smplx, role);
+            if (skin == null || motion == null)
+            {
+                if (manifest.smplx != null) Warn($"{role}: smplx motion/skin binary missing - no avatar");
+                continue;
+            }
+
+            try
+            {
+                SmplxAvatar avatar = SmplxAvatar.Create(skin, motion, role);
+                if (avatar.FrameCount < FrameCount) Warn($"{role} avatar has {avatar.FrameCount} frames < {FrameCount}");
+                avatar.SetVisible(showAvatars);
+                avatars[role] = avatar;
+            }
+            catch (Exception e)
+            {
+                Warn($"{role} avatar failed to load: {e.Message}");
+            }
+        }
+
+        if (timingData != null)
+        {
+            timingOverlay = new GameObject("Timing Overlay").AddComponent<TimingOverlay>();
+            timingOverlay.Init(timingData, timeline, Lead, Follow, BloomMaterial);
+            timingOverlay.SetVisible(showTiming);
+        }
+
+        string physicsPath = manifest.OptionalPath(manifest.physics);
+        if (physicsPath != null)
+        {
+            try
+            {
+                PhysicsData physics = PhysicsData.Load(physicsPath);
+                physicsOverlay = new GameObject("Physics Overlay").AddComponent<PhysicsOverlay>();
+                physicsOverlay.Init(physics, timeline, BloomMaterial);
+                physicsOverlay.SetVisible(showPhysics);
+            }
+            catch (Exception e)
+            {
+                Warn($"physics.json unreadable ({e.Message}) - physics layer disabled");
+            }
+        }
+    }
+
+    void ClearV3()
+    {
+        foreach (SmplxAvatar avatar in avatars.Values)
+        {
+            if (avatar != null) Destroy(avatar.gameObject);
+        }
+
+        avatars.Clear();
+        if (timingOverlay != null) Destroy(timingOverlay.gameObject);
+        if (physicsOverlay != null) Destroy(physicsOverlay.gameObject);
+        timingOverlay = null;
+        physicsOverlay = null;
+        timingData = null;
+        loadWarnings.Clear();
+    }
+
+    void Warn(string message)
+    {
+        loadWarnings.Add(message);
+        Debug.LogWarning($"{manifest?.DisplayName}: {message}");
     }
 
     IEnumerator LoadSplats()
@@ -196,7 +300,7 @@ public class HeadMovement : MonoBehaviour
                 {
                     if (beatGrid.Types[i] == 3) continue; // filter out high-hat
 
-                    framesWithUpOrDownbeat.Add(Mathf.RoundToInt((beatGrid.Times[i] - AudioOffset) * Fps));
+                    if (timeline.Covers(beatGrid.Times[i])) framesWithUpOrDownbeat.Add(timeline.FrameAt(beatGrid.Times[i]));
                 }
             }
 
@@ -222,16 +326,19 @@ public class HeadMovement : MonoBehaviour
         }
     }
 
-    Dancer ReadAllPosesFrom(string jsonPath, Role role)
+    static List<List<Vector3>> ReadPoses(string jsonPath)
     {
-        Dancer dancer = new GameObject(role.ToString()).AddComponent<Dancer>();
-
         string jsonString = File.ReadAllText(jsonPath);
         List<List<Float3>> allPoses = JsonConvert.DeserializeObject<List<List<Float3>>>(jsonString);
-        List<List<Vector3>> allPosesVector3 = allPoses
-            .Select(pose => pose.Select(float3 => new Vector3(float3.x, float3.y, float3.z)).ToList()).ToList();
-        dancer.Init(role, allPosesVector3, BloomMaterial, TotalSeconds);
+        return allPoses.Select(pose => pose.Select(float3 => new Vector3(float3.x, float3.y, float3.z)).ToList()).ToList();
+    }
 
+    Dancer NewDancer(Role role, List<List<Vector3>> poses, float[] frameSeconds)
+    {
+        Dancer dancer = new GameObject(role.ToString()).AddComponent<Dancer>();
+        float[][] jerk = null;
+        if (timingData != null && timingData.Jerk.TryGetValue(role, out float[][] j) && j.Length >= frameSeconds.Length) jerk = j;
+        dancer.Init(role, poses, BloomMaterial, frameSeconds, jerk);
         return dancer;
     }
 
@@ -250,6 +357,12 @@ public class HeadMovement : MonoBehaviour
         floorPatterns.SetFrame(frameNumber);
         partnerConnection.SetFrame(frameNumber);
         splatCloud.SetFrame(frameNumber, Fps);
+
+        foreach (SmplxAvatar avatar in avatars.Values) avatar.SetFrame(frameNumber);
+        // overlays follow the audio clock of the shown frame, so markers and the pose never disagree
+        float frameTime = timeline.AudioTimeOf(frameNumber);
+        if (timingOverlay != null) timingOverlay.SetTime(frameTime);
+        if (physicsOverlay != null) physicsOverlay.SetTime(frameTime);
     }
 
     #region LESSON TRANSPORT
@@ -302,8 +415,8 @@ public class HeadMovement : MonoBehaviour
     {
         if (!audioLoaded) return;
 
-        float firstPose = AudioOffset;
-        float lastPose = AudioOffset + (FrameCount - 1) / Fps;
+        float firstPose = timeline.First;
+        float lastPose = timeline.Last;
         float target = Mathf.Clamp(audioTime, Mathf.Max(0, firstPose), Mathf.Min(lastPose, audioSource.clip.length - 0.01f));
 
         // Unity ignores AudioSource.time on a stopped source (fresh load, or after the clip ended), so seek
@@ -381,7 +494,8 @@ public class HeadMovement : MonoBehaviour
 
     public void Stop() => Pause();
 
-    /// <summary>show/hide a visual layer: floor | tension | splats | cameras | hud. Returns the new state.</summary>
+    /// <summary>show/hide a visual layer: floor | tension | splats | cameras | hud | avatars | timing | physics.
+    /// Returns the new state.</summary>
     public bool SetLayerVisible(string layer, bool visible)
     {
         switch (layer.ToLowerInvariant())
@@ -391,10 +505,32 @@ public class HeadMovement : MonoBehaviour
             case "splats": splatCloud.SetVisible(showSplats = visible); break;
             case "cameras": virtualCameraRig.SetVisible(showCameras = visible); break;
             case "hud": showHud = visible; break;
-            default: throw new ArgumentException($"unknown layer '{layer}' (floor|tension|splats|cameras|hud)");
+            case "avatars": SetAvatarsVisible(visible); break;
+            case "timing": SetTimingVisible(visible); break;
+            case "physics": SetPhysicsVisible(visible); break;
+            default:
+                throw new ArgumentException($"unknown layer '{layer}' (floor|tension|splats|cameras|hud|avatars|timing|physics)");
         }
 
         return visible;
+    }
+
+    void SetAvatarsVisible(bool visible)
+    {
+        showAvatars = visible;
+        foreach (SmplxAvatar avatar in avatars.Values) avatar.SetVisible(visible);
+    }
+
+    void SetTimingVisible(bool visible)
+    {
+        showTiming = visible;
+        if (timingOverlay != null) timingOverlay.SetVisible(visible);
+    }
+
+    void SetPhysicsVisible(bool visible)
+    {
+        showPhysics = visible;
+        if (physicsOverlay != null) physicsOverlay.SetVisible(visible);
     }
 
     /// <summary>machine-readable state for CLI playtests</summary>
@@ -414,12 +550,49 @@ public class HeadMovement : MonoBehaviour
             ["layers"] = new Dictionary<string, bool>
             {
                 ["floor"] = showFloor, ["tension"] = showConnection, ["splats"] = showSplats,
-                ["cameras"] = showCameras, ["hud"] = showHud
-            }
+                ["cameras"] = showCameras, ["hud"] = showHud, ["avatars"] = showAvatars, ["timing"] = showTiming,
+                ["physics"] = showPhysics
+            },
+            ["version"] = manifest?.version ?? 0,
+            ["timesDriven"] = timeline?.FromTimes ?? false,
+            ["warnings"] = loadWarnings.ToList()
         };
         if (!audioLoaded) return state;
 
         state["audioTime"] = audioSource.time;
+        state["frameAudioTime"] = timeline.AudioTimeOf(currentFrame);
+        // the frame the binary search picks for the current audio time (playtest: must equal "frame" when paused)
+        state["frameForAudioTime"] = timeline.FrameAt(audioSource.time);
+        state["meanFrameInterval"] = FrameCount > 1 ? (timeline.Last - timeline.First) / (FrameCount - 1) : 0f;
+        state["jerkSource"] = Lead.JerkSource;
+        state["avatars"] = avatars.ToDictionary(kv => kv.Key.ToString().ToLowerInvariant(), kv =>
+        {
+            Bounds b = kv.Value.BakedBounds();
+            return (object)new Dictionary<string, object>
+            {
+                ["visible"] = kv.Value.Visible, ["frame"] = kv.Value.CurrentFrame, ["bones"] = kv.Value.BoneCount,
+                ["vertices"] = kv.Value.VertexCount, ["fkErrorMm"] = kv.Value.FkErrorMm(),
+                ["minY"] = b.min.y, ["maxY"] = b.max.y, ["sizeX"] = b.size.x, ["sizeZ"] = b.size.z,
+                ["head"] = Vec(kv.Value.BonePosition(15)), ["skeletonHead"] = Vec(Lead != null && kv.Key == Role.Lead
+                    ? Lead.Joint(currentFrame, SmplJoint.Head) : Follow.Joint(currentFrame, SmplJoint.Head))
+            };
+        });
+        if (timingOverlay != null)
+        {
+            state["timing"] = new Dictionary<string, object>
+            {
+                ["touchdowns"] = timingOverlay.TouchdownCount, ["visibleRings"] = timingOverlay.VisibleRings
+            };
+        }
+
+        if (physicsOverlay != null)
+        {
+            state["physics"] = new Dictionary<string, object>
+            {
+                ["frame"] = physicsOverlay.Frame, ["lead"] = physicsOverlay.State(Role.Lead),
+                ["follow"] = physicsOverlay.State(Role.Follow)
+            };
+        }
         if (beatGrid != null)
         {
             state["measure"] = beatGrid.MeasureIndex(audioSource.time) + 1;
@@ -450,11 +623,11 @@ public class HeadMovement : MonoBehaviour
                 audioSource.time = beatGrid.MeasureStart(loopedMeasure);
             }
 
-            bool pastLastFrame = (audioSource.time - AudioOffset) * Fps >= FrameCount - 1;
+            bool pastLastFrame = audioSource.time >= timeline.Last;
             if (!audioSource.isPlaying || pastLastFrame)
             {
                 Pause();
-                Seek(AudioOffset + (FrameCount - 1) / Fps);
+                Seek(timeline.Last);
             }
 
             SetToFrameNumber();
@@ -499,6 +672,9 @@ public class HeadMovement : MonoBehaviour
         if (keyboard.gKey.wasPressedThisFrame) splatCloud.SetVisible(showSplats = !showSplats);
         if (keyboard.cKey.wasPressedThisFrame) virtualCameraRig.SetVisible(showCameras = !showCameras);
         if (keyboard.hKey.wasPressedThisFrame) showHud = !showHud;
+        if (keyboard.vKey.wasPressedThisFrame) SetAvatarsVisible(!showAvatars);
+        if (keyboard.bKey.wasPressedThisFrame) SetTimingVisible(!showTiming);
+        if (keyboard.pKey.wasPressedThisFrame) SetPhysicsVisible(!showPhysics);
 
         Key[] digits =
         {
@@ -515,16 +691,15 @@ public class HeadMovement : MonoBehaviour
         }
     }
 
-    int GetFrameNumber()
-    {
-        return Mathf.Clamp(Mathf.RoundToInt((audioSource.time - AudioOffset) * Fps), 0, FrameCount - 1);
-    }
+    /// <summary>nearest pose frame to the audio clock (binary search over the capture's real frame times)</summary>
+    int GetFrameNumber() => timeline.FrameAt(audioSource.time);
 
     void OnGUI()
     {
         if (!showHud) return;
 
-        GUILayout.BeginArea(new Rect(12, 12, 460, 400), GUI.skin.box);
+        bool overlays = timingOverlay != null || physicsOverlay != null; // v3 HUD lines are longer
+        GUILayout.BeginArea(new Rect(12, 12, overlays ? 620 : 460, overlays ? 520 : 400), GUI.skin.box);
         if (manifest == null)
         {
             GUILayout.Label("Press 1-9/0 to load a performance:");
@@ -561,10 +736,32 @@ public class HeadMovement : MonoBehaviour
             }
         }
 
+        if (audioLoaded)
+        {
+            float frameTime = timeline.AudioTimeOf(currentFrame);
+            if (timingOverlay != null && showTiming)
+            {
+                foreach (string line in timingOverlay.HudLines(frameTime)) GUILayout.Label(line);
+            }
+
+            if (physicsOverlay != null && showPhysics)
+            {
+                foreach (string line in physicsOverlay.HudLines()) GUILayout.Label(line);
+            }
+        }
+
         GUILayout.Label("space play/pause   , . beat   [ ] measure   L loop   R restart   <- -> speed\n" +
-                        "WASD/QE orbit   F floor   T tension   G splats   C cameras   H hud");
+                        "WASD/QE orbit   F floor   T tension   G splats   C cameras   H hud\n" +
+                        "V avatars   B timing   P physics");
         GUILayout.EndArea();
+
+        if (audioLoaded && timingOverlay != null && showTiming)
+        {
+            timingOverlay.DrawTicker(new Rect(12, Screen.height - 96, Screen.width - 24, 84), audioSource.time);
+        }
     }
+
+    static float[] Vec(Vector3 v) => new[] { v.x, v.y, v.z };
 
     [Serializable]
     class Float3

@@ -114,19 +114,37 @@ public class Dancer : MonoBehaviour
     
     #endregion
 
-    public void Init(Role role, List<List<Vector3>> posesByFrame, Material bloomMat, float totalSeconds)
+    /// <param name="frameTimes">seconds of every pose frame (real timestamps; only differences matter)</param>
+    /// <param name="precomputedJerk">optional |jerk| per frame per SMPL-24 joint (timing.json spline jerk); when
+    /// null or the wrong size, jerk comes from central differences on frameTimes</param>
+    public void Init(Role role, List<List<Vector3>> posesByFrame, Material bloomMat, float[] frameTimes,
+        float[][] precomputedJerk = null)
     {
         BloomMat = bloomMat;
         BuildSmpl(role);
 
         Role = role;
-        PosesByFrame = posesByFrame.ToArray();
+        PosesByFrame = posesByFrame.Take(frameTimes.Length).ToArray();
+        JerkSource = "central differences";
 
-        for (int j = 0; j < Enum.GetNames(typeof(SmplJoint)).Length; j++)
+        int jointCount = Enum.GetNames(typeof(SmplJoint)).Length;
+        bool usePrecomputed = precomputedJerk != null && precomputedJerk.Length >= PosesByFrame.Length &&
+                              precomputedJerk.Take(PosesByFrame.Length).All(f => f != null && f.Length >= jointCount);
+        if (usePrecomputed) JerkSource = "timing.json spline";
+        float[] times = frameTimes.Take(PosesByFrame.Length).ToArray();
+
+        for (int j = 0; j < jointCount; j++)
         {
             SmplJoint joint = (SmplJoint)j;
+            if (usePrecomputed)
+            {
+                int jj = j;
+                jerkByFrameByJoint[joint] = precomputedJerk.Take(PosesByFrame.Length).Select(f => f[jj]).ToArray();
+                continue;
+            }
+
             Vector3[] jointPositions = PosesByFrame.Select(pose => pose[j]).ToArray();
-            jerkByFrameByJoint[joint] = RhythmPhysics.CalculateJerk(jointPositions, totalSeconds);
+            jerkByFrameByJoint[joint] = RhythmPhysics.CalculateJerk(jointPositions, times);
         }
 
         const int colorScale = 40;
@@ -695,6 +713,9 @@ public class Dancer : MonoBehaviour
     public Vector3 Center(int frameNumber) => PosesByFrame[frameNumber][(int)SmplJoint.Spine3];
 
     public int FrameCount => PosesByFrame.Length;
+
+    /// <summary>where the per-joint jerk driving the glow came from (for hm_state)</summary>
+    public string JerkSource { get; private set; }
 
     public Role DancerRole => Role;
 

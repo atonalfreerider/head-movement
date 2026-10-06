@@ -6,73 +6,75 @@ namespace Util
     public static class RhythmPhysics
     {
         /// <summary>
-        /// Computes the jerk for each position in the array.
-        /// Jerk is the third derivative of position with respect to time.
-        /// Specifically, it returns the magnitude of the jerk at each sample.
+        /// Jerk magnitude (|d3x/dt3|, m/s^3) at every sample, from three passes of the non-uniform three-point
+        /// central difference on the real frame timestamps. Central differences are unbiased in time (forward
+        /// differences shifted jerk ~1.5 frames early); the two end samples use one-sided differences.
+        /// Prefer the spline jerk from timing.json (dancecap timing stage) when a capture provides it.
         /// </summary>
-        /// <param name="positions">Array of positions over time.</param>
-        /// <param name="totalTime">Total time span of the positions array.</param>
-        /// <returns>An array of jerk magnitudes at each time sample.</returns>
-        public static float[] CalculateJerk(Vector3[] positions, float totalTime)
+        /// <param name="positions">positions over time</param>
+        /// <param name="times">strictly increasing sample times in seconds (same length)</param>
+        public static float[] CalculateJerk(Vector3[] positions, float[] times)
         {
-            // --- SAFETY CHECKS ---
-            if (positions == null || positions.Length < 2)
+            if (positions == null || times == null || positions.Length != times.Length)
             {
-                Debug.LogWarning("Positions array is null or too short to calculate jerk.");
-                return Array.Empty<float>();
-            }
-            if (totalTime <= 0f)
-            {
-                Debug.LogWarning("totalTime must be greater than 0 to avoid division by zero.");
+                Debug.LogWarning("CalculateJerk: positions and times must have the same length.");
                 return Array.Empty<float>();
             }
 
             int n = positions.Length;
+            if (n < 3) return new float[n];
 
-            // The time step assuming uniform intervals
-            float dt = totalTime / (n - 1);
-
-            // If dt is 0 or extremely small, this will cause numerical problems
-            if (dt <= Mathf.Epsilon)
+            for (int i = 1; i < n; i++)
             {
-                Debug.LogWarning($"Invalid time step dt = {dt}. Check totalTime or positions length.");
+                if (!(times[i] > times[i - 1]))
+                {
+                    Debug.LogWarning($"CalculateJerk: times must increase (sample {i}).");
+                    return new float[n];
+                }
+            }
+
+            Vector3[] jerk = Derivative(Derivative(Derivative(positions, times), times), times);
+            float[] magnitude = new float[n];
+            for (int i = 0; i < n; i++) magnitude[i] = jerk[i].magnitude;
+            return magnitude;
+        }
+
+        /// <summary>uniform-grid convenience overload: n samples spread evenly over totalTime seconds</summary>
+        public static float[] CalculateJerk(Vector3[] positions, float totalTime)
+        {
+            if (positions == null || positions.Length < 2 || totalTime <= 0f)
+            {
+                Debug.LogWarning("CalculateJerk: need >= 2 positions and totalTime > 0.");
                 return Array.Empty<float>();
             }
 
-            // --- ARRAYS ---
-            Vector3[] velocity = new Vector3[n];
-            Vector3[] acceleration = new Vector3[n];
-            float[] jerk = new float[n];
+            float[] times = new float[positions.Length];
+            for (int i = 0; i < times.Length; i++) times[i] = totalTime * i / (times.Length - 1);
+            return CalculateJerk(positions, times);
+        }
 
-            // --- Calculate velocity (forward difference) ---
-            // velocity[i] = (positions[i+1] - positions[i]) / dt   for i in [0..n-2]
-            for (int i = 0; i < n - 1; i++)
+        /// <summary>
+        /// First derivative on a non-uniform grid. Interior: the second-order three-point formula
+        /// f'(t_i) = -h2/(h1(h1+h2)) f_{i-1} + (h2-h1)/(h1 h2) f_i + h1/(h2(h1+h2)) f_{i+1},
+        /// h1 = t_i - t_{i-1}, h2 = t_{i+1} - t_i (equals (f_{i+1}-f_{i-1})/2h on a uniform grid). Ends: one-sided.
+        /// </summary>
+        public static Vector3[] Derivative(Vector3[] x, float[] t)
+        {
+            int n = x.Length;
+            Vector3[] d = new Vector3[n];
+            if (n < 2) return d;
+
+            for (int i = 1; i < n - 1; i++)
             {
-                velocity[i] = (positions[i + 1] - positions[i]) / dt;
+                float h1 = t[i] - t[i - 1];
+                float h2 = t[i + 1] - t[i];
+                d[i] = x[i - 1] * (-h2 / (h1 * (h1 + h2))) + x[i] * ((h2 - h1) / (h1 * h2)) +
+                       x[i + 1] * (h1 / (h2 * (h1 + h2)));
             }
-            // Copy the second-to-last velocity into the last slot
-            velocity[n - 1] = velocity[n - 2];
 
-            // --- Calculate acceleration (forward difference) ---
-            // acceleration[i] = (velocity[i+1] - velocity[i]) / dt   for i in [0..n-2]
-            for (int i = 0; i < n - 1; i++)
-            {
-                acceleration[i] = (velocity[i + 1] - velocity[i]) / dt;
-            }
-            // Copy the second-to-last acceleration into the last slot
-            acceleration[n - 1] = acceleration[n - 2];
-
-            // --- Calculate jerk (forward difference) ---
-            // jerk[i] = (acceleration[i+1] - acceleration[i]) / dt   for i in [0..n-2]
-            for (int i = 0; i < n - 1; i++)
-            {
-                Vector3 jerkVector = (acceleration[i + 1] - acceleration[i]) / dt;
-                jerk[i] = jerkVector.magnitude;
-            }
-            // Copy the second-to-last jerk into the last slot
-            jerk[n - 1] = jerk[n - 2];
-
-            return jerk;
+            d[0] = (x[1] - x[0]) / (t[1] - t[0]);
+            d[n - 1] = (x[n - 1] - x[n - 2]) / (t[n - 1] - t[n - 2]);
+            return d;
         }
     }
 }

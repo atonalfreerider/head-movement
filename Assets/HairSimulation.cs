@@ -305,8 +305,20 @@ public class HairSimulation : MonoBehaviour
     // ---------------------------------------------------------------------
     void LateUpdate()
     {
-        float dt = Time.deltaTime;
-        if (dt <= 0f || totalStrands == 0) return;
+        // Stability guard: the constraint velocity update (dv = correction / (dt m)) diverges when dt swings between
+        // tiny and long frames (editor stalls, CLI playtests) or the head teleports on a seek - strands then fly off
+        // to NaN/1e5 m and every renderer errors with "Invalid AABB". Clamp dt, carry the hair rigidly with the head
+        // across teleports, and reset any strand that has blown up.
+        float dt = Mathf.Min(Time.deltaTime, MaxStepSeconds);
+        if (dt <= 1e-4f || totalStrands == 0) return;
+
+        if (Vector3.Distance(transform.position, previousHeadPosition) > TeleportMetres ||
+            Quaternion.Angle(transform.rotation, previousHeadRotation) > TeleportDegrees)
+        {
+            CarryWithHead();
+            previousHeadPosition = transform.position;
+            previousHeadRotation = transform.rotation;
+        }
 
         // 1) Update pinned root positions to match the object's current transform
         //    So if the transform moved, the hair root moves too.
@@ -360,6 +372,8 @@ public class HairSimulation : MonoBehaviour
             handle.Complete();
         }
 
+        ResetBlownUpStrands();
+
         // 4) Update line renderers
         UpdateLineRenderers();
 
@@ -371,6 +385,52 @@ public class HairSimulation : MonoBehaviour
     void OnDestroy()
     {
         ClearHair();
+    }
+
+    const float MaxStepSeconds = 1f / 30f;
+    const float TeleportMetres = 0.25f;
+    const float TeleportDegrees = 45f;
+    const float MaxSegmentSpeed = 20f;
+
+    /// <summary>move every segment rigidly with the head (seek / capture jump) and drop its velocity</summary>
+    void CarryWithHead()
+    {
+        Quaternion delta = transform.rotation * Quaternion.Inverse(previousHeadRotation);
+        for (int i = 0; i < positions.Length; i++)
+        {
+            Vector3 p = positions[i];
+            positions[i] = (float3)(transform.position + delta * (p - previousHeadPosition));
+            velocities[i] = float3.zero;
+        }
+    }
+
+    /// <summary>re-hang strands whose segments went non-finite, too fast or too far from their root</summary>
+    void ResetBlownUpStrands()
+    {
+        for (int s = 0; s < totalStrands; s++)
+        {
+            int offset = strands[s].offset;
+            float3 root = pinnedRootPositions[s];
+            float reach = 0f;
+            for (int i = 0; i < segmentsPerStrand - 1; i++) reach += restLengths[s * (segmentsPerStrand - 1) + i];
+            bool bad = false;
+            for (int i = 0; i < segmentsPerStrand && !bad; i++)
+            {
+                float3 p = positions[offset + i];
+                float3 v = velocities[offset + i];
+                bad = !math.all(math.isfinite(p)) || !math.all(math.isfinite(v)) ||
+                      math.length(p - root) > 2f * reach + 0.05f || math.length(v) > MaxSegmentSpeed;
+            }
+
+            if (!bad) continue;
+            float3 at = root;
+            for (int i = 0; i < segmentsPerStrand; i++)
+            {
+                if (i > 0) at += new float3(0, -restLengths[s * (segmentsPerStrand - 1) + i - 1], 0);
+                positions[offset + i] = at;
+                velocities[offset + i] = float3.zero;
+            }
+        }
     }
 
     // ---------------------------------------------------------------------

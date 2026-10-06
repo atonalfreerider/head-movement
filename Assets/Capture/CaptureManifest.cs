@@ -9,6 +9,8 @@ using UnityEngine;
 /// Describes one performance folder in StreamingAssets. Reads capture.json (written by atlas_bridge) when present,
 /// otherwise falls back to the original layout: video_meta.json, figure1.json, figure2.json, audio.wav and
 /// zouk-time-analysis.json (or the "&lt;stem&gt;_zouk-time-analysis.json" name beat_this writes).
+/// Version 3 (dancecap export_unity) adds times.json (per-frame reference seconds - playback looks frames up by
+/// audio time, never by a constant fps), per-dancer SMPL-X motion + skin binaries, timing.json and physics.json.
 /// </summary>
 public class CaptureManifest
 {
@@ -27,6 +29,24 @@ public class CaptureManifest
     public SplatSequenceRef splat_sequence;
     public string virtual_cameras;
 
+    // ---- version 3 (dancecap) ----
+    /// <summary>per-frame reference seconds (T,)</summary>
+    public string times;
+
+    /// <summary>audio time = reference time + time_to_audio; absent = audio_offset - times[0]</summary>
+    public float? time_to_audio;
+
+    /// <summary>role -> motion binary (transl + 55 local rotations + 55 joint positions per frame)</summary>
+    public Dictionary<string, string> smplx;
+
+    /// <summary>role -> shaped SMPL-X skin binary (rest vertices, faces, LBS weights, rest joints, parents)</summary>
+    public Dictionary<string, string> smplx_skin;
+
+    public string timing;
+    public string physics;
+    public string contacts;
+    public string world;
+
     [JsonIgnore] public string Folder;
 
     public string DisplayName => Path.GetFileName(Folder);
@@ -35,6 +55,41 @@ public class CaptureManifest
 
     public string JointsPath(Role role) =>
         PathOf(dancers.First(d => string.Equals(d.role, role.ToString(), StringComparison.OrdinalIgnoreCase)).joints);
+
+    /// <summary>path of a role-keyed file (smplx / smplx_skin), or null when absent on disk</summary>
+    public string RolePath(Dictionary<string, string> map, Role role)
+    {
+        if (map == null) return null;
+        foreach (KeyValuePair<string, string> kv in map)
+        {
+            if (string.Equals(kv.Key, role.ToString(), StringComparison.OrdinalIgnoreCase)) return OptionalPath(kv.Value);
+        }
+
+        return null;
+    }
+
+    /// <summary>path of an optional file, or null when it is not declared or missing</summary>
+    public string OptionalPath(string relative)
+    {
+        string path = PathOf(relative);
+        return path != null && File.Exists(path) ? path : null;
+    }
+
+    /// <summary>
+    /// Per-frame audio times. v3: times.json + time_to_audio. Older captures: a uniform grid audio_offset + i / fps.
+    /// </summary>
+    public CaptureTimeline BuildTimeline(int frameCount)
+    {
+        string timesPath = OptionalPath(times);
+        if (timesPath == null) return CaptureTimeline.Uniform(frameCount, fps, audio_offset);
+
+        double[] reference = JsonConvert.DeserializeObject<double[]>(File.ReadAllText(timesPath));
+        double toAudio = time_to_audio ?? (reference.Length > 0 ? audio_offset - reference[0] : 0);
+        int n = Mathf.Min(frameCount, reference.Length);
+        double[] audioTimes = new double[n];
+        for (int i = 0; i < n; i++) audioTimes[i] = reference[i] + toAudio;
+        return new CaptureTimeline(audioTimes, (float)toAudio, true);
+    }
 
     public static CaptureManifest Load(string folder)
     {
@@ -125,5 +180,86 @@ public class CaptureManifest
         }
 
         return m;
+    }
+}
+
+/// <summary>
+/// Maps audio time to pose frames by binary search over the real per-frame timestamps (nearest frame), so captures
+/// with dropped/irregular frames or a non-zero time origin play in sync with the audio.
+/// </summary>
+public class CaptureTimeline
+{
+    /// <summary>audio-clock seconds of every pose frame, strictly increasing</summary>
+    public readonly double[] AudioTimes;
+
+    /// <summary>audio time = reference time + TimeToAudio</summary>
+    public readonly float TimeToAudio;
+
+    /// <summary>true when built from times.json (v3), false for the uniform fps fallback</summary>
+    public readonly bool FromTimes;
+
+    public CaptureTimeline(double[] audioTimes, float timeToAudio, bool fromTimes)
+    {
+        if (audioTimes == null || audioTimes.Length == 0) throw new ArgumentException("timeline needs at least one frame");
+        for (int i = 1; i < audioTimes.Length; i++)
+        {
+            if (!(audioTimes[i] > audioTimes[i - 1])) throw new ArgumentException($"frame times must increase (frame {i})");
+        }
+
+        AudioTimes = audioTimes;
+        TimeToAudio = timeToAudio;
+        FromTimes = fromTimes;
+    }
+
+    public static CaptureTimeline Uniform(int frameCount, float fps, float audioOffset)
+    {
+        double[] t = new double[Mathf.Max(1, frameCount)];
+        for (int i = 0; i < t.Length; i++) t[i] = audioOffset + i / (double)fps;
+        return new CaptureTimeline(t, 0f, false);
+    }
+
+    public int Count => AudioTimes.Length;
+    public float First => (float)AudioTimes[0];
+    public float Last => (float)AudioTimes[^1];
+
+    public float AudioTimeOf(int frame) => (float)AudioTimes[Mathf.Clamp(frame, 0, AudioTimes.Length - 1)];
+
+    /// <summary>audio time of a reference-clock time (timing.json / physics.json t)</summary>
+    public double ToAudio(double referenceTime) => referenceTime + TimeToAudio;
+
+    /// <summary>nearest frame to an audio time (clamped to the capture)</summary>
+    public int FrameAt(double audioTime) => Nearest(AudioTimes, audioTime);
+
+    /// <summary>true when an audio time lies within half a frame of the capture's first..last frame</summary>
+    public bool Covers(double audioTime)
+    {
+        double pad = Count > 1 ? 0.5 * (AudioTimes[^1] - AudioTimes[0]) / (Count - 1) : 0;
+        return audioTime >= AudioTimes[0] - pad && audioTime <= AudioTimes[^1] + pad;
+    }
+
+    /// <summary>index of the sample nearest to x in a strictly increasing array (binary search)</summary>
+    public static int Nearest(double[] sorted, double x)
+    {
+        int n = sorted.Length;
+        if (n == 0) return -1;
+        if (x <= sorted[0]) return 0;
+        if (x >= sorted[n - 1]) return n - 1;
+        int lo = 0, hi = n - 1; // sorted[lo] <= x < sorted[hi]
+        while (hi - lo > 1)
+        {
+            int mid = (lo + hi) >> 1;
+            if (sorted[mid] <= x) lo = mid;
+            else hi = mid;
+        }
+
+        return x - sorted[lo] <= sorted[hi] - x ? lo : hi;
+    }
+
+    /// <summary>frame times relative to frame 0 (seconds), for derivatives on the real timestamps</summary>
+    public float[] RelativeSeconds()
+    {
+        float[] t = new float[AudioTimes.Length];
+        for (int i = 0; i < t.Length; i++) t[i] = (float)(AudioTimes[i] - AudioTimes[0]);
+        return t;
     }
 }
