@@ -10,7 +10,12 @@ to Assets/Screenshots (git-ignored).
 
 Captures with capture.json version >= 3 (dancecap export) also get the v3 checks: playback driven by times.json
 (binary search by audio time), skinned SMPL-X avatars (55 bones, FK agrees with the exported joints, plausible
-body bounds, mesh deforms between frames), and the avatars / timing / physics layers.
+body bounds, mesh deforms between frames), and the avatars / timing / physics layers. Captures that declare
+smplx_albedo must show textured (seam-split) avatars; captures with a room mesh must load it on the floor (y ~ 0),
+start with the splat layer off, and toggle the room layer. Captures with hair_groom.json also run
+Tools/playtest_hair.ps1 (the follow's simulated hair: stability on seek / loop, Quest budget, CPU per step,
+motion vs the hair reference, review shots of the fastest head moments). Seek times are relative to the capture's first frame
+(real captures start at audio time ~26 s). Quest-relevant render stats are printed per capture.
 #>
 param(
     [string[]]$Capture = @("00_SyntheticDemo"),
@@ -20,21 +25,43 @@ param(
 $Capture = @($Capture | ForEach-Object { $_ -split "," } | Where-Object { $_ })  # powershell -File passes "a,b" as one string
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot -Parent)
+$script:projectPath = (Get-Location).Path
 $failures = [System.Collections.Generic.List[string]]::new()
 
 function Invoke-Unity {
-    $out = (unity command @args --result-only --no-banner --caller plugin --skill unity-cli 2>&1 | ForEach-Object { "$_" }) -join "`n"
+    # an explicit --project-path: auto-detection can take ~60 s per call when other editors/projects are registered
+    $out = (unity command @args --project-path $script:projectPath --result-only --no-banner --caller plugin --skill unity-cli 2>&1 | ForEach-Object { "$_" }) -join "`n"
     return $out
 }
 
+function ConvertFrom-UnityJson([string]$raw) {
+    # hm_* results are a JSON string holding JSON; ConvertFrom-Json (5.1) cannot read bare NaN/Infinity
+    $inner = $raw | ConvertFrom-Json
+    if ($inner -isnot [string]) { return $inner }
+    $inner = $inner -replace '(?<=[:,\[])\s*-?(NaN|Infinity)\s*(?=[,}\]])', '"$1"'
+    return ($inner | ConvertFrom-Json)
+}
+
 function Get-State {
-    $raw = Invoke-Unity hm_state
-    return ($raw | ConvertFrom-Json | ConvertFrom-Json)
+    # retried: a CLI bridge hiccup (dropped connection, timeout text) must not abort the whole playtest
+    for ($try = 1; $try -le 3; $try++) {
+        $raw = Invoke-Unity hm_state
+        try { return (ConvertFrom-UnityJson $raw) }
+        catch {
+            Write-Host "  (hm_state unreadable, try $try): $($raw.Substring(0, [math]::Min(200, $raw.Length)))" -ForegroundColor DarkYellow
+            Start-Sleep -Seconds 2
+        }
+    }
+    throw "hm_state unreadable"
 }
 
 function Invoke-Transport([string]$action, [string[]]$more = @()) {
     $raw = Invoke-Unity hm_transport --action $action @more
-    return ($raw | ConvertFrom-Json | ConvertFrom-Json)
+    try { return (ConvertFrom-UnityJson $raw) }
+    catch {
+        Write-Host "  (hm_transport $action unreadable): $($raw.Substring(0, [math]::Min(200, $raw.Length)))" -ForegroundColor DarkYellow
+        return Get-State
+    }
 }
 
 function Assert($condition, [string]$message) {
@@ -86,6 +113,14 @@ foreach ($cap in $Capture) {
     $s = Get-State
     Assert ($s.capture -eq $cap) "capture name is $cap"
     Assert ($s.frameCount -gt 0) "frames: $($s.frameCount) @ $($s.fps) fps"
+    $base = 0.0  # audio time of the first pose frame (seek targets below are relative to it)
+    if ($null -ne $s.frameAudioTime) { $base = [double](Invoke-Transport restart).frameAudioTime }
+    # measures the capture covers: a 6 s window of a real take spans 2-3 measures (and may start mid-measure)
+    $firstMeasure = (Invoke-Transport restart).measure
+    $lastMeasure = (Invoke-Transport seek @("--time", "100000")).measure
+    Invoke-Unity hm_transport --action restart | Out-Null
+    Write-Host "  measures in the capture: $firstMeasure..$lastMeasure"
+    $capJsonPt = Get-Content (Join-Path (Get-Location) "Assets\StreamingAssets\$cap\capture.json") -Raw | ConvertFrom-Json
     Assert ($s.steps -gt 0) "floor steps detected: $($s.steps) ($($s.stepsOnBeat) on beat)"
     $v3 = $s.version -ge 3
     foreach ($layer in "floor", "tension", "splats", "avatars", "timing", "physics") { Invoke-Unity hm_layer --layer $layer --visible true | Out-Null }
@@ -93,17 +128,19 @@ foreach ($cap in $Capture) {
     Shot "${prefix}_loaded"
 
     Write-Host "== seek before first play (fresh AudioSource is stopped, not paused)"
-    $s = Invoke-Transport measure @("--measure", "3")
-    Assert ($s.measure -eq 3 -and $s.frame -gt 0) "jump to measure 3 right after load (measure $($s.measure), frame $($s.frame))"
-    $s = Invoke-Transport seek @("--time", "2.0")
-    Assert ([math]::Abs($s.audioTime - 2.0) -lt 0.05) "seek to 2.0 s while paused ($($s.audioTime))"
+    $target = [math]::Min($firstMeasure + 2, $lastMeasure)
+    $s = Invoke-Transport measure @("--measure", "$target")
+    Assert ($s.measure -eq $target -and $s.frame -gt 0) "jump to measure $target right after load (measure $($s.measure), frame $($s.frame))"
+    $s = Invoke-Transport seek @("--time", "$($base + 2.0)")
+    Assert ([math]::Abs($s.audioTime - ($base + 2.0)) -lt 0.05) "seek to first frame + 2.0 s while paused ($($s.audioTime))"
     Invoke-Unity hm_transport --action restart | Out-Null
 
     Write-Host "== playback"
     Invoke-Unity hm_transport --action play | Out-Null
     Start-Sleep -Seconds 3
     $s = Get-State
-    Assert ($s.playing -and $s.frame -gt 30) "frames advance while playing (frame $($s.frame))"
+    # a 6 s real capture can reach its last frame (and auto-pause there) before the slow CLI reads the state
+    Assert (($s.playing -or $s.frame -eq $s.frameCount - 1) -and $s.frame -gt 30) "frames advance while playing (frame $($s.frame)/$($s.frameCount), playing $($s.playing))"
     if ($null -ne $s.frameAudioTime) {
         # the shown frame's own timestamp vs the audio clock (state is read a little after the frame was picked)
         $lag = [math]::Abs($s.frameAudioTime - $s.audioTime)
@@ -120,11 +157,13 @@ foreach ($cap in $Capture) {
     $prev = (Get-State).measure
     foreach ($i in 1..3) {
         $s = Invoke-Transport "measure+"
-        Assert ($s.measure -eq $prev + 1) "measure+ advances $prev -> $($s.measure)"
+        $want = [math]::Min($prev + 1, $lastMeasure)  # past the capture's last measure: stays (clamped to the last frame)
+        Assert ($s.measure -eq $want) "measure+ advances $prev -> $($s.measure) (capture measures $firstMeasure..$lastMeasure)"
         $prev = $s.measure
     }
+    Invoke-Transport measure @("--measure", "$prev") | Out-Null  # to the measure's start (measure- from inside restarts it)
     $s = Invoke-Transport "measure-"
-    Assert ($s.measure -eq $prev - 1) "measure- goes back $prev -> $($s.measure)"
+    Assert ($s.measure -eq [math]::Max($prev - 1, $firstMeasure)) "measure- goes back $prev -> $($s.measure)"
     $t0 = $s.audioTime
     $s = Invoke-Transport "beat+"
     Assert ($s.audioTime -gt $t0 -and -not $s.playing) "beat+ steps forward and stays paused"
@@ -141,6 +180,7 @@ foreach ($cap in $Capture) {
     Write-Host "== layers"
     $layers = @("floor", "tension", "splats", "cameras")
     if ($v3) { $layers += @("avatars", "timing", "physics") }
+    if ($null -ne $capJsonPt.room) { $layers += @("room") }
     foreach ($layer in $layers) {
         Invoke-Unity hm_layer --layer $layer --visible false | Out-Null
         Assert (-not (Get-State).layers.$layer) "$layer hides"
@@ -157,14 +197,15 @@ foreach ($cap in $Capture) {
         Assert $s.timesDriven "playback driven by times.json"
         Assert ($s.warnings.Count -eq 0) "no load warnings ($($s.warnings -join '; '))"
         $half = 0.5 * $s.meanFrameInterval + 0.002
-        foreach ($t in 1.0, 3.517, 7.7333, 11.01) {
+        foreach ($dt in 1.0, 3.517, 7.7333, 11.01) {
+            $t = $base + $dt
             $s = Invoke-Transport seek @("--time", "$t")
             Assert ($s.frame -eq $s.frameForAudioTime -and [math]::Abs($s.frameAudioTime - $s.audioTime) -le $half) `
                 ("seek {0}: frame {1} at {2:0.0000} s is the nearest frame to audio {3:0.0000} s" -f $t, $s.frame, $s.frameAudioTime, $s.audioTime)
         }
 
         Write-Host "== v3: SMPL-X avatars"
-        $a = Invoke-Transport seek @("--time", "5.0")
+        $a = Invoke-Transport seek @("--time", "$($base + 5.0)")
         foreach ($role in "lead", "follow") {
             $av = $a.avatars.$role
             Assert ($null -ne $av -and $av.visible) "$role avatar present and visible"
@@ -177,9 +218,15 @@ foreach ($cap in $Capture) {
             Assert ($av.minY -gt -0.08 -and $av.minY -lt 0.15 -and $av.maxY -gt 1.3 -and $av.maxY -lt 2.1) `
                 ("{0} skinned body stands on the floor: y {1:0.00}..{2:0.00} m" -f $role, $av.minY, $av.maxY)
         }
-        $b = Invoke-Transport seek @("--time", "5.6")
+        $b = Invoke-Transport seek @("--time", "$($base + 5.6)")
         $moved = (Dist $a.avatars.lead.head $b.avatars.lead.head) + [math]::Abs($a.avatars.follow.sizeX - $b.avatars.follow.sizeX)
         Assert ($moved -gt 0.01) ("skinned meshes deform between frames (head moved + width change {0:0.000} m)" -f $moved)
+        if ($null -ne $capJsonPt.smplx_albedo) {
+            foreach ($role in "lead", "follow") {
+                $av = $b.avatars.$role
+                Assert ($av.textured -and $av.textureSize -ge 512) "$role avatar textured ($($av.textureSize) px, $($av.textureFormat), $($av.vertices) split vertices, $($av.triangles) triangles)"
+            }
+        }
         Invoke-Unity hm_layer --layer avatars --visible false | Out-Null
         $s = Get-State
         Assert (-not $s.avatars.lead.visible -and -not $s.avatars.follow.visible) "avatars layer hides both bodies"
@@ -208,10 +255,40 @@ foreach ($cap in $Capture) {
         Invoke-Unity hm_layer --layer floor --visible true | Out-Null
     }
 
+    if ($null -ne $capJsonPt.room) {
+        Write-Host "== room (Quest mesh)"
+        $s = Get-State
+        Assert $s.room.loaded "room mesh loaded ($($s.room.triangles) triangles, $($s.room.vertices) vertices, $($s.room.submeshes) submeshes, $($s.room.textures) textures)"
+        Assert ($s.room.triangles -eq $capJsonPt.room.triangles) "room triangles match the export ($($capJsonPt.room.triangles))"
+        Assert ($s.room.boundsMin[1] -gt -0.25 -and $s.room.boundsMin[1] -lt 0.05) ("room floor at y ~ 0 (lowest point {0:0.000} m)" -f $s.room.boundsMin[1])
+        Assert ($s.layers.room) "room layer on by default"
+        Invoke-Unity hm_layer --layer room --visible false | Out-Null
+        Assert (-not (Get-State).layers.room) "room hides"
+        Invoke-Unity hm_layer --layer room --visible true | Out-Null
+        Assert ((Get-State).layers.room) "room shows again"
+    }
+
+    Write-Host "== Quest-relevant render stats (default layers: splats off when a room mesh exists)"
+    if ($null -ne $capJsonPt.room) { Invoke-Unity hm_layer --layer splats --visible false | Out-Null }
+    Invoke-Unity hm_orbit --azimuth 60 --elevation 15 --radius 3 | Out-Null
+    Start-Sleep -Milliseconds 500
+    $perf = Invoke-Unity get_performance_stats
+    Write-Host "  $($perf -replace '\s+', ' ')"
+
+    # VIEWER_SPEC v3 dance layers: origin, counterbalance, follower traces, dance graph, hm_tour (+ review shots)
+    if (Test-Path "$PSScriptRoot/playtest_dance_layers.ps1") { . "$PSScriptRoot/playtest_dance_layers.ps1" }
+
+    # the follow's groomed hair (Assets/Hair) on captures with hair_groom.json: stability, budget, CPU, review shots
+    if (Test-Path "$PSScriptRoot/playtest_hair.ps1") { . "$PSScriptRoot/playtest_hair.ps1" }
+
     Write-Host "== console"
-    $console = (Invoke-Unity console --level error --tail 20) | ConvertFrom-Json
-    Assert ($console.counts.error -eq 0) "no runtime errors ($($console.counts.error))"
-    foreach ($e in $console.entries) { Write-Host "  error: $($e.message)" -ForegroundColor Red }
+    $console = (Invoke-Unity console --level error --tail 50) | ConvertFrom-Json
+    # errors of the Unity CLI bridge itself (a dropped HTTP connection to /api/exec) are not the app's: report them
+    $bridge = @($console.entries | Where-Object { $_.message -match '/api/exec|^Pipeline: ' })
+    $app = @($console.entries | Where-Object { $_.message -notmatch '/api/exec|^Pipeline: ' })
+    Assert ($app.Count -eq 0) "no runtime errors ($($app.Count); CLI bridge errors ignored: $($bridge.Count))"
+    foreach ($e in $app) { Write-Host "  error: $($e.message)" -ForegroundColor Red }
+    foreach ($e in $bridge) { Write-Host "  (cli bridge) $($e.message)" -ForegroundColor DarkYellow }
 }
 
 Invoke-Unity editor_stop | Out-Null

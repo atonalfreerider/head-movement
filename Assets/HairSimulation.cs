@@ -312,7 +312,11 @@ public class HairSimulation : MonoBehaviour
         float dt = Mathf.Min(Time.deltaTime, MaxStepSeconds);
         if (dt <= 1e-4f || totalStrands == 0) return;
 
-        if (Vector3.Distance(transform.position, previousHeadPosition) > TeleportMetres ||
+        // A stalled frame (deltaTime > MaxStepSeconds) is treated as a teleport: the head motion accumulated over the
+        // real stall must not be divided by the clamped dt (that overestimates the inertia kick by realDt/dt).
+        bool stalled = Time.deltaTime > MaxStepSeconds;
+        if (stalled ||
+            Vector3.Distance(transform.position, previousHeadPosition) > TeleportMetres ||
             Quaternion.Angle(transform.rotation, previousHeadRotation) > TeleportDegrees)
         {
             CarryWithHead();

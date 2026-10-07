@@ -288,6 +288,9 @@ public class ContactDetection : MonoBehaviour
         lineRenderer.endWidth = LW;
         lineRenderer.loop = false;
         lineRenderer.useWorldSpace = false;
+        // no points until a contact is drawn: a fresh LineRenderer holds (0,0,0)-(0,0,1), which rendered as a white
+        // 1 m bar at the world origin (these contact lines are never filled yet)
+        lineRenderer.positionCount = 0;
 
         return lineRenderer;
     }

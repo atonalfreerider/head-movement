@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using Newtonsoft.Json.Linq;
@@ -44,6 +45,12 @@ public static class SmplxData
         public float[] Weights; // V * 55 dense
         public Vector3[] RestJoints;
         public int[] Parents; // -1 for the root
+
+        // skin version 2 (seam-split for a texture): null for version 1
+        public Vector2[] Uv; // Unity UV (v up; PNG row 0 = v 1)
+        public Vector3[] Normals; // rest normals of the unsplit mesh (no shading seams at UV cuts)
+        public int[] VertexIds; // SMPL-X vertex of each split vertex
+        public bool Textured => Uv != null && Uv.Length == RestVertices.Length;
     }
 
     public static Motion ReadMotion(string path)
@@ -82,25 +89,67 @@ public static class SmplxData
     {
         (JObject header, byte[] raw, int offset) = Open(path, "DCXS");
         int v = header.Value<int>("vertices");
-        int faces = header.Value<int>("faces");
         if (header.Value<int>("joints") != Joints) throw new InvalidDataException($"{path}: expected {Joints} joints");
 
+        // blocks are located by the header's [name, dtype, shape] list (version 1: 5 blocks, version 2 adds uv,
+        // normals, vertex_ids); every block is padded to 4 bytes
+        Dictionary<string, (int offset, int count)> blocks = Blocks(header, offset, raw.Length, path);
+        (int, int) Need(string name) => blocks.TryGetValue(name, out (int, int) b)
+            ? b : throw new InvalidDataException($"{path}: block {name} missing");
+
         Skin s = new() { Header = header };
-        float[] verts = Floats(raw, offset, v * 3, path);
-        offset += v * 12;
-        s.Triangles = Ints(raw, offset, faces * 3, path);
-        offset += faces * 12;
-        s.Weights = Floats(raw, offset, v * Joints, path);
-        offset += v * Joints * 4;
-        float[] joints = Floats(raw, offset, Joints * 3, path);
-        offset += Joints * 12;
-        s.Parents = Ints(raw, offset, Joints, path);
-        s.RestVertices = ToVectors(verts);
-        s.RestJoints = ToVectors(joints);
+        (int o, int n) b = Need("rest_vertices");
+        s.RestVertices = ToVectors(Floats(raw, b.o, b.n, path));
+        b = Need("faces");
+        s.Triangles = Ints(raw, b.o, b.n, path);
+        b = Need("weights");
+        s.Weights = Floats(raw, b.o, b.n, path);
+        b = Need("rest_joints");
+        s.RestJoints = ToVectors(Floats(raw, b.o, b.n, path));
+        b = Need("parents");
+        s.Parents = Ints(raw, b.o, b.n, path);
+        if (blocks.TryGetValue("uv", out b))
+        {
+            float[] uv = Floats(raw, b.o, b.n, path);
+            s.Uv = new Vector2[uv.Length / 2];
+            for (int i = 0; i < s.Uv.Length; i++) s.Uv[i] = new Vector2(uv[2 * i], uv[2 * i + 1]);
+        }
+
+        if (blocks.TryGetValue("normals", out b)) s.Normals = ToVectors(Floats(raw, b.o, b.n, path));
+        if (blocks.TryGetValue("vertex_ids", out b)) s.VertexIds = Ints(raw, b.o, b.n, path);
+        if (s.RestVertices.Length != v || s.Weights.Length != v * Joints)
+        {
+            throw new InvalidDataException($"{path}: vertex count mismatch");
+        }
+
+        if (s.Normals != null && s.Normals.Length != v) s.Normals = null;
         return s;
     }
 
-    static (JObject header, byte[] raw, int offset) Open(string path, string magic)
+    /// <summary>name -> (byte offset, element count) for a dancecap blob header's "blocks" list</summary>
+    public static Dictionary<string, (int offset, int count)> Blocks(JObject header, int offset, int length, string path)
+    {
+        Dictionary<string, (int, int)> blocks = new();
+        foreach (JToken block in (JArray)header["blocks"])
+        {
+            string name = block[0].Value<string>();
+            int size = block[1].Value<string>() switch
+            {
+                "f4" or "i4" or "u4" => 4, "u1" or "i1" => 1, "u2" or "i2" or "f2" => 2,
+                string t => throw new InvalidDataException($"{path}: dtype {t}")
+            };
+            int count = 1;
+            foreach (JToken d in (JArray)block[2]) count *= d.Value<int>();
+            if (offset + count * size > length) throw new InvalidDataException($"{path}: truncated at {name}");
+            blocks[name] = (offset, count);
+            offset += count * size;
+            offset += (4 - offset % 4) % 4;
+        }
+
+        return blocks;
+    }
+
+    public static (JObject header, byte[] raw, int offset) Open(string path, string magic)
     {
         byte[] raw = File.ReadAllBytes(path);
         if (raw.Length < 8 || Encoding.ASCII.GetString(raw, 0, 4) != magic)
@@ -113,7 +162,7 @@ public static class SmplxData
         return (header, raw, 8 + n);
     }
 
-    static float[] Floats(byte[] raw, int offset, int count, string path)
+    public static float[] Floats(byte[] raw, int offset, int count, string path)
     {
         if (offset + count * 4 > raw.Length) throw new InvalidDataException($"{path}: truncated");
         float[] f = new float[count];
@@ -121,7 +170,7 @@ public static class SmplxData
         return f;
     }
 
-    static int[] Ints(byte[] raw, int offset, int count, string path)
+    public static int[] Ints(byte[] raw, int offset, int count, string path)
     {
         if (offset + count * 4 > raw.Length) throw new InvalidDataException($"{path}: truncated");
         int[] f = new int[count];
@@ -129,7 +178,7 @@ public static class SmplxData
         return f;
     }
 
-    static Vector3[] ToVectors(float[] f)
+    public static Vector3[] ToVectors(float[] f)
     {
         Vector3[] v = new Vector3[f.Length / 3];
         for (int i = 0; i < v.Length; i++) v[i] = new Vector3(f[i * 3], f[i * 3 + 1], f[i * 3 + 2]);

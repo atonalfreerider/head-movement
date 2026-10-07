@@ -37,6 +37,7 @@ public class HeadMovement : MonoBehaviour
     FloorPatterns floorPatterns;
     PartnerConnection partnerConnection;
     SplatCloud splatCloud;
+    RoomMesh roomMesh;
     VirtualCameraRig virtualCameraRig;
 
     public Material BloomMaterial;
@@ -61,6 +62,10 @@ public class HeadMovement : MonoBehaviour
     bool showFloor = true, showConnection = true, showSplats = true, showCameras = false, showHud = true;
     bool showAvatars = true, showTiming = true, showPhysics = true;
 
+    // room: the mesh is the Quest layer; while the user has not toggled splats themselves, a capture with a room
+    // mesh starts with the (heavier, alpha-blended) splat layer off
+    bool showRoom = true, splatsUserSet;
+
     string[] captures;
 
     void Awake()
@@ -71,6 +76,7 @@ public class HeadMovement : MonoBehaviour
         floorPatterns = gameObject.AddComponent<FloorPatterns>();
         partnerConnection = gameObject.AddComponent<PartnerConnection>();
         splatCloud = new GameObject("Splats").AddComponent<SplatCloud>();
+        roomMesh = new GameObject("Room").AddComponent<RoomMesh>();
         virtualCameraRig = new GameObject("Virtual Cameras").AddComponent<VirtualCameraRig>();
     }
 
@@ -80,6 +86,26 @@ public class HeadMovement : MonoBehaviour
     }
 
     public IReadOnlyList<string> CaptureNames => captures.Select(Path.GetFileName).ToList();
+
+    // ---- read-only accessors for the dance layers (Assets/Tour/DanceLayers.cs, VIEWER_SPEC v3) ----
+    public CaptureManifest Manifest => manifest;
+    public CaptureTimeline Timeline => timeline;
+    public BeatGrid Beats => beatGrid;
+    public int CurrentFrame => currentFrame;
+    public bool AudioLoaded => audioLoaded;
+    public bool IsPlaying => playing;
+    public Dancer LeadDancer => Lead;
+    public Dancer FollowDancer => Follow;
+    public IReadOnlyDictionary<Role, SmplxAvatar> Avatars => avatars;
+    public CameraControl OrbitCamera => cameraControl;
+
+    /// <summary>current flag of a layer (floor|tension|splats|cameras|hud|avatars|timing|physics|counterbalance|traces|graph)</summary>
+    public bool LayerVisible(string layer) => layer.ToLowerInvariant() switch
+    {
+        "floor" => showFloor, "tension" => showConnection, "splats" => showSplats, "room" => showRoom, "cameras" => showCameras,
+        "hud" => showHud, "avatars" => showAvatars, "timing" => showTiming, "physics" => showPhysics,
+        _ => DanceLayers.LayerOn(layer.ToLowerInvariant())
+    };
 
     /// <summary>load a capture by folder name (CLI playtests, menus)</summary>
     public bool LoadCapture(string folderName)
@@ -118,6 +144,7 @@ public class HeadMovement : MonoBehaviour
 
         List<List<Vector3>> leadPoses = ReadPoses(manifest.JointsPath(Role.Lead));
         List<List<Vector3>> followPoses = ReadPoses(manifest.JointsPath(Role.Follow));
+        DanceOrigin.Begin(manifest, leadPoses, followPoses); // VIEWER_SPEC 3.0: the dance starts at (0,0) and travels
         FrameCount = Mathf.Min(manifest.frame_count, Mathf.Min(leadPoses.Count, followPoses.Count));
         timeline = manifest.BuildTimeline(FrameCount);
         FrameCount = timeline.Count;
@@ -161,7 +188,10 @@ public class HeadMovement : MonoBehaviour
         partnerConnection.Init(Lead, Follow, BloomMaterial, Fps);
         partnerConnection.SetVisible(showConnection);
         virtualCameraRig.Load(manifest.PathOf(manifest.virtual_cameras), BloomMaterial);
+        DanceOrigin.ShiftWorldLines(virtualCameraRig.transform);
         virtualCameraRig.SetVisible(showCameras);
+        DanceOrigin.Place(splatCloud.transform);
+        LoadRoom();
         StartCoroutine(LoadSplats());
 
         LoadV3();
@@ -184,7 +214,9 @@ public class HeadMovement : MonoBehaviour
 
             try
             {
-                SmplxAvatar avatar = SmplxAvatar.Create(skin, motion, role);
+                SmplxAvatar avatar = SmplxAvatar.Create(skin, motion, role, null, manifest.RolePath(manifest.smplx_albedo, role));
+                if (manifest.smplx_albedo != null && !avatar.Textured) Warn($"{role}: albedo declared but not applied");
+                DanceOrigin.Place(avatar.transform);
                 if (avatar.FrameCount < FrameCount) Warn($"{role} avatar has {avatar.FrameCount} frames < {FrameCount}");
                 avatar.SetVisible(showAvatars);
                 avatars[role] = avatar;
@@ -194,6 +226,8 @@ public class HeadMovement : MonoBehaviour
                 Warn($"{role} avatar failed to load: {e.Message}");
             }
         }
+
+        LoadHair();
 
         if (timingData != null)
         {
@@ -208,6 +242,7 @@ public class HeadMovement : MonoBehaviour
             try
             {
                 PhysicsData physics = PhysicsData.Load(physicsPath);
+                DanceOrigin.Shift(physics);
                 physicsOverlay = new GameObject("Physics Overlay").AddComponent<PhysicsOverlay>();
                 physicsOverlay.Init(physics, timeline, BloomMaterial);
                 physicsOverlay.SetVisible(showPhysics);
@@ -216,6 +251,23 @@ public class HeadMovement : MonoBehaviour
             {
                 Warn($"physics.json unreadable ({e.Message}) - physics layer disabled");
             }
+        }
+    }
+
+    /// <summary>the follow's groomed, simulated hair (Assets/Hair) when the capture has hair_groom.json; it lives on the
+    /// follow avatar (destroyed with it) and follows the avatar's frame and visibility</summary>
+    void LoadHair()
+    {
+        string groom = manifest.OptionalPath("hair_groom.json");
+        if (groom == null || !avatars.TryGetValue(Role.Follow, out SmplxAvatar follow)) return;
+        try
+        {
+            HairStrands hair = HairStrands.Create(follow, manifest.RolePath(manifest.smplx_skin, Role.Follow), groom, timeline.AudioTimeOf);
+            if (hair.Warning != null) Warn(hair.Warning);
+        }
+        catch (Exception e)
+        {
+            Warn($"hair failed to load: {e.Message}");
         }
     }
 
@@ -241,6 +293,23 @@ public class HeadMovement : MonoBehaviour
         Debug.LogWarning($"{manifest?.DisplayName}: {message}");
     }
 
+    void LoadRoom()
+    {
+        try
+        {
+            roomMesh.Load(manifest);
+        }
+        catch (Exception e)
+        {
+            roomMesh.Clear();
+            Warn($"room mesh failed to load: {e.Message}");
+        }
+
+        DanceOrigin.Place(roomMesh.transform);
+        roomMesh.SetVisible(showRoom);
+        if (!splatsUserSet) showSplats = !roomMesh.HasContent;
+    }
+
     IEnumerator LoadSplats()
     {
         yield return splatCloud.Load(manifest);
@@ -258,6 +327,13 @@ public class HeadMovement : MonoBehaviour
     {
         // Build the full path to the WAV file in StreamingAssets
         string filePath = manifest.PathOf(manifest.audio ?? "audio.wav");
+        if (!filePath.Contains("://") && !File.Exists(filePath))
+        {
+            // exported with --no-audio (or the wav is missing): play against a silent clock so the capture works
+            Warn($"no audio ({Path.GetFileName(filePath)}) - playing with a silent clock");
+            OnClipReady(SilentClip());
+            yield break;
+        }
 
         // On most platforms, we need the "file://" prefix to read directly
         // For Android, UnityWebRequest can handle it without the prefix, but
@@ -275,55 +351,65 @@ public class HeadMovement : MonoBehaviour
         if (www.result is UnityWebRequest.Result.ConnectionError or UnityWebRequest.Result.ProtocolError)
         {
             Debug.LogError($"Error loading audio: {www.error}");
+            OnClipReady(SilentClip());
         }
         else
         {
-            // Get the AudioClip from the download handler
-            AudioClip clip = DownloadHandlerAudioClip.GetContent(www);
-
-            // Create an AudioSource (if one doesn't exist)
-            if (audioSource == null)
-            {
-                audioSource = gameObject.AddComponent<AudioSource>();
-            }
-
-            // Assign the clip and play
-            audioSource.clip = clip;
-            audioSource.pitch = Speeds[speedIndex];
-            audioSource.time = Mathf.Clamp(AudioOffset, 0, clip.length - 0.01f);
-            audioLoaded = true;
-
-            HashSet<int> framesWithUpOrDownbeat = new();
-            if (beatGrid != null)
-            {
-                for (int i = 0; i < beatGrid.Count; i++)
-                {
-                    if (beatGrid.Types[i] == 3) continue; // filter out high-hat
-
-                    if (timeline.Covers(beatGrid.Times[i])) framesWithUpOrDownbeat.Add(timeline.FrameAt(beatGrid.Times[i]));
-                }
-            }
-
-            beatIntensityByFrame = new Dictionary<int, float>();
-            float currentIntensity = 0;
-            const int intensityFalloffPeriod = 5;
-            for (int i = 0; i < FrameCount; i++)
-            {
-                if (framesWithUpOrDownbeat.Contains(i))
-                {
-                    currentIntensity = 10;
-                }
-                else if (currentIntensity > 0)
-                {
-                    currentIntensity -= 10f / intensityFalloffPeriod;
-                }
-
-                beatIntensityByFrame[i] = currentIntensity;
-            }
-
-            SetToFrameNumber();
-            Debug.Log($"Loaded performance: {captures[currentFolder]}");
+            OnClipReady(DownloadHandlerAudioClip.GetContent(www));
         }
+    }
+
+    AudioClip SilentClip()
+    {
+        const int rate = 8000;
+        int samples = Mathf.Max(rate, Mathf.CeilToInt((Mathf.Max(0f, timeline.Last) + 1f) * rate));
+        return AudioClip.Create("silence", samples, 1, rate, false);
+    }
+
+    void OnClipReady(AudioClip clip)
+    {
+        // Create an AudioSource (if one doesn't exist)
+        if (audioSource == null)
+        {
+            audioSource = gameObject.AddComponent<AudioSource>();
+        }
+
+        // Assign the clip and play
+        audioSource.clip = clip;
+        audioSource.pitch = Speeds[speedIndex];
+        audioSource.time = Mathf.Clamp(AudioOffset, 0, clip.length - 0.01f);
+        audioLoaded = true;
+
+        HashSet<int> framesWithUpOrDownbeat = new();
+        if (beatGrid != null)
+        {
+            for (int i = 0; i < beatGrid.Count; i++)
+            {
+                if (beatGrid.Types[i] == 3) continue; // filter out high-hat
+
+                if (timeline.Covers(beatGrid.Times[i])) framesWithUpOrDownbeat.Add(timeline.FrameAt(beatGrid.Times[i]));
+            }
+        }
+
+        beatIntensityByFrame = new Dictionary<int, float>();
+        float currentIntensity = 0;
+        const int intensityFalloffPeriod = 5;
+        for (int i = 0; i < FrameCount; i++)
+        {
+            if (framesWithUpOrDownbeat.Contains(i))
+            {
+                currentIntensity = 10;
+            }
+            else if (currentIntensity > 0)
+            {
+                currentIntensity -= 10f / intensityFalloffPeriod;
+            }
+
+            beatIntensityByFrame[i] = currentIntensity;
+        }
+
+        SetToFrameNumber();
+        Debug.Log($"Loaded performance: {captures[currentFolder]}");
     }
 
     static List<List<Vector3>> ReadPoses(string jsonPath)
@@ -338,7 +424,8 @@ public class HeadMovement : MonoBehaviour
         Dancer dancer = new GameObject(role.ToString()).AddComponent<Dancer>();
         float[][] jerk = null;
         if (timingData != null && timingData.Jerk.TryGetValue(role, out float[][] j) && j.Length >= frameSeconds.Length) jerk = j;
-        dancer.Init(role, poses, BloomMaterial, frameSeconds, jerk);
+        // v3 captures: the skinned follow avatar carries the groomed hair; the old LineRenderer hair is off
+        dancer.Init(role, poses, BloomMaterial, frameSeconds, jerk, legacyHair: manifest.version < 3);
         return dancer;
     }
 
@@ -494,7 +581,7 @@ public class HeadMovement : MonoBehaviour
 
     public void Stop() => Pause();
 
-    /// <summary>show/hide a visual layer: floor | tension | splats | cameras | hud | avatars | timing | physics.
+    /// <summary>show/hide a visual layer: floor | tension | splats | room | cameras | hud | avatars | timing | physics.
     /// Returns the new state.</summary>
     public bool SetLayerVisible(string layer, bool visible)
     {
@@ -502,14 +589,19 @@ public class HeadMovement : MonoBehaviour
         {
             case "floor": floorPatterns.SetVisible(showFloor = visible); break;
             case "tension": partnerConnection.SetVisible(showConnection = visible); break;
-            case "splats": splatCloud.SetVisible(showSplats = visible); break;
+            case "splats":
+                splatsUserSet = true;
+                splatCloud.SetVisible(showSplats = visible);
+                break;
+            case "room": roomMesh.SetVisible(showRoom = visible); break;
             case "cameras": virtualCameraRig.SetVisible(showCameras = visible); break;
             case "hud": showHud = visible; break;
             case "avatars": SetAvatarsVisible(visible); break;
             case "timing": SetTimingVisible(visible); break;
             case "physics": SetPhysicsVisible(visible); break;
+            case "counterbalance" or "traces" or "graph": DanceLayers.SetLayer(layer.ToLowerInvariant(), visible); break;
             default:
-                throw new ArgumentException($"unknown layer '{layer}' (floor|tension|splats|cameras|hud|avatars|timing|physics)");
+                throw new ArgumentException($"unknown layer '{layer}' (floor|tension|splats|room|cameras|hud|avatars|timing|physics|counterbalance|traces|graph)");
         }
 
         return visible;
@@ -549,7 +641,7 @@ public class HeadMovement : MonoBehaviour
             ["loopMeasure"] = loopMeasure,
             ["layers"] = new Dictionary<string, bool>
             {
-                ["floor"] = showFloor, ["tension"] = showConnection, ["splats"] = showSplats,
+                ["floor"] = showFloor, ["tension"] = showConnection, ["splats"] = showSplats, ["room"] = showRoom,
                 ["cameras"] = showCameras, ["hud"] = showHud, ["avatars"] = showAvatars, ["timing"] = showTiming,
                 ["physics"] = showPhysics
             },
@@ -557,6 +649,7 @@ public class HeadMovement : MonoBehaviour
             ["timesDriven"] = timeline?.FromTimes ?? false,
             ["warnings"] = loadWarnings.ToList()
         };
+        DanceLayers.AppendState(state);
         if (!audioLoaded) return state;
 
         state["audioTime"] = audioSource.time;
@@ -571,7 +664,9 @@ public class HeadMovement : MonoBehaviour
             return (object)new Dictionary<string, object>
             {
                 ["visible"] = kv.Value.Visible, ["frame"] = kv.Value.CurrentFrame, ["bones"] = kv.Value.BoneCount,
-                ["vertices"] = kv.Value.VertexCount, ["fkErrorMm"] = kv.Value.FkErrorMm(),
+                ["vertices"] = kv.Value.VertexCount, ["triangles"] = kv.Value.TriangleCount,
+                ["textured"] = kv.Value.Textured, ["textureSize"] = kv.Value.TextureSize,
+                ["textureFormat"] = kv.Value.TextureFormatName, ["fkErrorMm"] = kv.Value.FkErrorMm(),
                 ["minY"] = b.min.y, ["maxY"] = b.max.y, ["sizeX"] = b.size.x, ["sizeZ"] = b.size.z,
                 ["head"] = Vec(kv.Value.BonePosition(15)), ["skeletonHead"] = Vec(Lead != null && kv.Key == Role.Lead
                     ? Lead.Joint(currentFrame, SmplJoint.Head) : Follow.Joint(currentFrame, SmplJoint.Head))
@@ -605,6 +700,13 @@ public class HeadMovement : MonoBehaviour
             .Where(c => c.Active != null && currentFrame >= 0 && currentFrame < c.Active.Length && c.Active[currentFrame])
             .Select(c => $"{c.Name}:{c.Signal[currentFrame]:+0.00;-0.00}").ToList();
         state["splatsLoaded"] = splatCloud.HasContent;
+        state["room"] = new Dictionary<string, object>
+        {
+            ["loaded"] = roomMesh.HasContent, ["vertices"] = roomMesh.VertexCount, ["triangles"] = roomMesh.TriangleCount,
+            ["submeshes"] = roomMesh.SubmeshCount, ["textures"] = roomMesh.TextureCount,
+            ["boundsMin"] = Vec(roomMesh.transform.TransformPoint(roomMesh.LocalBounds.min)),
+            ["boundsMax"] = Vec(roomMesh.transform.TransformPoint(roomMesh.LocalBounds.max))
+        };
         return state;
     }
 
@@ -669,7 +771,8 @@ public class HeadMovement : MonoBehaviour
 
         if (keyboard.fKey.wasPressedThisFrame) floorPatterns.SetVisible(showFloor = !showFloor);
         if (keyboard.tKey.wasPressedThisFrame) partnerConnection.SetVisible(showConnection = !showConnection);
-        if (keyboard.gKey.wasPressedThisFrame) splatCloud.SetVisible(showSplats = !showSplats);
+        if (keyboard.gKey.wasPressedThisFrame) SetLayerVisible("splats", !showSplats);
+        if (keyboard.mKey.wasPressedThisFrame) roomMesh.SetVisible(showRoom = !showRoom);
         if (keyboard.cKey.wasPressedThisFrame) virtualCameraRig.SetVisible(showCameras = !showCameras);
         if (keyboard.hKey.wasPressedThisFrame) showHud = !showHud;
         if (keyboard.vKey.wasPressedThisFrame) SetAvatarsVisible(!showAvatars);
@@ -752,7 +855,7 @@ public class HeadMovement : MonoBehaviour
 
         GUILayout.Label("space play/pause   , . beat   [ ] measure   L loop   R restart   <- -> speed\n" +
                         "WASD/QE orbit   F floor   T tension   G splats   C cameras   H hud\n" +
-                        "V avatars   B timing   P physics");
+                        "V avatars   B timing   P physics   M room");
         GUILayout.EndArea();
 
         if (audioLoaded && timingOverlay != null && showTiming)

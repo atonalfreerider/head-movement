@@ -8,6 +8,9 @@ using UnityEngine.Rendering;
 /// binary and driven per frame by the motion binary (SMPL-X local joint rotations). The math is SMPL-X linear
 /// blend skinning: bones sit at the shaped rest joints with identity rest rotations, so bindpose_j = T(-J_j); the
 /// root bone goes to J_0 + transl. Pose-corrective blendshapes are not applied (plain LBS).
+/// Textured (skin version 2 + capture.json smplx_albedo): the mesh is split at the SMPL-X UV seams, carries the
+/// unsplit rest normals, and uses Resources/HM_AvatarLit (opaque, one texture, main light + SH: Quest-friendly) with
+/// the photoreal albedo; otherwise a translucent role-tinted URP Lit body (synthetic captures).
 /// </summary>
 public class SmplxAvatar : MonoBehaviour
 {
@@ -18,6 +21,7 @@ public class SmplxAvatar : MonoBehaviour
     Vector3 restRoot;
     SkinnedMeshRenderer skinned;
     Material material;
+    Texture2D albedo;
     int frame = -1;
 
     public Role DancerRole { get; private set; }
@@ -27,8 +31,14 @@ public class SmplxAvatar : MonoBehaviour
     public int CurrentFrame => frame;
     public bool Visible => skinned != null && skinned.enabled;
     public Bounds WorldBounds => skinned.bounds;
+    public bool Textured => albedo != null;
+    public int TextureSize => albedo != null ? albedo.width : 0;
+    public string TextureFormatName => albedo != null ? albedo.format.ToString() : null;
+    public int TriangleCount { get; private set; }
 
-    public static SmplxAvatar Create(string skinPath, string motionPath, Role role, Transform parent = null)
+    /// <param name="albedoPath">optional photoreal albedo PNG on the SMPL-X UV layout (needs a seam-split skin)</param>
+    public static SmplxAvatar Create(string skinPath, string motionPath, Role role, Transform parent = null,
+        string albedoPath = null)
     {
         SmplxData.Skin skin = SmplxData.ReadSkin(skinPath);
         SmplxData.Motion motion = SmplxData.ReadMotion(motionPath);
@@ -36,11 +46,11 @@ public class SmplxAvatar : MonoBehaviour
         GameObject go = new($"{role} SMPL-X Avatar");
         if (parent != null) go.transform.SetParent(parent, false);
         SmplxAvatar avatar = go.AddComponent<SmplxAvatar>();
-        avatar.Build(skin, motion, role);
+        avatar.Build(skin, motion, role, albedoPath);
         return avatar;
     }
 
-    void Build(SmplxData.Skin skin, SmplxData.Motion m, Role role)
+    void Build(SmplxData.Skin skin, SmplxData.Motion m, Role role, string albedoPath)
     {
         DancerRole = role;
         motion = m;
@@ -64,7 +74,11 @@ public class SmplxAvatar : MonoBehaviour
         Mesh mesh = new() { name = $"{role} SMPL-X", indexFormat = IndexFormat.UInt32 };
         mesh.vertices = skin.RestVertices;
         mesh.triangles = skin.Triangles;
-        mesh.RecalculateNormals();
+        TriangleCount = skin.Triangles.Length / 3;
+        if (skin.Textured) mesh.uv = skin.Uv;
+        // the seam-split mesh carries the unsplit normals; recalculating would crease every UV seam
+        if (skin.Normals != null) mesh.normals = skin.Normals;
+        else mesh.RecalculateNormals();
         SetBoneWeights(mesh, skin.Weights, skin.RestVertices.Length);
         mesh.bindposes = bindposes;
         mesh.RecalculateBounds();
@@ -77,8 +91,54 @@ public class SmplxAvatar : MonoBehaviour
         skinned.updateWhenOffscreen = true; // bounds follow the dance, never culled
         skinned.quality = SkinQuality.Bone4;
         skinned.shadowCastingMode = ShadowCastingMode.On;
-        material = NewMaterial(role);
+        if (skin.Textured && !string.IsNullOrEmpty(albedoPath) && System.IO.File.Exists(albedoPath))
+        {
+            albedo = LoadTexture(albedoPath, $"{role} albedo");
+            material = TexturedMaterial(role, albedo);
+        }
+
+        if (material == null)
+        {
+            if (!string.IsNullOrEmpty(albedoPath) && !skin.Textured)
+            {
+                Debug.LogWarning($"{role}: albedo given but the skin has no UVs (re-export with textures)");
+            }
+
+            material = NewMaterial(role);
+        }
+
         skinned.sharedMaterial = material;
+    }
+
+    /// <summary>PNG -> sRGB texture with mipmaps, block-compressed on the device (DXT/BC on desktop, ETC2/ASTC on
+    /// Quest) and released from CPU memory</summary>
+    public static Texture2D LoadTexture(string path, string name)
+    {
+        Texture2D tex = new(2, 2, TextureFormat.RGBA32, true, false) { name = name };
+        if (!tex.LoadImage(System.IO.File.ReadAllBytes(path), false))
+        {
+            Object.Destroy(tex);
+            throw new System.IO.InvalidDataException($"{path}: not a PNG/JPEG");
+        }
+
+        tex.wrapMode = TextureWrapMode.Clamp;
+        tex.filterMode = FilterMode.Trilinear;
+        tex.anisoLevel = 2;
+        if (tex.width % 4 == 0 && tex.height % 4 == 0) tex.Compress(true);
+        tex.Apply(true, true);
+        return tex;
+    }
+
+    static Material TexturedMaterial(Role role, Texture2D tex)
+    {
+        Shader shader = Resources.Load<Shader>("HM_AvatarLit");
+        if (shader == null) shader = Shader.Find("HeadMovement/AvatarLit");
+        if (shader == null) shader = Shader.Find("Universal Render Pipeline/Simple Lit");
+        Material mat = new(shader) { name = $"{role} avatar (textured)" };
+        mat.SetTexture("_BaseMap", tex);
+        mat.SetColor("_BaseColor", Color.white);
+        mat.renderQueue = (int)RenderQueue.Geometry;
+        return mat;
     }
 
     /// <summary>top-4 LBS weights per vertex, renormalised (SMPL-X vertices rarely carry more than 4)</summary>
@@ -151,14 +211,26 @@ public class SmplxAvatar : MonoBehaviour
         frameNumber = Mathf.Clamp(frameNumber, 0, motion.FrameCount - 1);
         if (frameNumber == frame) return;
         frame = frameNumber;
+        PoseBones(frame);
+    }
 
-        int o = frame * SmplxData.Joints;
-        bones[0].localPosition = restRoot + motion.Transl[frame];
+    /// <summary>pose the bones at a frame without changing CurrentFrame (hair pre-roll / catch-up reads earlier frames
+    /// and then poses the shown frame again)</summary>
+    public void PoseBones(int frameNumber)
+    {
+        frameNumber = Mathf.Clamp(frameNumber, 0, motion.FrameCount - 1);
+        int o = frameNumber * SmplxData.Joints;
+        bones[0].localPosition = restRoot + motion.Transl[frameNumber];
         for (int j = 0; j < SmplxData.Joints; j++)
         {
             bones[j].localRotation = motion.Rotations[o + j];
         }
     }
+
+    /// <summary>a SMPL-X bone (e.g. 15 = head) - for attachments like the hair</summary>
+    public Transform Bone(int joint) => bones[joint];
+
+    public SmplxData.Motion Motion => motion;
 
     public void SetVisible(bool visible)
     {
@@ -201,5 +273,6 @@ public class SmplxAvatar : MonoBehaviour
     {
         if (skinned != null && skinned.sharedMesh != null) Destroy(skinned.sharedMesh);
         if (material != null) Destroy(material);
+        if (albedo != null) Destroy(albedo);
     }
 }

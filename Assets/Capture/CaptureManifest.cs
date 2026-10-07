@@ -10,7 +10,9 @@ using UnityEngine;
 /// otherwise falls back to the original layout: video_meta.json, figure1.json, figure2.json, audio.wav and
 /// zouk-time-analysis.json (or the "&lt;stem&gt;_zouk-time-analysis.json" name beat_this writes).
 /// Version 3 (dancecap export_unity) adds times.json (per-frame reference seconds - playback looks frames up by
-/// audio time, never by a constant fps), per-dancer SMPL-X motion + skin binaries, timing.json and physics.json.
+/// audio time, never by a constant fps), per-dancer SMPL-X motion + skin binaries, timing.json and physics.json,
+/// and optionally per-dancer albedo textures (smplx_albedo), the room mesh (room) and the Quest room splat
+/// (environment_splat with its SfM -> Unity matrix).
 /// </summary>
 public class CaptureManifest
 {
@@ -41,6 +43,12 @@ public class CaptureManifest
 
     /// <summary>role -> shaped SMPL-X skin binary (rest vertices, faces, LBS weights, rest joints, parents)</summary>
     public Dictionary<string, string> smplx_skin;
+
+    /// <summary>role -> photoreal albedo PNG on the SMPL-X UV layout (needs a version-2 seam-split skin)</summary>
+    public Dictionary<string, string> smplx_albedo;
+
+    /// <summary>static room mesh for Quest (room_mesh.bin, Unity coordinates, photo textures)</summary>
+    public RoomRef room;
 
     public string timing;
     public string physics;
@@ -153,6 +161,16 @@ public class CaptureManifest
         public float[] scene_to_unity;
 
         public Matrix4x4 SceneToUnity() => ToMatrix(scene_to_unity);
+    }
+
+    [Serializable]
+    public class RoomRef
+    {
+        public string mesh;
+        public string shading;
+        public int triangles;
+        public int vertices;
+        public List<string> textures;
     }
 
     [Serializable]

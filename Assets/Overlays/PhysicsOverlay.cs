@@ -140,6 +140,9 @@ public class PhysicsOverlay : MonoBehaviour
         Apply(f);
     }
 
+    static bool Finite(float x) => !float.IsNaN(x) && !float.IsInfinity(x);
+    static bool Finite(Vector3 v) => Finite(v.x) && Finite(v.y) && Finite(v.z);
+
     void Apply(int f)
     {
         frame = f;
@@ -147,42 +150,94 @@ public class PhysicsOverlay : MonoBehaviour
         foreach ((Role role, Visual v) in visuals)
         {
             PhysicsData.DancerTrack d = data.Dancers[role];
-            Vector3 com = d.Com[f];
-            bool ok = !float.IsNaN(com.x);
-            v.Com.SetActive(ok);
-            if (!ok) continue;
-            v.Com.transform.position = com;
-            v.Plumb.SetPosition(0, com);
-            v.Plumb.SetPosition(1, new Vector3(com.x, 0.003f, com.z));
-
-            Vector2 x = d.XcomXZ[f];
-            v.Xcom.SetActive(!float.IsNaN(x.x));
-            v.Xcom.transform.position = new Vector3(x.x, 0.004f, x.y);
-            float margin = d.BalanceMargin[f];
-            OverlayDraw.SetMarkerColor(v.Xcom, float.IsNaN(margin) ? Color.gray
-                : margin >= 0.03f ? new Color(0.2f, 1f, 0.4f)
-                : margin >= 0f ? new Color(1f, 0.8f, 0.1f) : new Color(1f, 0.15f, 0.1f));
-
-            Vector3 force = d.FNet[f];
-            Vector3 tip = com + force * MetresPerNewton;
-            OverlayDraw.Arrow(v.Arrow, com, tip, viewer);
-            Vector3 band = d.FNetBand[f] * MetresPerNewton;
-            OverlayDraw.Ring(v.BandRing, tip, Mathf.Max(0.01f, new Vector2(band.x, band.z).magnitude));
-            v.BandTick.SetPosition(0, tip - Vector3.up * Mathf.Max(0.005f, band.y));
-            v.BandTick.SetPosition(1, tip + Vector3.up * Mathf.Max(0.005f, band.y));
-
+            // physics.py writes non-finite values (flight, gaps, repaired frames) as null -> NaN here. Every visual
+            // of a dancer is shown only when its inputs are finite this frame: nothing keeps a stale position and
+            // no LineRenderer ever receives a NaN point.
+            Vector3 nan3 = new(float.NaN, float.NaN, float.NaN);
+            Vector3 com = d.Com != null && f < d.Com.Length ? d.Com[f] : nan3;
+            Vector3 force = d.FNet != null && f < d.FNet.Length ? d.FNet[f] : nan3;
+            Vector3 band = d.FNetBand != null && f < d.FNetBand.Length ? d.FNetBand[f] : nan3;
+            Vector2 x = d.XcomXZ != null && f < d.XcomXZ.Length ? d.XcomXZ[f] : new Vector2(float.NaN, float.NaN);
             Vector2[] poly = d.Support != null && f < d.Support.Length ? d.Support[f] : null;
-            if (poly != null && poly.Length >= 2)
+            bool comOk = Finite(com);
+            bool forceOk = comOk && Finite(force);
+            bool bandOk = forceOk && Finite(band);
+            bool xcomOk = Finite(x.x) && Finite(x.y);
+            bool supportOk = comOk && poly != null && poly.Length >= 2;
+
+            v.Com.SetActive(comOk);
+            v.Plumb.gameObject.SetActive(comOk);
+            v.Arrow.gameObject.SetActive(forceOk);
+            v.BandRing.gameObject.SetActive(bandOk);
+            v.BandTick.gameObject.SetActive(bandOk);
+            v.Xcom.SetActive(xcomOk);
+            v.Support.gameObject.SetActive(supportOk);
+
+            if (comOk)
+            {
+                v.Com.transform.position = com;
+                v.Plumb.SetPosition(0, com);
+                v.Plumb.SetPosition(1, new Vector3(com.x, 0.003f, com.z));
+            }
+
+            if (xcomOk)
+            {
+                v.Xcom.transform.position = new Vector3(x.x, 0.004f, x.y);
+                float margin = d.BalanceMargin != null && f < d.BalanceMargin.Length ? d.BalanceMargin[f] : float.NaN;
+                OverlayDraw.SetMarkerColor(v.Xcom, !Finite(margin) ? Color.gray
+                    : margin >= 0.03f ? new Color(0.2f, 1f, 0.4f)
+                    : margin >= 0f ? new Color(1f, 0.8f, 0.1f) : new Color(1f, 0.15f, 0.1f));
+            }
+
+            if (forceOk)
+            {
+                Vector3 tip = com + force * MetresPerNewton;
+                OverlayDraw.Arrow(v.Arrow, com, tip, viewer);
+                if (bandOk)
+                {
+                    Vector3 b = band * MetresPerNewton;
+                    float ring = new Vector2(b.x, b.z).magnitude; // finite: bandOk
+                    float tick = Mathf.Abs(b.y);
+                    OverlayDraw.Ring(v.BandRing, tip, ring > 0.01f ? ring : 0.01f);
+                    v.BandTick.SetPosition(0, tip - Vector3.up * (tick > 0.005f ? tick : 0.005f));
+                    v.BandTick.SetPosition(1, tip + Vector3.up * (tick > 0.005f ? tick : 0.005f));
+                }
+            }
+
+            if (supportOk)
             {
                 v.Support.positionCount = poly.Length;
                 for (int i = 0; i < poly.Length; i++) v.Support.SetPosition(i, new Vector3(poly[i].x, 0.005f, poly[i].y));
-                v.Support.enabled = true;
-            }
-            else
-            {
-                v.Support.enabled = false;
             }
         }
+    }
+
+    /// <summary>visual objects of a dancer that are currently shown (playtests: none may hold a stale frame)</summary>
+    public int ActiveVisuals(Role role)
+    {
+        if (!visuals.TryGetValue(role, out Visual v)) return 0;
+        GameObject[] all =
+        {
+            v.Com, v.Xcom, v.Plumb.gameObject, v.Arrow.gameObject, v.BandRing.gameObject, v.BandTick.gameObject,
+            v.Support.gameObject
+        };
+        return all.Count(g => g.activeInHierarchy);
+    }
+
+    void OnDestroy()
+    {
+        // OverlayDraw.Marker creates one material per marker: free them with the overlay (capture reloads)
+        foreach (Visual v in visuals.Values)
+        {
+            foreach (GameObject marker in new[] { v.Com, v.Xcom })
+            {
+                if (marker == null) continue;
+                Renderer r = marker.GetComponent<Renderer>();
+                if (r != null && r.sharedMaterial != null) Destroy(r.sharedMaterial);
+            }
+        }
+
+        visuals.Clear();
     }
 
     public IEnumerable<string> HudLines()
@@ -191,6 +246,12 @@ public class PhysicsOverlay : MonoBehaviour
         foreach ((Role role, PhysicsData.DancerTrack d) in data.Dancers)
         {
             Vector3 fN = d.FNet[frame], b = d.FNetBand[frame];
+            if (float.IsNaN(fN.x) || float.IsNaN(d.Com[frame].x))
+            {
+                yield return $"{role}: no physics this frame (gap / flight)";
+                continue;
+            }
+
             float margin = d.BalanceMargin[frame];
             string contact = d.Contact != null && frame < d.Contact.Length ? d.Contact[frame] : "?";
             yield return $"{role}: F_net {fN.magnitude:0} N (vert {fN.y:0} ±{b.y:0}, horiz ±{new Vector2(b.x, b.z).magnitude:0})" +
@@ -211,7 +272,8 @@ public class PhysicsOverlay : MonoBehaviour
         return new Dictionary<string, object>
         {
             ["com"] = new[] { com.x, com.y, com.z }, ["fNetN"] = d.FNet[frame].magnitude,
-            ["balanceMargin"] = d.BalanceMargin[frame], ["comMarkerActive"] = visuals[role].Com.activeInHierarchy
+            ["balanceMargin"] = d.BalanceMargin[frame], ["comMarkerActive"] = visuals[role].Com.activeInHierarchy,
+            ["activeVisuals"] = ActiveVisuals(role)
         };
     }
 }

@@ -117,8 +117,10 @@ public class Dancer : MonoBehaviour
     /// <param name="frameTimes">seconds of every pose frame (real timestamps; only differences matter)</param>
     /// <param name="precomputedJerk">optional |jerk| per frame per SMPL-24 joint (timing.json spline jerk); when
     /// null or the wrong size, jerk comes from central differences on frameTimes</param>
+    /// <param name="legacyHair">the original LineRenderer HairSimulation on the follow (v1/v2 captures). v3 captures
+    /// pass false: their skinned avatar carries the groomed hair (Assets/Hair/HairStrands)</param>
     public void Init(Role role, List<List<Vector3>> posesByFrame, Material bloomMat, float[] frameTimes,
-        float[][] precomputedJerk = null)
+        float[][] precomputedJerk = null, bool legacyHair = true)
     {
         BloomMat = bloomMat;
         BuildSmpl(role);
@@ -159,8 +161,12 @@ public class Dancer : MonoBehaviour
                     colorSpectrum[i] = new Color(.2f, .2f, .2f) * multiplier;
                 }
 
-                hairSimulation = new GameObject("Hair Simulation").AddComponent<HairSimulation>();
-                hairSimulation.transform.SetParent(transform, false);
+                if (legacyHair)
+                {
+                    hairSimulation = new GameObject("Hair Simulation").AddComponent<HairSimulation>();
+                    hairSimulation.transform.SetParent(transform, false);
+                }
+
                 break;
             }
             case Role.Lead:
@@ -261,13 +267,16 @@ public class Dancer : MonoBehaviour
         {
             case Role.Follow:
             {
-                Vector3 head = pose[(int)SmplJoint.Head];
-                hairSimulation.transform.position = head;
-                hairSimulation.transform.LookAt(GetNose(frameNumber));
-                hairSimulation.transform.Rotate(Vector3.right, -60f);
-                hairSimulation.transform.Rotate(Vector3.up, 180f);
+                if (hairSimulation != null)
+                {
+                    Vector3 head = pose[(int)SmplJoint.Head];
+                    hairSimulation.transform.position = head;
+                    hairSimulation.transform.LookAt(GetNose(frameNumber));
+                    hairSimulation.transform.Rotate(Vector3.right, -60f);
+                    hairSimulation.transform.Rotate(Vector3.up, 180f);
 
-                hairSimulation.Init(BloomMat);
+                    hairSimulation.Init(BloomMat);
+                }
 
                 Vector3[] spineArray = new Vector3[smplFollowSpine.Length];
                 for (int i = 0; i < smplFollowSpine.Length; i++)
@@ -716,6 +725,9 @@ public class Dancer : MonoBehaviour
 
     /// <summary>where the per-joint jerk driving the glow came from (for hm_state)</summary>
     public string JerkSource { get; private set; }
+
+    /// <summary>true when the original LineRenderer hair is attached (v1/v2 captures only)</summary>
+    public bool HasLegacyHair => hairSimulation != null;
 
     public Role DancerRole => Role;
 
