@@ -5,14 +5,15 @@
 // an alpha test without it), and the original head-movement tip bloom: white emission along the strand following
 // the 6-point curve of the old LineRenderer hair (above 1.0 from s = 0.73, 3.1 at the tip; dancecap
 // docs/HAIR_REFERENCE.md section 5). Opaque queue (AlphaTest), depth write, no shadow pass (Quest budget).
+// LEGACY: kept for the A/B renderer (hm_hair --mode ribbons); the default hair is HM_HairCards + HM_HairTips.
 Shader "HeadMovement/HairStrands"
 {
     Properties
     {
-        _RootColor ("Root (linear)", Vector) = (0.19, 0.03, 0.02, 1)
-        _MidColor ("Mid (linear)", Vector) = (0.175, 0.025, 0.017, 1)
-        _TipColor ("Tip (linear)", Vector) = (0.16, 0.026, 0.018, 1)
-        _HighlightColor ("Highlight (linear)", Vector) = (0.58, 0.096, 0.077, 1)
+        _RootColor ("Root (linear)", Vector) = (0.16, 0.05, 0.03, 1)
+        _MidColor ("Mid (linear)", Vector) = (0.16, 0.05, 0.03, 1)
+        _TipColor ("Tip (linear)", Vector) = (0.16, 0.05, 0.03, 1)
+        _HighlightColor ("Highlight (linear)", Vector) = (0.5, 0.2, 0.12, 1)
         _VarLo ("Strand variation low", Float) = 0.6
         _VarHi ("Strand variation high", Float) = 1.6
         _WidthRoot ("Ribbon width root (m)", Float) = 0.022

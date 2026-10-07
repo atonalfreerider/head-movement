@@ -9,12 +9,18 @@ using VRTKLite.Controllers;
 /// View states (VIEWER_SPEC 4) and the prototype directed tour (6, "hm_tour"; Timeline + Cinemachine later):
 /// Orbit -> [Camera tour: slot, skipped until source videos are exported] -> Overhead floor craft -> Geometry ->
 /// Physics -> Dance graph -> Fingerprint. Each state lasts a whole number of measures (switches on measure starts)
-/// and blends avatar opacity, skeleton fade, graph fade and the camera over BlendSeconds. The camera is driven
-/// through the existing desktop CameraControl (Center + SetOrbit) in LateUpdate; in VR (no CameraControl) the
-/// states only change layers - the director never moves the user. Stop() restores every layer it touched.
+/// and blends avatar opacity, skeleton fade, graph fade and the camera over BlendSeconds.
+/// Camera (VIEWER_SPEC 5.2): the tour is the desktop rig's ICameraDirector. The rig (CameraControl, order -20) asks
+/// TryGetCameraPose each LateUpdate for the CURRENT state's pose only; each state's eye height depends on the state
+/// only, never on the dancers, and follows the rig's damped XZ anchors. Every state switch is a new Shot: the rig
+/// blends cylindrically from the pose on screen (so a switch, or a switch during a blend, never pops). Each state's
+/// motion runs on its own phase from its entry. Explicit commands (start, goto, next, hm_graph, the O key) hand the
+/// camera to the director; the automatic measure-boundary advance does not take it back from a user who flew away
+/// (W A S D Q E Z X). In VR there is no rig: the states only change layers.
+/// Stop() restores every layer it touched and hands the camera to free-fly where it is.
 /// </summary>
-[DefaultExecutionOrder(-10)] // camera first, so the view-facing overlay strips use this frame's camera
-public class DanceTour : MonoBehaviour
+[DefaultExecutionOrder(-10)]
+public class DanceTour : MonoBehaviour, ICameraDirector
 {
     public enum View
     {
@@ -37,32 +43,45 @@ public class DanceTour : MonoBehaviour
 
     static readonly string[] HeadLayers = { "floor", "timing", "physics", "tension", "avatars", "hud" };
 
+    // avatar opacity per state as a factor of the user default (HeadMovement.AvatarOpacity, ~0.3):
+    // Orbit 0.3, Overhead 0.2, Geometry 0.15, Physics 0.1 at the 0.3 default (VIEWER_SPEC 4)
+    static float OpacityFactor(View v) => v switch
+    {
+        View.Orbit or View.CameraTour => 1f,
+        View.Overhead => 2f / 3f,
+        View.Geometry => 0.5f,
+        View.Physics => 1f / 3f,
+        _ => 0f
+    };
+
     View current = View.None, previous = View.None;
     bool running; // auto-advance
     int sequenceIndex = -1;
     int measuresInState;
     int lastMeasure = -1;
     float stateStart, blendStart = -10f;
-    float orbitPhase;
+    float phase; // Time.time at the current state's entry (its orbit / drift clock)
+    int shot;
+    float shotBlend;
     readonly Dictionary<string, bool> savedHeadLayers = new();
-    readonly Dictionary<Material, float> savedAlpha = new();
     readonly Dictionary<LineRenderer, float> savedWidth = new();
     readonly List<LineRenderer> lineBuffer = new();
     List<LineRenderer> contactLines;
     float avatarAlphaFrom = -1, avatarAlphaTo = -1, skeletonFrom = 1, skeletonTo = 1, graphFrom, graphTo;
-    float avatarAlphaNow = -1, skeletonNow = 1, graphNow;
-    bool cameraOwned;
-    Vector3 eyeSmooth, targetSmooth;
-    bool smoothValid;
-    float lastFrameTime = float.NaN;
+    float avatarAlphaNow = -1, skeletonNow = 1, graphNow, opacityBase = -1;
+    // dance-graph chase smoothing (XZ 0.5 s, Y 1.0 s); exact when paused or on a cut
+    Vector3 chaseEye, chaseLook, chaseEyeVel, chaseLookVel;
+    bool chaseValid;
     string skippedNote;
-    float baseFov = -1f;
     readonly List<Dictionary<string, object>> history = new(); // running tour: state switches (dance time, measure)
     public float OverheadFov = 24f;
 
     public View Current => current;
     public bool Running => running;
     public bool Active => current != View.None;
+    public string DirectorState => Name(current);
+    public int Shot => shot;
+    public float ShotBlendSeconds => shotBlend;
 
     DanceLayers Layers => DanceLayers.Instance;
     HeadMovement Hm => Layers != null ? Layers.Head : HeadMovement.Instance;
@@ -111,7 +130,7 @@ public class DanceTour : MonoBehaviour
         hm.Play();
         history.Clear();
         sequenceIndex = start - 1;
-        Advance();
+        Advance(true);
         return Status();
     }
 
@@ -138,7 +157,7 @@ public class DanceTour : MonoBehaviour
     public string Next()
     {
         if (current == View.None) return StartTour(restart: false);
-        Advance();
+        Advance(true);
         return Status();
     }
 
@@ -162,15 +181,7 @@ public class DanceTour : MonoBehaviour
         }
 
         savedHeadLayers.Clear();
-        foreach (KeyValuePair<Material, float> kv in savedAlpha)
-        {
-            if (kv.Key == null) continue;
-            Color c = kv.Key.GetColor("_BaseColor");
-            c.a = kv.Value;
-            kv.Key.SetColor("_BaseColor", c);
-        }
-
-        savedAlpha.Clear();
+        hm?.SetDirectorAvatarOpacity(null); // back to the user default
         foreach (KeyValuePair<LineRenderer, float> kv in savedWidth)
         {
             if (kv.Key == null) continue;
@@ -180,6 +191,7 @@ public class DanceTour : MonoBehaviour
 
         savedWidth.Clear();
         avatarAlphaNow = -1;
+        opacityBase = -1;
         skeletonNow = 1;
         if (Layers != null)
         {
@@ -192,31 +204,29 @@ public class DanceTour : MonoBehaviour
             Layers.Hud.SetTour(null);
         }
 
-        cameraOwned = false;
-        smoothValid = false;
-        Camera cam = DanceText.ViewCamera;
-        if (cam != null && baseFov > 0) cam.fieldOfView = baseFov;
-        baseFov = -1f;
+        chaseValid = false;
+        CameraControl rig = Rig();
+        if (rig != null && rig.Mode == CameraControl.Owner.Director) rig.TakeControl(); // free-fly from where it is
     }
 
     /// <summary>a new capture was loaded: the old avatars/skeletons are gone - forget their saved values and re-enter</summary>
     public void OnCaptureLoaded()
     {
-        savedAlpha.Clear();
         savedWidth.Clear();
         contactLines = null;
         avatarAlphaNow = -1;
         skeletonNow = 1;
-        smoothValid = false;
+        chaseValid = false;
         if (current != View.None)
         {
             View v = current;
             current = View.None;
-            Enter(v, false);
+            Enter(v, false, false); // the camera keeps its owner (the rig snaps on the new capture)
         }
     }
 
-    void Advance()
+    /// <param name="grabCamera">explicit commands take the camera; the running tour's measure-boundary advance does not</param>
+    void Advance(bool grabCamera)
     {
         for (int guard = 0; guard < Sequence.Length + 1; guard++)
         {
@@ -230,7 +240,7 @@ public class DanceTour : MonoBehaviour
 
             if ((v is View.DanceGraph or View.Fingerprint) && Layers?.Graph == null) continue; // no moves/ in this capture
 
-            Enter(v);
+            Enter(v, true, grabCamera);
             if (running) Record(v);
             return;
         }
@@ -263,20 +273,27 @@ public class DanceTour : MonoBehaviour
 
     // ---------------------------------------------------------------- state parameters
 
-    void Enter(View view, bool blend = true)
+    void Enter(View view, bool blend = true, bool grabCamera = true)
     {
         HeadMovement hm = Hm;
         DanceLayers layers = Layers;
         if (hm == null || layers == null) return;
         if (savedHeadLayers.Count == 0) SaveHeadLayers(hm);
+        bool newShot = view != current || !blend; // re-entering the shown state keeps its camera (no restart, no pop)
         previous = blend ? current : view;
         current = view;
         stateStart = Time.time;
         blendStart = blend ? Time.time : -10f;
         measuresInState = 0;
         lastMeasure = -1;
-        smoothValid = smoothValid && blend;
-        if (view == View.Orbit || view == View.Geometry) orbitPhase = Time.time;
+        if (view == View.DanceGraph && previous != View.DanceGraph) chaseValid = false;
+        if (newShot)
+        {
+            // the camera: a new shot that the rig blends into from whatever is on screen (or cuts to: capture load)
+            phase = Time.time;
+            shot++;
+            shotBlend = blend ? BlendSeconds : 0f;
+        }
 
         bool graphView = view == View.DanceGraph || view == View.Fingerprint;
         // layers of the full-size dance (§4 table); the graph states fade the dance out
@@ -294,15 +311,9 @@ public class DanceTour : MonoBehaviour
             : DanceGraphLayer.Mode.Off;
         layers.ApplyVisibility();
 
-        avatarAlphaFrom = avatarAlphaNow < 0 ? CurrentAvatarAlpha(hm) : avatarAlphaNow;
-        avatarAlphaTo = view switch
-        {
-            View.Orbit or View.CameraTour => 0.3f,
-            View.Overhead => 0.2f,
-            View.Geometry => 0.15f,
-            View.Physics => 0.1f,
-            _ => 0f
-        };
+        avatarAlphaFrom = avatarAlphaNow < 0 ? hm.EffectiveAvatarOpacity : avatarAlphaNow;
+        opacityBase = hm.AvatarOpacity;
+        avatarAlphaTo = opacityBase * OpacityFactor(view);
         skeletonFrom = skeletonNow;
         skeletonTo = graphView ? 0f : 1f;
         graphFrom = previous is View.DanceGraph or View.Fingerprint ? 1f : 0f;
@@ -315,8 +326,24 @@ public class DanceTour : MonoBehaviour
         }
 
         ApplyBlend(blend ? 0f : 1f);
-        cameraOwned = true;
+        if (grabCamera) Rig()?.UseDirector(blend);
         UpdateTourLabel();
+    }
+
+    /// <summary>the desktop camera rig (null in VR, where the director never moves the user); registers this tour as
+    /// its director</summary>
+    CameraControl Rig()
+    {
+        CameraControl rig = Hm != null ? Hm.OrbitCamera : null;
+        if (rig == null) return null;
+        if (!ReferenceEquals(rig.Director, this)) rig.Director = this;
+        return rig;
+    }
+
+    void OnDisable()
+    {
+        CameraControl rig = HeadMovement.Instance != null ? HeadMovement.Instance.OrbitCamera : null;
+        if (rig != null && ReferenceEquals(rig.Director, this)) rig.Director = null;
     }
 
     void SaveHeadLayers(HeadMovement hm)
@@ -328,17 +355,6 @@ public class DanceTour : MonoBehaviour
     static void SetHead(HeadMovement hm, string layer, bool on)
     {
         if (hm.LayerVisible(layer) != on) hm.SetLayerVisible(layer, on);
-    }
-
-    float CurrentAvatarAlpha(HeadMovement hm)
-    {
-        foreach (SmplxAvatar a in hm.Avatars.Values)
-        {
-            Renderer r = a != null ? a.GetComponent<Renderer>() : null;
-            if (r != null && r.sharedMaterial != null && r.sharedMaterial.HasProperty("_BaseColor")) return r.sharedMaterial.GetColor("_BaseColor").a;
-        }
-
-        return 0.6f;
     }
 
     void ApplyBlend(float k)
@@ -359,19 +375,7 @@ public class DanceTour : MonoBehaviour
     void SetAvatarAlpha(HeadMovement hm, float alpha)
     {
         avatarAlphaNow = alpha;
-        foreach (SmplxAvatar a in hm.Avatars.Values)
-        {
-            if (a == null) continue;
-            Renderer r = a.GetComponent<Renderer>();
-            if (r == null) continue;
-            Material m = r.sharedMaterial;
-            if (m == null || !m.HasProperty("_BaseColor")) continue;
-            Color c = m.GetColor("_BaseColor");
-            if (!savedAlpha.ContainsKey(m)) savedAlpha[m] = c.a;
-            c.a = alpha;
-            m.SetColor("_BaseColor", c);
-            if (r.enabled != alpha > 0.005f && hm.LayerVisible("avatars")) r.enabled = alpha > 0.005f;
-        }
+        hm.SetDirectorAvatarOpacity(alpha); // SmplxAvatar.Opacity; the body hides itself at 0 (hair and shoes follow)
     }
 
     void SetSkeletonWidth(HeadMovement hm, float k)
@@ -459,10 +463,20 @@ public class DanceTour : MonoBehaviour
         // (a script reload in Play mode leaves HeadMovement without its non-serialised state: do nothing)
         if (hm == null || layers == null || !hm.AudioLoaded || hm.Timeline == null || hm.LeadDancer == null || hm.FollowDancer == null) return;
 
+        if (opacityBase >= 0 && Mathf.Abs(opacityBase - hm.AvatarOpacity) > 1e-4f)
+        {
+            // hm_opacity changed the user default while a state is shown: re-target from where the blend is
+            opacityBase = hm.AvatarOpacity;
+            avatarAlphaFrom = avatarAlphaNow < 0 ? hm.EffectiveAvatarOpacity : avatarAlphaNow;
+            avatarAlphaTo = opacityBase * OpacityFactor(current);
+            if (Time.time - blendStart >= BlendSeconds) avatarAlphaFrom = avatarAlphaTo;
+        }
+
         float k = BlendSeconds > 0 ? Mathf.Clamp01((Time.time - blendStart) / BlendSeconds) : 1f;
-        if (k < 1f || Mathf.Abs(graphNow - graphTo) > 1e-3f || Mathf.Abs(skeletonNow - skeletonTo) > 1e-3f) ApplyBlend(k);
+        if (k < 1f || Mathf.Abs(graphNow - graphTo) > 1e-3f || Mathf.Abs(skeletonNow - skeletonTo) > 1e-3f ||
+            Mathf.Abs(avatarAlphaNow - avatarAlphaTo) > 1e-3f) ApplyBlend(k);
         if (running) TickTour(hm);
-        if (cameraOwned) DriveCamera(hm, layers, k);
+        Rig(); // keep the registration (the rig asks TryGetCameraPose in its own LateUpdate)
     }
 
     void TickTour(HeadMovement hm)
@@ -485,7 +499,7 @@ public class DanceTour : MonoBehaviour
         BeatGrid beats = hm.Beats;
         if (beats == null)
         {
-            if (Time.time - stateStart > 6f) Advance();
+            if (Time.time - stateStart > 6f) Advance(false);
             return;
         }
 
@@ -503,66 +517,34 @@ public class DanceTour : MonoBehaviour
         }
 
         int length = current == View.DanceGraph ? GraphMeasures : MeasuresPerState;
-        if (measuresInState >= length) Advance();
+        if (measuresInState >= length) Advance(false);
     }
 
-    void DriveCamera(HeadMovement hm, DanceLayers layers, float blend)
+    /// <summary>ICameraDirector: the camera pose of the current state only (the rig blends shot changes from the pose on
+    /// screen). Eye heights depend on the state only; the follow states orbit the rig's damped XZ anchors.</summary>
+    public bool TryGetCameraPose(in CameraFollow follow, float dt, out Vector3 eye, out Vector3 look, out float fov)
     {
-        CameraControl control = hm.OrbitCamera;
-        if (control == null || !control.gameObject.activeInHierarchy) return; // VR: never move the user
+        eye = look = Vector3.zero;
+        fov = float.NaN;
+        if (current == View.None) return false;
+        HeadMovement hm = Hm;
+        DanceLayers layers = Layers;
+        if (hm == null || layers == null || !hm.AudioLoaded || hm.Timeline == null || hm.LeadDancer == null || hm.FollowDancer == null) return false;
         int frame = hm.CurrentFrame;
-        if (frame < 0) return;
+        if (frame < 0) return false;
         float t = hm.Timeline.AudioTimeOf(frame);
-        Pose(current, hm, layers, t, frame, out Vector3 eye, out Vector3 target);
-        if (blend < 1f && previous != View.None && previous != current)
+        CameraFollow f = follow;
+        if (!f.Valid)
         {
-            Pose(previous, hm, layers, t, frame, out Vector3 eye0, out Vector3 target0);
-            float s = Mathf.SmoothStep(0f, 1f, blend);
-            eye = Vector3.Lerp(eye0, eye, s);
-            target = Vector3.Lerp(target0, target, s);
+            Vector3 c = (hm.LeadDancer.Joint(frame, SmplJoint.Pelvis) + hm.FollowDancer.Joint(frame, SmplJoint.Pelvis)) * 0.5f;
+            f.Raw = f.LookAnchor = f.EyeAnchor = new Vector2(c.x, c.z);
         }
 
-        // smooth while playing (pose jitter, chase direction changes); exact when paused (screenshots, playtests)
-        bool jumped = float.IsNaN(lastFrameTime) || Mathf.Abs(t - lastFrameTime) > 0.5f;
-        lastFrameTime = t;
-        if (hm.IsPlaying && smoothValid && !jumped)
-        {
-            float tau = current == View.DanceGraph ? 0.35f : 0.2f;
-            float a = 1f - Mathf.Exp(-Time.deltaTime / tau);
-            eyeSmooth = Vector3.Lerp(eyeSmooth, eye, a);
-            targetSmooth = Vector3.Lerp(targetSmooth, target, a);
-        }
-        else
-        {
-            eyeSmooth = eye;
-            targetSmooth = target;
-        }
-
-        smoothValid = true;
-        Camera cam = DanceText.ViewCamera;
-        if (cam != null)
-        {
-            if (baseFov < 0) baseFov = cam.fieldOfView;
-            float fov = Fov(current);
-            if (blend < 1f && previous != View.None) fov = Mathf.Lerp(Fov(previous), fov, Mathf.SmoothStep(0f, 1f, blend));
-            if (Mathf.Abs(cam.fieldOfView - fov) > 0.01f) cam.fieldOfView = fov;
-        }
-
-        Vector3 d = eyeSmooth - targetSmooth;
-        float r = Mathf.Max(0.3f, d.magnitude);
-        float polar = Mathf.Acos(Mathf.Clamp(d.y / r, -1f, 1f));
-        float azimuth = Mathf.Atan2(d.z, d.x);
-        control.Center = targetSmooth;
-        control.SetOrbit(azimuth, polar, r);
+        Pose(current, layers, t, f, dt, out eye, out look, out fov);
+        return true;
     }
 
-    float Fov(View v) => v == View.Overhead ? OverheadFov : baseFov > 0 ? baseFov : 60f;
-
-    static Vector3 CoupleCentre(HeadMovement hm, int frame)
-    {
-        Vector3 c = (hm.LeadDancer.Joint(frame, SmplJoint.Pelvis) + hm.FollowDancer.Joint(frame, SmplJoint.Pelvis)) * 0.5f;
-        return new Vector3(c.x, 0.95f, c.z);
-    }
+    static Vector3 At(Vector2 xz, float y) => new(xz.x, y, xz.y);
 
     static Vector3 Spherical(Vector3 target, float azimuthDeg, float elevationDeg, float radius)
     {
@@ -570,50 +552,84 @@ public class DanceTour : MonoBehaviour
         return target + new Vector3(Mathf.Cos(el) * Mathf.Cos(az), Mathf.Sin(el), Mathf.Cos(el) * Mathf.Sin(az)) * radius;
     }
 
-    void Pose(View view, HeadMovement hm, DanceLayers layers, float t, int frame, out Vector3 eye, out Vector3 target)
+    /// <summary>one state's camera: look point on the look anchor at the state's height, eye on a sphere around the eye
+    /// anchor at the same height (so the eye height is the state's, whatever the dancers do)</summary>
+    void Pose(View view, DanceLayers layers, float t, in CameraFollow f, float dt, out Vector3 eye, out Vector3 look, out float fov)
     {
-        float since = Time.time - orbitPhase;
+        float since = Time.time - phase;
+        fov = float.NaN;
         switch (view)
         {
             case View.Overhead:
             {
                 Rect area = layers.DanceArea;
-                target = new Vector3(area.center.x, 0f, area.center.y);
+                look = new Vector3(area.center.x, 0f, area.center.y);
                 Camera cam = DanceText.ViewCamera;
                 float vfov = OverheadFov * Mathf.Deg2Rad;
                 float aspect = cam != null ? cam.aspect : 16f / 9f;
                 float halfZ = area.height * 0.5f + 0.6f, halfX = area.width * 0.5f + 0.6f;
                 float dist = Mathf.Max(halfZ / Mathf.Tan(vfov * 0.5f), halfX / (Mathf.Tan(vfov * 0.5f) * aspect)) + 0.4f;
-                eye = Spherical(target, -90f, 88.5f, Mathf.Clamp(dist, 2f, 9.5f)); // north (+Z) up
+                eye = Spherical(look, -90f, 88.5f, Mathf.Clamp(dist, 2f, 9.5f)); // north (+Z) up
+                fov = OverheadFov;
                 return;
             }
             case View.Geometry:
-                target = CoupleCentre(hm, frame) + Vector3.down * 0.1f;
-                eye = Spherical(target, 35f + since * 360f / 40f, 12f, 2.9f);
+                look = At(f.LookAnchor, 0.85f);
+                eye = Spherical(At(f.EyeAnchor, 0.85f), 35f + since * 9f, 12f, 2.9f);
                 return;
             case View.Physics:
-                target = CoupleCentre(hm, frame) + Vector3.down * 0.05f;
-                eye = Spherical(target, 40f, 15f, 3.3f);
+                look = At(f.LookAnchor, 0.90f);
+                eye = Spherical(At(f.EyeAnchor, 0.90f), 40f, 15f, 3.3f);
                 return;
             case View.DanceGraph when layers.Graph != null && layers.Graph.HasPath:
-                layers.Graph.Chase(t, out eye, out target);
+            {
+                layers.Graph.Chase(t, out Vector3 e, out Vector3 l);
+                HeadMovement hm = Hm;
+                bool exact = !chaseValid || f.Cut || hm == null || !hm.IsPlaying || dt <= 0f;
+                if (exact)
+                {
+                    chaseEye = e;
+                    chaseLook = l;
+                    chaseEyeVel = chaseLookVel = Vector3.zero;
+                }
+                else
+                {
+                    chaseEye = SmoothXZY(chaseEye, e, ref chaseEyeVel, dt);
+                    chaseLook = SmoothXZY(chaseLook, l, ref chaseLookVel, dt);
+                }
+
+                chaseValid = true;
+                eye = chaseEye;
+                look = chaseLook;
                 return;
+            }
             case View.Fingerprint when layers.Graph != null:
             {
                 layers.Graph.Bounds(out Vector3 centre, out float radius);
-                eye = Spherical(centre, -60f + since * 360f / 60f, 22f, Mathf.Clamp(radius * 1.3f, 3f, 9.5f));
+                eye = Spherical(centre, -60f + since * 6f, 22f, Mathf.Clamp(radius * 1.3f, 3f, 9.5f));
                 // pan so the graph sits left of the side panel
                 Vector3 right = Vector3.Cross(Vector3.up, centre - eye).normalized;
                 Vector3 pan = right * (radius * 0.28f);
-                target = centre + pan;
+                look = centre + pan;
                 eye += pan;
                 return;
             }
-            default: // Orbit (and the camera-tour slot until it exists)
-                target = CoupleCentre(hm, frame);
-                eye = Spherical(target, -70f + since * 360f / 20f, 16f + 5f * Mathf.Sin(since * 2f * Mathf.PI / 30f), 3.1f);
+            default: // Orbit (and the camera-tour slot until it exists): ~1 rev / 20 s, gentle height drift
+                look = At(f.LookAnchor, 0.95f);
+                eye = Spherical(At(f.EyeAnchor, 0.95f), -70f + since * 18f, 16f + 5f * Mathf.Sin(since * 2f * Mathf.PI / 30f), 3.1f);
                 return;
         }
+    }
+
+    /// <summary>graph chase smoothing: XZ with a 0.5 s critically damped spring, Y with 1.0 s</summary>
+    static Vector3 SmoothXZY(Vector3 from, Vector3 to, ref Vector3 vel, float dt)
+    {
+        Vector2 vxz = new(vel.x, vel.z);
+        Vector2 xz = Vector2.SmoothDamp(new Vector2(from.x, from.z), new Vector2(to.x, to.z), ref vxz, 0.5f, 20f, dt);
+        float vy = vel.y;
+        float y = Mathf.SmoothDamp(from.y, to.y, ref vy, 1.0f, 20f, dt);
+        vel = new Vector3(vxz.x, vy, vxz.y);
+        return new Vector3(xz.x, y, xz.y);
     }
 
     // ---------------------------------------------------------------- hm_state / hm_tour status
@@ -626,9 +642,11 @@ public class DanceTour : MonoBehaviour
             ["index"] = sequenceIndex, ["sequence"] = Sequence.Select(Name).ToList(),
             ["measuresInState"] = measuresInState,
             ["measuresPerState"] = current == View.DanceGraph ? GraphMeasures : MeasuresPerState,
-            ["blend"] = BlendSeconds > 0 ? Mathf.Clamp01((Time.time - blendStart) / BlendSeconds) : 1f,
+            ["blend"] = BlendSeconds > 0 ? Mathf.Clamp01((Time.time - blendStart) / BlendSeconds) : 1f, ["shot"] = shot,
             ["avatarAlpha"] = avatarAlphaNow, ["skeleton"] = skeletonNow, ["graphFade"] = graphNow,
-            ["cameraDriven"] = cameraOwned && current != View.None, ["note"] = skippedNote,
+            ["cameraDriven"] = current != View.None && Hm != null && Hm.OrbitCamera != null &&
+                                Hm.OrbitCamera.enabled && Hm.OrbitCamera.Mode == CameraControl.Owner.Director,
+            ["avatarOpacityBase"] = opacityBase, ["note"] = skippedNote,
             ["cameraTourAvailable"] = HasCameraVideos(), ["history"] = history.ToList()
         };
     }

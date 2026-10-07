@@ -107,6 +107,12 @@ optional layer exists.
 - **Default: semi-transparent** (alpha ≈ 0.3), photoreal-textured when the texture layer exists, otherwise
   a neutral shaded material (lead warm grey, follow cool grey). Depth-correct transparency (depth
   pre-pass) so a translucent body doesn't show its own back faces.
+- **Each dancer shows through the other.** The two bodies are sorted back to front per camera, each with its own
+  depth pre-pass + colour pass (the nearer dancer's translucent materials, with its shoes and hair, draw after the
+  whole farther dancer). Where they overlap you see the nearer body over the farther one over the skeletons. A body
+  part of the nearer dancer that is actually behind the farther one is hidden there (the usual per-object sorting
+  trade-off); the order only swaps when one dancer is 5 cm nearer than the other (hysteresis), so popping is limited
+  to the overlap region at that moment.
 - Opacity is a per-state parameter (§4): ≈ 0.3 default, ≈ 0.1 in Physics, up to 1.0 when requested.
 - Hair (follow) inherits the avatar's opacity, slightly higher (+0.15) so the hair motion reads. It is
   **sleek, straight and glossy like her portrait**, built the way games build realistic, performant hair
@@ -131,6 +137,17 @@ optional layer exists.
 - The stylised glowing skeletons are drawn **inside** the avatars, **fully opaque and bright** in every
   state, never faded by avatar opacity: **lead = red, follow = white** (current Dancer.cs style:
   spline-smoothed limbs, tapered widths).
+  - Known deviation (2026-10-07): the skeletons are drawn first and the translucent body is blended over them, so at
+    opacity 0.35 a skeleton keeps about 65 % of its brightness and takes on some body colour (the follow's white
+    skeleton inside white trousers is low-contrast). Fix when it matters: an additive skeleton top-up after the
+    bodies, depth-tested against the opaque-only depth (URP depth texture) so it shows only inside its own body.
+  - Option, off by default (integration review 2026-10-07): `hm_opacity --skeletons over` makes each translucent
+    body skip its own skeleton's pixels (a stencil bit per dancer, written by a second material on the skeleton
+    lines; the partner's body in front still blends over it; off at opacity 1). The skeleton then shows in its raw
+    colour: the lead's red is crisper, but between beats the follow's "white" skeleton is a mid-grey line
+    (LineRenderer colour 0.2 sRGB x the bloom material's 6.4), which reads as grey stripes on her white clothes, so
+    the default stays the tinted look. Making the skeletons really bright needs brighter base colours (a design
+    call), not only a sorting change.
 - **Beat conduction:** on each beat a pulse of light travels through the skeleton. It starts where the
   body meets the floor (stance foot/feet), travels up the legs through the pelvis and spine, and out
   through the arms and head over ≈ 1/8 beat. Pulse strength depends on the beat type (zouk downbeat >
@@ -341,6 +358,26 @@ never passing through a dancer.
   ≈ 0.5–1 s lag), so steps and bounces do not shake the view; the look-at point also sits at a fixed height.
 - **Height (Y) and XZ framing are set by the director mode** (per view state, blended on state changes).
 - **Free-fly** (user control): the camera height stays fixed unless the user changes it with the keyboard.
+- Implementation (desktop rig `CameraControl`, the only writer of the camera): follow point = XZ midpoint of the two
+  pelvises → dead zone 0.15 m (2.5 s recentre) → critically damped springs (look 0.6 s, eye 0.9 s); seeks, loop wraps
+  and loads are cuts (snap). Pausing is not a cue to move: the view coasts to a stop where it is (0.15 s); stepping or
+  scrubbing while paused re-centres on the shown frame. Free-fly is cylindrical around the anchors with an
+  absolute eye height and look height. Keys: **A/D** orbit, **W/S** dolly (horizontal), **E/Q** camera up/down,
+  **Z/X** look lower/higher, **Shift** ×3, **O** director ↔ free. Any camera key takes the camera from the director
+  (eye continuous; the tour keeps its layers); explicit tour commands and O hand it back; the tour's automatic
+  measure-boundary advance does not. `hm_orbit` (azimuth/elevation/radius around the look point, or
+  --height/--look/--distance) always lands in free-fly; `hm_orbit --mode toggle` is the O key.
+- **Blends never pop.** The director (the tour) returns only the current state's pose and a shot number. Every shot
+  change, and every hand-over to the director, blends 1 s from a snapshot of the pose **on screen** (with its motion -
+  look velocity, orbit rate, dolly and crane rates - decaying over 0.25 s, so the camera does not stop dead) to the
+  live state pose: cylindrical around the look point (never through the couple), the turn direction fixed at the
+  blend start and then tracked continuously. When the target eye is nearly above its own look point (horizontal
+  offset below 1.5 m: the Overhead state, or the graph chase camera passing over its target mid-blend) its azimuth is
+  meaningless and spins, so the eye path crossfades to a straight line (fully below 0.5 m) and stays straight for the
+  rest of that blend; without this a blend into the dance-graph state could whip ~65 degrees in 80 ms (integration
+  review 2026-10-07). A switch during a blend continues from where the camera is; each state's
+  orbit runs on its own clock from its entry; a seek or loop wrap during a blend moves the blend's start with the
+  couple. `hm_camtrace` records every rendered frame for the playtest.
 
 ### 5.3 Camera POV tour (multi-camera broadcast) — desktop/render only
 - Each source phone camera follows its **per-frame pose and zoom** (field of view from the per-frame focal
@@ -588,6 +625,16 @@ pipeline (MOVES.md).
 - Recorder: both aspect presets produce MP4s with exact resolution, fps, duration and an audio track.
 - Speeds 0.1×–1.0× keep avatars, video and beats in sync (frame for time).
 - Quest build: 72 Hz sustained in each state with the full layer set on the reference capture.
+- Camera (Tools/playtest_camera.ps1): hm_orbit 60/15/3 puts the eye at 1.726 m (look 0.95 m); while playing, eye and
+  look heights span < 0.1 mm and the look anchor stays within 0.45 m of the couple; after a pause the look anchor moves
+  < 3 cm; E raises the eye with the look height kept, W dollies with the eye height kept; orbit state eye 1.54–2.06 m,
+  physics 1.75 m; a camera key takes over with a continuous eye and the tour keeps its state; loop wraps are cuts;
+  hm_hair frame parks the camera. A per-frame trace (hm_camtrace) across every ordered pair of the six view states,
+  interrupted blends, O-key hand-overs and the running tour's own advances has no one-frame camera jump > 0.5 m
+  outside cuts.
+- Avatars: semi-transparent by default (hm_opacity), skeletons visible inside; per-state opacity = default × state
+  factor; from either side the nearer dancer's translucent queues come after the farther dancer's (back to front);
+  the room and splat layers start off.
 
 ---
 
@@ -613,7 +660,8 @@ Decided by the user (2026-10-06):
   Lesson, Jack and Jill (§2.2).
 
 Defaults (change any of these):
-- Avatar opacity 0.3 (Physics 0.1); floor alpha 0.6 (0.25 in passthrough); teal #19C3D6.
+- Avatar opacity 0.35 (hm_opacity; Overhead ×2/3, Geometry ×1/2, Physics ×1/3); floor alpha 0.6 (0.25 in
+  passthrough); teal #19C3D6.
 - Trace windows: footprints 4 measures, spirals 2 measures.
 - Slow-motion audio muted below 0.5×.
 - Default render preset: Vertical HD 1080×1920 @ 30 fps.

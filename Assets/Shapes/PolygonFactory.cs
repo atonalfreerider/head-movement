@@ -23,6 +23,17 @@ namespace Shapes
             NewCube.InitCube(this);
         }
 
+        void OnEnable()
+        {
+            // a script reload in Play mode clears the statics but keeps this (serialised) factory: restore them, so
+            // loading a capture again (hm_load) works without restarting Play mode
+            if (Instance != null || tetra == null) return;
+            Instance = this;
+            StaticLink.InitStaticLink(this);
+            Circle.NewCylinder.Init(this);
+            NewCube.InitCube(this);
+        }
+
         // INIT
         void BuildPolygons()
         {

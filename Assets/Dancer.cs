@@ -257,6 +257,59 @@ public class Dancer : MonoBehaviour
             default:
                 throw new ArgumentOutOfRangeException(nameof(role), role, null);
         }
+
+        AddSkeletonStencil(role);
+    }
+
+    static readonly Material[] skeletonStencil = new Material[2];
+    static bool skeletonStencilOn;
+
+    /// <summary>VIEWER_SPEC 3.3 option (SmplxAvatar.SkeletonsOverBodies): the stencil bit each dancer's skeleton lines
+    /// write (lead 1, follow 2); SmplxAvatar's translucent colour pass then skips the pixels with its own dancer's bit.</summary>
+    public static int SkeletonStencilBit(Role role) => 1 << ((int)role & 1);
+
+    /// <summary>draw the skeleton stencil markers (SmplxAvatar.SkeletonsOverBodies switches this); off = their pass is
+    /// disabled, so they cost no draw calls</summary>
+    public static void EnableSkeletonStencil(bool on)
+    {
+        skeletonStencilOn = on;
+        foreach (Material m in skeletonStencil)
+        {
+            if (m != null) m.SetShaderPassEnabled("SRPDefaultUnlit", on);
+        }
+    }
+
+    static Material SkeletonStencilMaterial(Role role)
+    {
+        int i = (int)role & 1;
+        if (skeletonStencil[i] != null) return skeletonStencil[i];
+        Shader shader = Resources.Load<Shader>("HM_SkeletonStencil");
+        if (shader == null) shader = Shader.Find("HeadMovement/SkeletonStencil");
+        if (shader == null) return null;
+        Material m = new(shader) { name = $"{role} skeleton stencil", renderQueue = 2001 }; // right after the opaque lines
+        m.SetFloat("_SkelRef", SkeletonStencilBit(role));
+        m.SetShaderPassEnabled("SRPDefaultUnlit", skeletonStencilOn);
+        skeletonStencil[i] = m;
+        return m;
+    }
+
+    /// <summary>a second material on every skeleton line: same mesh and culling, writes only this dancer's stencil bit
+    /// where the line is visible (Resources/HM_SkeletonStencil)</summary>
+    void AddSkeletonStencil(Role role)
+    {
+        Material marker = SkeletonStencilMaterial(role);
+        if (marker == null) return;
+        LineRenderer[] lines =
+        {
+            followSpineRenderer, followLegsRenderer, followShouldersRenderer, followLeftArmRenderer, followRightArmRenderer,
+            leadArmsRenderer, leadLeftLegRenderer, leadRightLegRenderer
+        };
+        foreach (LineRenderer line in lines)
+        {
+            if (line == null) continue;
+            Material glow = line.sharedMaterial;
+            line.sharedMaterials = new[] { glow, marker };
+        }
     }
 
     public void SetPoseToFrame(int frameNumber, float beatIntensity)

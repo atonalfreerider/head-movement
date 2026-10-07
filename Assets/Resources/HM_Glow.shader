@@ -2,6 +2,7 @@
 // skeletons). Colour = vertex colour (rgb * a) * _Tint (rgb * a) * _Intensity, added to the frame: black is
 // invisible, so fades are colour fades and nothing needs sorting. HDR output feeds the bloom pass.
 // No depth write, no culling (strips are visible from both sides). Single-pass instanced stereo safe.
+// Queue 2985: before the translucent avatar/hair depth prepasses (2990+), so strips inside a body show through it.
 Shader "HeadMovement/Glow"
 {
     Properties
@@ -12,7 +13,7 @@ Shader "HeadMovement/Glow"
     }
     SubShader
     {
-        Tags { "RenderType" = "Transparent" "Queue" = "Transparent+10" "RenderPipeline" = "UniversalPipeline" "IgnoreProjector" = "True" }
+        Tags { "RenderType" = "Transparent" "Queue" = "Transparent-15" "RenderPipeline" = "UniversalPipeline" "IgnoreProjector" = "True" }
 
         Pass
         {

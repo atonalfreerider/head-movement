@@ -59,12 +59,21 @@ public class HeadMovement : MonoBehaviour
     int speedIndex = Speeds.Length - 1;
     bool loopMeasure;
     int loopedMeasure;
-    bool showFloor = true, showConnection = true, showSplats = true, showCameras = false, showHud = true;
+    bool showFloor = true, showConnection = true, showCameras = false, showHud = true;
     bool showAvatars = true, showTiming = true, showPhysics = true;
 
-    // room: the mesh is the Quest layer; while the user has not toggled splats themselves, a capture with a room
-    // mesh starts with the (heavier, alpha-blended) splat layer off
-    bool showRoom = true, splatsUserSet;
+    // VIEWER_SPEC 3.2a: splats show the dancers only and start off; the room reconstruction is not shown by default
+    // (M / hm_layer room still toggle it for QA; the tour never turns it on)
+    bool showSplats, showRoom;
+
+    /// <summary>VIEWER_SPEC 3.2: avatars are semi-transparent by default (the skeleton reads inside the body)</summary>
+    public const float DefaultAvatarOpacity = 0.35f;
+
+    float avatarOpacity = DefaultAvatarOpacity; // the user default (hm_opacity)
+    float? directorOpacity;                    // the current view state's value while the tour shows one
+
+    /// <summary>fires after a capture's avatars (and hair) exist, before its audio loads - attachments (shoes) hook here</summary>
+    public static event Action<HeadMovement> AvatarsLoaded;
 
     string[] captures;
 
@@ -82,7 +91,30 @@ public class HeadMovement : MonoBehaviour
 
     void Start()
     {
-        cameraControl = GameObject.Find("Simulator").GetComponent<CameraControl>();
+        FindRig();
+    }
+
+    void OnEnable()
+    {
+        Instance = this;
+        // a script reload in Play mode keeps the serialisable flags (audioLoaded) but drops the capture (timeline,
+        // poses): fall back to "nothing loaded" so the HUD and the CLI ask for hm_load instead of throwing every frame
+        if (timeline == null && audioLoaded)
+        {
+            audioLoaded = false;
+            playing = false;
+        }
+    }
+
+    float nextRigSearch;
+
+    /// <summary>the desktop camera rig (the Simulator object); null in VR, where it is inactive and never moves the user</summary>
+    void FindRig()
+    {
+        if (cameraControl != null) return;
+        GameObject simulator = GameObject.Find("Simulator");
+        cameraControl = simulator != null ? simulator.GetComponent<CameraControl>() : null;
+        nextRigSearch = Time.unscaledTime + 1f;
     }
 
     public IReadOnlyList<string> CaptureNames => captures.Select(Path.GetFileName).ToList();
@@ -98,6 +130,36 @@ public class HeadMovement : MonoBehaviour
     public Dancer FollowDancer => Follow;
     public IReadOnlyDictionary<Role, SmplxAvatar> Avatars => avatars;
     public CameraControl OrbitCamera => cameraControl;
+
+    /// <summary>the user default avatar opacity (hm_opacity); view states scale it</summary>
+    public float AvatarOpacity => avatarOpacity;
+
+    /// <summary>the opacity the avatars show now: the view state's value while the tour shows one, else the default</summary>
+    public float EffectiveAvatarOpacity => directorOpacity ?? avatarOpacity;
+
+    /// <summary>set the user default avatar opacity (0..1); returns the effective value</summary>
+    public float SetAvatarOpacity(float opacity)
+    {
+        avatarOpacity = Mathf.Clamp01(float.IsFinite(opacity) ? opacity : DefaultAvatarOpacity);
+        ApplyAvatarOpacity();
+        return EffectiveAvatarOpacity;
+    }
+
+    /// <summary>DanceTour: the view state's avatar opacity (null = back to the user default)</summary>
+    public void SetDirectorAvatarOpacity(float? opacity)
+    {
+        directorOpacity = opacity.HasValue ? Mathf.Clamp01(opacity.Value) : null;
+        ApplyAvatarOpacity();
+    }
+
+    void ApplyAvatarOpacity()
+    {
+        float o = EffectiveAvatarOpacity;
+        foreach (SmplxAvatar avatar in avatars.Values)
+        {
+            if (avatar != null) avatar.Opacity = o;
+        }
+    }
 
     /// <summary>current flag of a layer (floor|tension|splats|cameras|hud|avatars|timing|physics|counterbalance|traces|graph)</summary>
     public bool LayerVisible(string layer) => layer.ToLowerInvariant() switch
@@ -218,6 +280,7 @@ public class HeadMovement : MonoBehaviour
                 if (manifest.smplx_albedo != null && !avatar.Textured) Warn($"{role}: albedo declared but not applied");
                 DanceOrigin.Place(avatar.transform);
                 if (avatar.FrameCount < FrameCount) Warn($"{role} avatar has {avatar.FrameCount} frames < {FrameCount}");
+                avatar.Opacity = EffectiveAvatarOpacity;
                 avatar.SetVisible(showAvatars);
                 avatars[role] = avatar;
             }
@@ -228,6 +291,14 @@ public class HeadMovement : MonoBehaviour
         }
 
         LoadHair();
+        try
+        {
+            AvatarsLoaded?.Invoke(this);
+        }
+        catch (Exception e)
+        {
+            Warn($"avatar attachments failed: {e.Message}");
+        }
 
         if (timingData != null)
         {
@@ -293,8 +364,15 @@ public class HeadMovement : MonoBehaviour
         Debug.LogWarning($"{manifest?.DisplayName}: {message}");
     }
 
+    /// <summary>the room mesh loads on demand (the layer starts off; its textures are large)</summary>
     void LoadRoom()
     {
+        if (!showRoom)
+        {
+            roomMesh.Clear();
+            return;
+        }
+
         try
         {
             roomMesh.Load(manifest);
@@ -307,7 +385,6 @@ public class HeadMovement : MonoBehaviour
 
         DanceOrigin.Place(roomMesh.transform);
         roomMesh.SetVisible(showRoom);
-        if (!splatsUserSet) showSplats = !roomMesh.HasContent;
     }
 
     IEnumerator LoadSplats()
@@ -409,6 +486,8 @@ public class HeadMovement : MonoBehaviour
         }
 
         SetToFrameNumber();
+        FeedCamera();
+        if (cameraControl != null) cameraControl.SnapFollow(); // a new capture is a cut
         Debug.Log($"Loaded performance: {captures[currentFolder]}");
     }
 
@@ -589,11 +668,12 @@ public class HeadMovement : MonoBehaviour
         {
             case "floor": floorPatterns.SetVisible(showFloor = visible); break;
             case "tension": partnerConnection.SetVisible(showConnection = visible); break;
-            case "splats":
-                splatsUserSet = true;
-                splatCloud.SetVisible(showSplats = visible);
+            case "splats": splatCloud.SetVisible(showSplats = visible); break;
+            case "room":
+                showRoom = visible;
+                if (visible && !roomMesh.HasContent && manifest != null) LoadRoom();
+                roomMesh.SetVisible(visible);
                 break;
-            case "room": roomMesh.SetVisible(showRoom = visible); break;
             case "cameras": virtualCameraRig.SetVisible(showCameras = visible); break;
             case "hud": showHud = visible; break;
             case "avatars": SetAvatarsVisible(visible); break;
@@ -650,6 +730,9 @@ public class HeadMovement : MonoBehaviour
             ["warnings"] = loadWarnings.ToList()
         };
         DanceLayers.AppendState(state);
+        state["avatarOpacity"] = avatarOpacity;
+        state["avatarOpacityEffective"] = EffectiveAvatarOpacity;
+        if (cameraControl != null) state["camera"] = cameraControl.State();
         if (!audioLoaded) return state;
 
         state["audioTime"] = audioSource.time;
@@ -666,7 +749,9 @@ public class HeadMovement : MonoBehaviour
                 ["visible"] = kv.Value.Visible, ["frame"] = kv.Value.CurrentFrame, ["bones"] = kv.Value.BoneCount,
                 ["vertices"] = kv.Value.VertexCount, ["triangles"] = kv.Value.TriangleCount,
                 ["textured"] = kv.Value.Textured, ["textureSize"] = kv.Value.TextureSize,
+                ["opacity"] = kv.Value.Opacity, ["layerVisible"] = kv.Value.LayerVisible, ["feetHidden"] = kv.Value.FeetHidden,
                 ["textureFormat"] = kv.Value.TextureFormatName, ["fkErrorMm"] = kv.Value.FkErrorMm(),
+                ["pelvis"] = Vec(kv.Value.BonePosition(0)), ["queueOffset"] = kv.Value.QueueOffset,
                 ["minY"] = b.min.y, ["maxY"] = b.max.y, ["sizeX"] = b.size.x, ["sizeZ"] = b.size.z,
                 ["head"] = Vec(kv.Value.BonePosition(15)), ["skeletonHead"] = Vec(Lead != null && kv.Key == Role.Lead
                     ? Lead.Joint(currentFrame, SmplJoint.Head) : Follow.Joint(currentFrame, SmplJoint.Head))
@@ -735,13 +820,37 @@ public class HeadMovement : MonoBehaviour
             SetToFrameNumber();
         }
 
-        if (cameraControl.gameObject.activeInHierarchy)
+        FeedCamera();
+    }
+
+    /// <summary>VIEWER_SPEC 5.2: the camera follows the couple in XZ only - the pelvis midpoint of the shown frame (no
+    /// height: the rig never bobs with the dancers' centre of gravity). The rig damps it and owns the height.</summary>
+    void FeedCamera()
+    {
+        if (cameraControl == null && Time.unscaledTime >= nextRigSearch) FindRig();
+        // (timeline null: a script reload in Play mode dropped the capture's non-serialised state - do nothing)
+        if (cameraControl == null || !cameraControl.gameObject.activeInHierarchy || Lead == null || Follow == null || !audioLoaded ||
+            timeline == null) return;
+        int f = currentFrame >= 0 ? currentFrame : GetFrameNumber();
+        Vector3 p = (Lead.Joint(f, SmplJoint.Pelvis) + Follow.Joint(f, SmplJoint.Pelvis)) * 0.5f;
+        cameraControl.SetFollow(new Vector2(p.x, p.z), timeline.AudioTimeOf(f), playing);
+    }
+
+    /// <summary>O key: hand the camera to the view-state director, or take it back (free-fly from where it is)</summary>
+    public void ToggleDirector()
+    {
+        if (cameraControl == null) return;
+        if (cameraControl.Mode == CameraControl.Owner.Director)
         {
-            int frameNumber = GetFrameNumber();
-            Vector3 center = Vector3.Lerp(Lead.Center(frameNumber), Follow.Center(frameNumber), .5f);
-            center = new Vector3(center.x, center.y - 0.5f, center.z);
-            cameraControl.Center = center;
+            cameraControl.TakeControl();
+            return;
         }
+
+        DanceLayers layers = DanceLayers.Ensure();
+        DanceTour tour = layers != null ? layers.Tour : null;
+        if (tour == null) return;
+        if (tour.Active) cameraControl.UseDirector();
+        else if (audioLoaded) tour.Hold(DanceTour.View.Orbit);
     }
 
     void HandleKeyboard()
@@ -772,12 +881,13 @@ public class HeadMovement : MonoBehaviour
         if (keyboard.fKey.wasPressedThisFrame) floorPatterns.SetVisible(showFloor = !showFloor);
         if (keyboard.tKey.wasPressedThisFrame) partnerConnection.SetVisible(showConnection = !showConnection);
         if (keyboard.gKey.wasPressedThisFrame) SetLayerVisible("splats", !showSplats);
-        if (keyboard.mKey.wasPressedThisFrame) roomMesh.SetVisible(showRoom = !showRoom);
+        if (keyboard.mKey.wasPressedThisFrame) SetLayerVisible("room", !showRoom);
         if (keyboard.cKey.wasPressedThisFrame) virtualCameraRig.SetVisible(showCameras = !showCameras);
         if (keyboard.hKey.wasPressedThisFrame) showHud = !showHud;
         if (keyboard.vKey.wasPressedThisFrame) SetAvatarsVisible(!showAvatars);
         if (keyboard.bKey.wasPressedThisFrame) SetTimingVisible(!showTiming);
         if (keyboard.pKey.wasPressedThisFrame) SetPhysicsVisible(!showPhysics);
+        if (keyboard.oKey.wasPressedThisFrame) ToggleDirector();
 
         Key[] digits =
         {
@@ -853,9 +963,10 @@ public class HeadMovement : MonoBehaviour
             }
         }
 
+        string cameraMode = cameraControl == null ? "" : cameraControl.Mode == CameraControl.Owner.Director ? "   [camera: director]" : "   [camera: free]";
         GUILayout.Label("space play/pause   , . beat   [ ] measure   L loop   R restart   <- -> speed\n" +
-                        "WASD/QE orbit   F floor   T tension   G splats   C cameras   H hud\n" +
-                        "V avatars   B timing   P physics   M room");
+                        "camera: A D orbit   W S dolly   Q E height   Z X tilt   shift fast   O director/free" + cameraMode + "\n" +
+                        "F floor   T tension   G splats   C cameras   H hud   V avatars   B timing   P physics   M room");
         GUILayout.EndArea();
 
         if (audioLoaded && timingOverlay != null && showTiming)

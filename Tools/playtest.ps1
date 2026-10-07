@@ -11,10 +11,14 @@ to Assets/Screenshots (git-ignored).
 Captures with capture.json version >= 3 (dancecap export) also get the v3 checks: playback driven by times.json
 (binary search by audio time), skinned SMPL-X avatars (55 bones, FK agrees with the exported joints, plausible
 body bounds, mesh deforms between frames), and the avatars / timing / physics layers. Captures that declare
-smplx_albedo must show textured (seam-split) avatars; captures with a room mesh must load it on the floor (y ~ 0),
-start with the splat layer off, and toggle the room layer. Captures with hair_groom.json also run
+smplx_albedo must show textured (seam-split) avatars; the splat and room layers start off (VIEWER_SPEC 3.2a: splats
+show the dancers only, the room is not displayed by default); a room mesh loads on demand when its layer is shown and
+must sit on the floor (y ~ 0). Tools/playtest_camera.ps1 checks the camera rig (XZ-only follow, fixed heights, director
+states, free-fly keys, blends that never pop: a per-frame hm_camtrace across every state pair) and the semi-transparent
+avatars, sorted back to front so each dancer shows through the other (VIEWER_SPEC 3.2 / 5.2). Captures with hair_groom.json also run
 Tools/playtest_hair.ps1 (the follow's simulated hair: stability on seek / loop, Quest budget, CPU per step,
-motion vs the hair reference, review shots of the fastest head moments). Seek times are relative to the capture's first frame
+motion vs the hair reference, review shots of the fastest head moments). v3 captures with avatars run
+Tools/playtest_shoes.ps1 (the procedural sneakers: budget, foot cut, opacity, floor contact, close-ups). Seek times are relative to the capture's first frame
 (real captures start at audio time ~26 s). Quest-relevant render stats are printed per capture.
 #>
 param(
@@ -123,7 +127,10 @@ foreach ($cap in $Capture) {
     $capJsonPt = Get-Content (Join-Path (Get-Location) "Assets\StreamingAssets\$cap\capture.json") -Raw | ConvertFrom-Json
     Assert ($s.steps -gt 0) "floor steps detected: $($s.steps) ($($s.stepsOnBeat) on beat)"
     $v3 = $s.version -ge 3
-    foreach ($layer in "floor", "tension", "splats", "avatars", "timing", "physics") { Invoke-Unity hm_layer --layer $layer --visible true | Out-Null }
+    $s0 = Get-State
+    Assert (-not $s0.layers.splats) "splat layer off by default (dancers-only splats, VIEWER_SPEC 3.2a)"
+    Assert (-not $s0.layers.room) "room layer off by default"
+    foreach ($layer in "floor", "tension", "avatars", "timing", "physics") { Invoke-Unity hm_layer --layer $layer --visible true | Out-Null }
     Invoke-Unity hm_orbit --azimuth 60 --elevation 20 --radius 3 | Out-Null
     Shot "${prefix}_loaded"
 
@@ -190,6 +197,9 @@ foreach ($cap in $Capture) {
     Shot "${prefix}_topdown"
     Invoke-Unity hm_orbit --azimuth 30 --elevation 35 --radius 9 | Out-Null
     Shot "${prefix}_room"
+    # back to the default layer set (dancers only)
+    Invoke-Unity hm_layer --layer splats --visible false | Out-Null
+    Invoke-Unity hm_layer --layer room --visible false | Out-Null
 
     if ($v3) {
         Write-Host "== v3: times-driven playback"
@@ -256,30 +266,39 @@ foreach ($cap in $Capture) {
     }
 
     if ($null -ne $capJsonPt.room) {
-        Write-Host "== room (Quest mesh)"
+        Write-Host "== room (Quest mesh, on demand)"
+        Invoke-Unity hm_layer --layer room --visible true | Out-Null  # loads it
+        Invoke-Unity hm_layer --layer room --visible false | Out-Null
         $s = Get-State
         Assert $s.room.loaded "room mesh loaded ($($s.room.triangles) triangles, $($s.room.vertices) vertices, $($s.room.submeshes) submeshes, $($s.room.textures) textures)"
         Assert ($s.room.triangles -eq $capJsonPt.room.triangles) "room triangles match the export ($($capJsonPt.room.triangles))"
         Assert ($s.room.boundsMin[1] -gt -0.25 -and $s.room.boundsMin[1] -lt 0.05) ("room floor at y ~ 0 (lowest point {0:0.000} m)" -f $s.room.boundsMin[1])
-        Assert ($s.layers.room) "room layer on by default"
-        Invoke-Unity hm_layer --layer room --visible false | Out-Null
-        Assert (-not (Get-State).layers.room) "room hides"
+        Assert (-not $s.layers.room) "room layer hidden after the layer checks (shown on demand only)"
         Invoke-Unity hm_layer --layer room --visible true | Out-Null
-        Assert ((Get-State).layers.room) "room shows again"
+        Assert ((Get-State).layers.room) "room shows on demand"
+        Invoke-Unity hm_layer --layer room --visible false | Out-Null
+        Assert (-not (Get-State).layers.room) "room hides again"
     }
 
-    Write-Host "== Quest-relevant render stats (default layers: splats off when a room mesh exists)"
-    if ($null -ne $capJsonPt.room) { Invoke-Unity hm_layer --layer splats --visible false | Out-Null }
+    Write-Host "== Quest-relevant render stats (default layers: no splats, no room)"
+    Invoke-Unity hm_layer --layer splats --visible false | Out-Null
+    Invoke-Unity hm_layer --layer room --visible false | Out-Null
     Invoke-Unity hm_orbit --azimuth 60 --elevation 15 --radius 3 | Out-Null
     Start-Sleep -Milliseconds 500
     $perf = Invoke-Unity get_performance_stats
     Write-Host "  $($perf -replace '\s+', ' ')"
+
+    # VIEWER_SPEC 5.2 camera rig + 3.2 avatar opacity (+ before/after review shots for the realism pass)
+    if (Test-Path "$PSScriptRoot/playtest_camera.ps1") { . "$PSScriptRoot/playtest_camera.ps1" }
 
     # VIEWER_SPEC v3 dance layers: origin, counterbalance, follower traces, dance graph, hm_tour (+ review shots)
     if (Test-Path "$PSScriptRoot/playtest_dance_layers.ps1") { . "$PSScriptRoot/playtest_dance_layers.ps1" }
 
     # the follow's groomed hair (Assets/Hair) on captures with hair_groom.json: stability, budget, CPU, review shots
     if (Test-Path "$PSScriptRoot/playtest_hair.ps1") { . "$PSScriptRoot/playtest_hair.ps1" }
+
+    # procedural sneakers (Assets/Shoes) on the SMPL-X avatars: budget, foot cut, opacity, floor contact sweep, close-ups
+    if (Test-Path "$PSScriptRoot/playtest_shoes.ps1") { . "$PSScriptRoot/playtest_shoes.ps1" }
 
     Write-Host "== console"
     $console = (Invoke-Unity console --level error --tail 50) | ConvertFrom-Json

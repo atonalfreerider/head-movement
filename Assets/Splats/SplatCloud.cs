@@ -6,12 +6,15 @@ using UnityEngine;
 using UnityEngine.Rendering;
 
 /// <summary>
-/// Preview renderer for Atlas Gaussian splats: a static environment splat plus an optional per-frame splat
-/// sequence (4D), each drawn as camera-facing soft discs (Resources/SplatPreview.shader, VR single-pass safe).
-/// Isotropic discs are an approximation; swap in a full 3DGS renderer for final quality.
+/// Preview renderer for Atlas Gaussian splats: the per-frame dancer splat sequence (4D), drawn as camera-facing soft
+/// discs (Resources/SplatPreview.shader, VR single-pass safe). VIEWER_SPEC 3.2a: splats show the dancers only - the
+/// static environment (room) splat is not loaded unless IncludeEnvironment is set - and the layer starts off; hidden
+/// splats load nothing. Isotropic discs are an approximation; swap in a full 3DGS renderer for final quality.
 /// </summary>
 public class SplatCloud : MonoBehaviour
 {
+    [Tooltip("load the capture's static environment (room) splat too - off: splats show the dancers only")]
+    public bool IncludeEnvironment = false;
     public int MaxEnvironmentSplats = 400_000;
     public int MaxFrameSplats = 60_000;
     public int FrameCacheSize = 12;
@@ -28,6 +31,9 @@ public class SplatCloud : MonoBehaviour
     Task<SplatPly.Data> pendingFrame;
     int pendingIndex = -1;
     int wantedIndex = -1;
+    bool visible;
+    int lastFrame = -1;
+    float lastPoseFps = 30f;
 
     public bool HasContent => environment != null || sequence != null;
 
@@ -45,7 +51,7 @@ public class SplatCloud : MonoBehaviour
         Clear();
         EnsureMaterial();
 
-        if (manifest.environment_splat != null && !string.IsNullOrEmpty(manifest.environment_splat.path))
+        if (IncludeEnvironment && manifest.environment_splat != null && !string.IsNullOrEmpty(manifest.environment_splat.path))
         {
             string path = manifest.PathOf(manifest.environment_splat.path);
             Matrix4x4 toUnity = manifest.environment_splat.SceneToUnity();
@@ -76,7 +82,9 @@ public class SplatCloud : MonoBehaviour
     /// <summary>pose frame -> show the matching splat frame (loads in the background, shows the latest ready)</summary>
     public void SetFrame(int frame, float poseFps)
     {
-        if (sequence == null) return;
+        lastFrame = frame;
+        lastPoseFps = poseFps;
+        if (sequence == null || !visible) return; // hidden splats load nothing
 
         float fps = sequence.fps > 0 ? sequence.fps : poseFps;
         wantedIndex = Mathf.RoundToInt(frame / poseFps * fps);
@@ -136,10 +144,12 @@ public class SplatCloud : MonoBehaviour
         frameOrder.AddFirst(index);
     }
 
-    public void SetVisible(bool visible)
+    public void SetVisible(bool show)
     {
-        if (environment != null) environment.SetActive(visible);
-        if (frameFilter != null) frameFilter.gameObject.SetActive(visible);
+        visible = show;
+        if (environment != null) environment.SetActive(show);
+        if (frameFilter != null) frameFilter.gameObject.SetActive(show);
+        if (show && lastFrame >= 0) SetFrame(lastFrame, lastPoseFps);
     }
 
     public void Clear()

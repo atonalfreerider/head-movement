@@ -210,9 +210,14 @@ $order = @($hist | Select-Object -First $expected.Count | ForEach-Object { $_.st
 Assert (($order -join ",") -eq ($expected -join ",")) "tour order: $($order -join ' -> ') (camera tour slot: $($t.note))"
 if ($hist.Count -gt $expected.Count) { Assert ($hist[$expected.Count].state -eq "orbit") "tour loops back to Orbit" }
 $frameDt = $s0.meanFrameInterval
+# a short take can start mid-measure (02_LarissaKadu: 0.14 s into measure 17); a state entered at the capture's first
+# frame (restart / loop wrap) is then on the earliest instant of that measure the take has
+$takeStart = if ($null -ne $base) { [double]$base } else { [double]::NaN }
 foreach ($h in ($hist | Select-Object -First $expected.Count)) {
     if ($null -ne $h.measureStart) {
-        Assert ([math]::Abs($h.time - $h.measureStart) -le 2.5 * $frameDt) ("{0} starts on a measure (t {1:0.000} s, measure {2} at {3:0.000} s)" -f $h.state, $h.time, $h.measure, $h.measureStart)
+        $onMeasure = [math]::Abs($h.time - $h.measureStart) -le 2.5 * $frameDt
+        $onTakeStart = $h.measureStart -lt $takeStart -and [math]::Abs($h.time - $takeStart) -le 2.5 * $frameDt
+        Assert ($onMeasure -or $onTakeStart) ("{0} starts on a measure (t {1:0.000} s, measure {2} at {3:0.000} s{4})" -f $h.state, $h.time, $h.measure, $h.measureStart, $(if ($onTakeStart -and -not $onMeasure) { "; the take starts mid-measure at {0:0.000} s and the state starts on its first frame" -f $takeStart } else { "" }))
     }
 }
 Invoke-Json @("hm_tour", "--action", "stop") | Out-Null
@@ -220,7 +225,10 @@ Invoke-Unity hm_transport --action pause | Out-Null
 
 # one review shot per tour state (held, deterministic time: mid-pivot when there is one, else 40 % into the take)
 $shotTime = if ($null -ne $firstPivot) { ([double]$firstPivot[2] + [double]$firstPivot[3]) / 2 } elseif ($script:frameTimes.Count -gt 0) { $script:frameTimes[[int]($script:frameTimes.Count * 0.4)] } else { 5.0 }
-$opacity = @{ orbit = 0.3; overhead = 0.2; geometry = 0.15; physics = 0.1; dance_graph = 0.0; fingerprint = 0.0 }
+# per-state avatar opacity = the user default (hm_opacity, ~0.3) x the state factor (VIEWER_SPEC 4)
+$opBase = [double](Get-State).avatarOpacity
+if ($opBase -le 0) { $opBase = 0.3 }
+$opacity = @{ orbit = $opBase; overhead = $opBase * 2 / 3; geometry = $opBase * 0.5; physics = $opBase / 3; dance_graph = 0.0; fingerprint = 0.0 }
 $k = 0
 foreach ($state in $expected) {
     $k++
@@ -228,7 +236,7 @@ foreach ($state in $expected) {
     Invoke-Transport seek @("--time", (Num $shotTime)) | Out-Null
     Start-Sleep -Milliseconds 1600
     $t = Invoke-Json @("hm_tour", "--action", "status")
-    if ($s0.avatars.lead) { Assert ([math]::Abs($t.avatarAlpha - $opacity[$state]) -lt 0.02) ("{0}: avatar opacity {1:0.00} (spec {2})" -f $state, $t.avatarAlpha, $opacity[$state]) }
+    if ($s0.avatars.lead) { Assert ([math]::Abs($t.avatarAlpha - $opacity[$state]) -lt 0.02) ("{0}: avatar opacity {1:0.000} (spec {2:0.000})" -f $state, $t.avatarAlpha, $opacity[$state]) }
     if ($state -in "dance_graph", "fingerprint") { Assert ($t.skeleton -lt 0.01 -and $t.graphFade -gt 0.99) "${state}: full-size dance faded out, graph in" }
     ReviewShot ("{0}_tour_{1}_{2}" -f $cap, $k, $state)
 }
