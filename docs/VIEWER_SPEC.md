@@ -108,13 +108,17 @@ optional layer exists.
   a neutral shaded material (lead warm grey, follow cool grey). Depth-correct transparency (depth
   pre-pass) so a translucent body doesn't show its own back faces.
 - Opacity is a per-state parameter (§4): ≈ 0.3 default, ≈ 0.1 in Physics, up to 1.0 when requested.
-- Hair (follow) inherits the avatar's opacity, slightly higher (+0.15) so the hair motion reads. It must
-  **match Larissa's real hair in shape and colour** (length, volume, parting and layering from the video and
+- Hair (follow) inherits the avatar's opacity, slightly higher (+0.15) so the hair motion reads. It is
+  **sleek, straight and glossy like her portrait**, built the way games build realistic, performant hair
+  (layered cards/strands, anisotropic shading, alpha-to-coverage), with a little stylisation at the tips. It
+  must **match Larissa's real hair in shape and colour** (length, volume, parting and layering from the video and
   her portrait; dyed red with its root-to-tip variation) and **keep the glowing tip bloom** of the original
   head-movement hair: strand tips emit a soft bloom that traces the hair's whip through space.
 - **Faces**: photoreal faces from the dancers' portrait photos (identity shape + frontal face texture),
   blended with the video-baked texture, plus per-frame **facial expressions** (jaw + expression
   coefficients) estimated from the closest cameras where the face is visible enough; neutral otherwise.
+- **Shoes**: the feet look like the dancers' sneakers — procedural sneaker meshes on the SMPL-X feet (bare
+  feet hidden), colours from the video, soles on the floor, following the avatar's opacity.
 - **Hands**: articulated fingers from multi-view hand estimates, and **hand contact** that actually touches
   (hand-hand and hand-body connections between the dancers are refined so contacting hands meet).
 
@@ -329,9 +333,14 @@ Built on **Cinemachine** (com.unity.cinemachine): an orbit camera, an overhead c
 camera, a free camera, and one camera per source phone. Transitions use Cinemachine blends (default
 ease-in-out 1.2 s); cuts allowed. Desktop and renders only — in VR the user's head is the camera.
 
-### 5.2 Orbit
-Continuous motion by default ("the camera should generally be in motion"): orbit radius/height/speed
-per state, target = couple centre (smoothed), never passing through a dancer.
+### 5.2 Orbit and follow
+Continuous motion by default ("the camera should generally be in motion"): orbit radius/speed per state,
+never passing through a dancer.
+- **The camera never moves up and down with the dancers' centre of gravity / geometry centre.** It follows
+  the centre of the two dancers in **XZ only**, slightly decoupled (damped spring with a small dead zone and
+  ≈ 0.5–1 s lag), so steps and bounces do not shake the view; the look-at point also sits at a fixed height.
+- **Height (Y) and XZ framing are set by the director mode** (per view state, blended on state changes).
+- **Free-fly** (user control): the camera height stays fixed unless the user changes it with the keyboard.
 
 ### 5.3 Camera POV tour (multi-camera broadcast) — desktop/render only
 - Each source phone camera follows its **per-frame pose and zoom** (field of view from the per-frame focal
