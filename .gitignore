@@ -124,3 +124,10 @@ __pycache__/
 # Unity crash-recovery scene backups (written after an editor crash; never source)
 /Assets/_Recovery/
 /Assets/_Recovery.meta
+
+# legacy preview-scene generator and the scene it writes: they name the dancers of one take and absolute paths, so they stay
+# local-only (untracked on 2026-10-08, kept on disk); matched by shape, the names are not spelled out here
+/Assets/Editor/?*PreviewScene.cs
+/Assets/Editor/?*PreviewScene.cs.meta
+/Assets/Scenes/?*NoPo4D.unity
+/Assets/Scenes/?*NoPo4D.unity.meta
