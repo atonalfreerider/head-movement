@@ -101,7 +101,10 @@ public class SneakerShape
     public const int K = 20, Kh = 4, Kt = 14; // perimeter columns per side: heel cap 0..Kh, side Kh..Kt (dense: the
                                               // eyestays run along it), toe cap Kt..K
     public const float SuperN = 2.6f;
-    public const float MarginSide = 0.004f, MarginToe = 0.011f, MarginHeel = 0.006f, OpenMargin = 0.008f;
+    // margins of the last over the measured foot (2026-10-07, user: "sneakers visibly smaller": toe 11 -> 7 mm, heel 6 -> 4
+    // mm, sides 4 -> 3 mm, platform extra 3 -> 1 mm: the sneaker is the foot + ~1.2 cm instead of + 2 cm)
+    public const float MarginSide = 0.003f, MarginToe = 0.007f, MarginHeel = 0.004f, OpenMargin = 0.008f;
+    public const float PlatformToeExtra = 0.001f;
     const int SecN = 20, SpineN = 9;
 
     public readonly FootMeasure M;
@@ -150,7 +153,7 @@ public class SneakerShape
         S = s;
         float L = m.L;
         X0 = -MarginHeel;
-        X1 = L + MarginToe + (s.Platform ? 0.003f : 0f);
+        X1 = L + MarginToe + (s.Platform ? PlatformToeExtra : 0f);
         Rh = 0.5f * (m.Sample(m.HalfMed, 0.12f * L) + m.Sample(m.HalfLat, 0.12f * L)) + MarginSide;
         Xh = X0 + Rh;
         Rt = 0.22f * L;
@@ -256,11 +259,13 @@ public class SneakerShape
         XEye = Mathf.Min(XEye, XOpen - 0.03f);
 
         // vamp ridge height: over the dorsum + 6 mm and at least the toe-box minimum above the sole top; never rising
-        // towards the toe, smoothed
+        // towards the toe, smoothed. The minimum tapers from 30 mm at the ball to 12 mm at the toe tip (+2 mm on
+        // platforms): sized from the measured sneaker toe-box height (dancecap.shoe_size); the former 18 (+4) mm tip made
+        // a blunt, boot-like toe cap
         for (int i = 0; i < ridge.Length; i++)
         {
             float x = Mathf.Lerp(XOpen, X1, i / (ridge.Length - 1f));
-            float boxMin = Mathf.Lerp(0.030f, 0.018f, Smooth(M.BallX, X1, x)) + (S.Platform ? 0.004f : 0f);
+            float boxMin = Mathf.Lerp(0.030f, 0.012f, Smooth(M.BallX, X1, x)) + (S.Platform ? 0.002f : 0f);
             // padding over the instep where the leg still shows above the body cut (the shoe may be planted up to
             // SneakerPair.PlantMax lower than the leg), the usual 6 mm towards the toes
             float pad = 0.006f + 0.014f * (1f - Smooth(CxMax, CxMax + 0.03f, x));

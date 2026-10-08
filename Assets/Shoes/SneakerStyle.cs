@@ -45,7 +45,7 @@ public class SneakerStyle
     public bool Runner => Style == "runner";
 
     /// <summary>sole flare beyond the upper (chunky cupsoles stick out more)</summary>
-    public float Flare => Platform ? 0.0045f : Runner ? 0.004f : 0.0035f;
+    public float Flare => Platform ? 0.0035f : Runner ? 0.003f : 0.0028f; // ~1 mm less since 2026-10-07 (smaller sneakers)
 
     /// <summary>outward bulge of the runner's heel unit over the rear of the midsole</summary>
     public float HeelBump => Runner ? 0.004f : 0f;
