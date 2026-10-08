@@ -5,8 +5,9 @@ hm_* [CliCommand]s in Assets/Editor/HeadMovementCliCommands.cs, asserts on hm_st
 to Assets/Screenshots (git-ignored).
 
     pwsh Tools/playtest.ps1                       # default capture 00_SyntheticDemo
-    pwsh Tools/playtest.ps1 -Capture LarissaKadu  # any StreamingAssets folder
+    pwsh Tools/playtest.ps1 -Capture <capture folder>  # any StreamingAssets folder
     pwsh Tools/playtest.ps1 -Capture 00_SyntheticDemo,01_SyntheticSMPLX -Recompile
+    pwsh Tools/playtest.ps1 -Capture <capture folder> -Only dance_layers   # base checks + one sub-suite
 
 Captures with capture.json version >= 3 (dancecap export) also get the v3 checks: playback driven by times.json
 (binary search by audio time), skinned SMPL-X avatars (55 bones, FK agrees with the exported joints, plausible
@@ -23,10 +24,13 @@ Tools/playtest_shoes.ps1 (the procedural sneakers: budget, foot cut, opacity, fl
 #>
 param(
     [string[]]$Capture = @("00_SyntheticDemo"),
-    [switch]$Recompile
+    [switch]$Recompile,
+    [string[]]$Only = @()  # run only these sub-suites (camera, dance_layers, hair, shoes, spine, ...); default all
 )
 
 $Capture = @($Capture | ForEach-Object { $_ -split "," } | Where-Object { $_ })  # powershell -File passes "a,b" as one string
+$Only = @($Only | ForEach-Object { $_ -split "," } | Where-Object { $_ })
+function Want([string]$suite) { return $Only.Count -eq 0 -or $Only -contains $suite }
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot -Parent)
 $script:projectPath = (Get-Location).Path
@@ -130,6 +134,8 @@ foreach ($cap in $Capture) {
     $s0 = Get-State
     Assert (-not $s0.layers.splats) "splat layer off by default (dancers-only splats, VIEWER_SPEC 3.2a)"
     Assert (-not $s0.layers.room) "room layer off by default"
+    Assert (-not $s0.layers.physics -and $s0.skeletonMode -eq "rhythm") "rhythm mode by default: skeletons pulse with the beat, physics view off (user 2026-10-07)"
+    Assert ($s0.layers.grid -and $s0.footprints.mode -eq "recent") "floor crosses on, footprints recent-only by default"
     foreach ($layer in "floor", "tension", "avatars", "timing", "physics") { Invoke-Unity hm_layer --layer $layer --visible true | Out-Null }
     Invoke-Unity hm_orbit --azimuth 60 --elevation 20 --radius 3 | Out-Null
     Shot "${prefix}_loaded"
@@ -249,8 +255,9 @@ foreach ($cap in $Capture) {
             Assert ($s.timing.visibleRings -gt 0) "touchdown rings shown around the playhead ($($s.timing.visibleRings))"
         } else { Write-Host "  (no timing.json in this capture)" }
         if ($null -ne $s.physics) {
-            Assert ($s.physics.frame -eq $s.frame -and $s.physics.lead.comMarkerActive) "physics overlay on the shown frame (COM, XCoM, F_net)"
-            Assert ($s.physics.lead.fNetN -gt 200 -and $s.physics.lead.fNetN -lt 3000) ("lead F_net {0:0} N is body-weight scale" -f $s.physics.lead.fNetN)
+            Assert ($s.physics.frame -eq $s.frame -and $s.physics.lead.comMarkerActive) "physics overlay on the shown frame (COM, XCoM, support)"
+            Assert ($s.physics.lead.fNetN -gt 200 -and $s.physics.lead.fNetN -lt 3000) ("lead F_net {0:0} N is body-weight scale (HUD number; no arrow)" -f $s.physics.lead.fNetN)
+            Assert ($s.physics.lead.axisLines -eq 0 -and $s.physics.follow.axisLines -eq 0) "no F_net up-arrow / plumb axis through the leader or the follower (user 2026-10-07)"
         } else { Write-Host "  (no physics.json in this capture)" }
 
         Invoke-Unity hm_layer --layer floor --visible false | Out-Null
@@ -289,16 +296,20 @@ foreach ($cap in $Capture) {
     Write-Host "  $($perf -replace '\s+', ' ')"
 
     # VIEWER_SPEC 5.2 camera rig + 3.2 avatar opacity (+ before/after review shots for the realism pass)
-    if (Test-Path "$PSScriptRoot/playtest_camera.ps1") { . "$PSScriptRoot/playtest_camera.ps1" }
+    if ((Want "camera") -and (Test-Path "$PSScriptRoot/playtest_camera.ps1")) { . "$PSScriptRoot/playtest_camera.ps1" }
 
     # VIEWER_SPEC v3 dance layers: origin, counterbalance, follower traces, dance graph, hm_tour (+ review shots)
-    if (Test-Path "$PSScriptRoot/playtest_dance_layers.ps1") { . "$PSScriptRoot/playtest_dance_layers.ps1" }
+    if ((Want "dance_layers") -and (Test-Path "$PSScriptRoot/playtest_dance_layers.ps1")) { . "$PSScriptRoot/playtest_dance_layers.ps1" }
 
     # the follow's groomed hair (Assets/Hair) on captures with hair_groom.json: stability, budget, CPU, review shots
-    if (Test-Path "$PSScriptRoot/playtest_hair.ps1") { . "$PSScriptRoot/playtest_hair.ps1" }
+    if ((Want "hair") -and (Test-Path "$PSScriptRoot/playtest_hair.ps1")) { . "$PSScriptRoot/playtest_hair.ps1" }
 
     # procedural sneakers (Assets/Shoes) on the SMPL-X avatars: budget, foot cut, opacity, floor contact sweep, close-ups
-    if (Test-Path "$PSScriptRoot/playtest_shoes.ps1") { . "$PSScriptRoot/playtest_shoes.ps1" }
+    if ((Want "shoes") -and (Test-Path "$PSScriptRoot/playtest_shoes.ps1")) { . "$PSScriptRoot/playtest_shoes.ps1" }
+
+    # the follower's spine as a bead chain (Assets/Overlays/SpineBeads.cs): no spine line, 1 instanced draw, the rhythm
+    # pulse climbing bead by bead, physics colours, visibility, review shots spine_*.png
+    if ((Want "spine") -and (Test-Path "$PSScriptRoot/playtest_spine.ps1")) { . "$PSScriptRoot/playtest_spine.ps1" }
 
     Write-Host "== console"
     $console = (Invoke-Unity console --level error --tail 50) | ConvertFrom-Json

@@ -91,7 +91,10 @@ if ($capJsonS.version -ge 3 -and $null -ne $capJsonS.smplx_skin) {
     }
 
     Write-Host "== shoes: whole-capture sweep (real bones and proxies)"
-    $sw = Get-Shoes @("--action", "sweep")
+    # the sweep of a 38 s capture takes ~31 s on the main thread: past the CLI's default 30 s timeout, so it would come
+    # back unreadable and every sweep check below would be skipped silently
+    $sw = Get-Shoes @("--action", "sweep", "--timeout", "300")
+    Assert ($null -ne $sw -and $null -ne $sw.lead -and $null -ne $sw.follow) "shoe sweep ran on both dancers"
     foreach ($role in "lead", "follow") {
         $w = $sw.$role
         if ($null -eq $w) { continue }
@@ -101,7 +104,7 @@ if ($capJsonS.version -ge 3 -and $null -ne $capJsonS.smplx_skin) {
                 $role, $side, $f.meshMin.min, $f.meshMin.p10, $f.meshBelow1mmFrames, $f.penetratingBefore, $f.rawLowest.min)
             Assert ($f.legPokeFrames -eq 0) ("{0} {1}: no visible leg point outside the shoe or through the tongue on any frame ({2} frames > 1 mm, worst {3:0.0} mm at f{4} {5})" -f `
                 $role, $side, $f.legPokeFrames, $f.legPokeWorstMm, $f.legPokeWorstFrame, $f.legPokeWhere)
-            # the check flags a cut-edge point it cannot prove covered (2 mm); 02_LarissaKadu keeps 4 such frames at the
+            # the check flags a cut-edge point it cannot prove covered (2 mm); a demo take keeps 4 such frames at the
             # follow's right top eyelet (round f152, on the toes), where the tongue's bend leaves its prisms a gap
             Assert ($f.cutEdgeExposedFrames -le 4 -and $f.cutEdgeWorstMm -le 2.0) ("{0} {1}: the body's cut edge stays inside the shoe ({2} frames not provably covered, worst {3:0.0} mm {4})" -f `
                 $role, $side, $f.cutEdgeExposedFrames, $f.cutEdgeWorstMm, $f.cutEdgeWhere)

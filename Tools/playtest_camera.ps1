@@ -198,7 +198,28 @@ if ($null -ne $cs.camera) {
     Write-Host "== avatar opacity (VIEWER_SPEC 3.2)"
     $s = Get-State
     if ($null -ne $s.avatars.lead) {
-        Assert ($s.avatarOpacity -gt 0.2 -and $s.avatarOpacity -lt 0.5) ("avatars semi-transparent by default ({0:0.00})" -f $s.avatarOpacity)
+        Assert ($s.avatarOpacity -gt 0.2 -and $s.avatarOpacity -lt 0.5) ("avatars semi-transparent by default (displayed opacity {0:0.00})" -f $s.avatarOpacity)
+        # the user's "65 % transparent" (2026-10-07) is what the SCREEN shows: background contribution through one body
+        # layer over black vs grey backgrounds, Game-view pipeline (sRGB 8-bit, post-processing on). Each body blends with
+        # its own alpha for the displayed opacity (bright follower low, dark leader high); linear light = 1 - that alpha
+        $pr = ConvertFrom-UnityJson (Invoke-Unity hm_opacity --probe both --hair true)
+        if ($null -ne $pr) {
+            $k = ([double]$s.avatarOpacity).ToString("0.###", [System.Globalization.CultureInfo]::InvariantCulture)
+            $want = 1 - [double]$s.avatarOpacity
+            $f = $pr.follow.display.byOpacity.$k; $l = $pr.lead.display.byOpacity.$k
+            $fl = $pr.follow.linear.byOpacity.$k; $ll = $pr.lead.linear.byOpacity.$k
+            $hairT = $pr.follow.display.hairByAvatarOpacity.$k
+            # per pixel (default): every part of a body shows the opacity (narrow p10..p90); body mode: linear = 1 - its alpha
+            $even = if ($pr.alphaMode -eq "pixel") {
+                ([double]$f.transparencyP90 - [double]$f.transparencyP10) -le 0.06 -and ([double]$l.transparencyP90 - [double]$l.transparencyP10) -le 0.06
+            } else {
+                [math]::Abs([double]$fl.transparency - (1 - [double]$fl.blendAlpha)) -le 0.01 -and [math]::Abs([double]$ll.transparency - (1 - [double]$ll.blendAlpha)) -le 0.01
+            }
+            Assert ([math]::Abs([double]$f.transparency - $want) -le 0.04 -and [math]::Abs([double]$l.transparency - $want) -le 0.04 -and $even) `
+                ("{0:P0} transparent as displayed at opacity {1} ({2} alpha): follow {3:P1} (p10..p90 {4:P0}..{5:P0}), lead {6:P1} (p10..p90 {7:P0}..{8:P0}); hair {9:P0} (alpha {10:0.00})" -f `
+                 $want, $k, $pr.alphaMode, [double]$f.transparency, [double]$f.transparencyP10, [double]$f.transparencyP90, [double]$l.transparency,
+                 [double]$l.transparencyP10, [double]$l.transparencyP90, [double]$hairT.transparency, [double]$hairT.hairOpacity)
+        }
         Assert ([math]::Abs($s.avatars.lead.opacity - $s.avatarOpacity) -lt 1e-3 -and [math]::Abs($s.avatars.follow.opacity - $s.avatarOpacity) -lt 1e-3) "both bodies at the default opacity"
         $def = $s.avatarOpacity
         $r = ConvertFrom-UnityJson (Invoke-Unity hm_opacity --value 0.5)

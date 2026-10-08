@@ -59,8 +59,19 @@ if (Test-Path $hairGroomPath) {
         $h.bake.bakedFrames, $h.bake.wallMs, $h.bake.msPerFrame, ($h.bake.cacheBytes / 1MB))
     if ($h.rest) {
         Assert ($h.rest.faceBoxPoints -eq 0) "rest shape keeps the face box clear ($($h.rest.faceBoxPoints) guide points inside)"
-        Write-Host ("  rest shape: front-right tips in front of the right shoulder {0:P0} of {1}, front-left behind the ear {2:P0} of {3}" -f `
-            $h.rest.frontRightTipsForwardOfShoulder, $h.rest.frontRightGuides, $h.rest.frontLeftBehindEar, $h.rest.frontLeftGuides)
+        if ($h.rest.frontRightDrape -eq "behind_shoulder" -and [double]$h.rest.foreheadSweep -gt 0) {
+            # 2026-10-07 evening "part forward, rest back": the forehead section is swept across the forehead and down the right
+            # temple (beside the face, never in the face box), the front-right section still drapes behind the right shoulder
+            Assert ([double]$h.rest.frontRightTipsBehindShoulder -ge 0.8 -and $h.rest.pointsBesideFace -le 16 -and [double]$h.rest.partStartBackM -eq 0) ("rest shape part forward, rest back: forehead sweep {0}, front-right tips behind the right shoulder {1:P0} of {2}, {3} guide points beside the face (temple sweep; face box clear), front-left behind the ear {4:P0} of {5}; side drape {6}, part starts at the hairline" -f `
+                $h.rest.foreheadSweep, $h.rest.frontRightTipsBehindShoulder, $h.rest.frontRightGuides, $h.rest.pointsBesideFace, $h.rest.frontLeftBehindEar, $h.rest.frontLeftGuides, $h.rest.sideDrapeBack)
+        } elseif ($h.rest.frontRightDrape -eq "behind_shoulder") {
+            # 2026-10-07 "pulled back": the front-right section drapes behind the right shoulder, nothing hangs beside the face
+            Assert ([double]$h.rest.frontRightTipsBehindShoulder -ge 0.8 -and $h.rest.pointsBesideFace -eq 0) ("rest shape pulled back: front-right tips behind the right shoulder {0:P0} of {1} (in front {2:P0}), {3} guide points beside / in front of the face, front-left behind the ear {4:P0} of {5}; pull {6}, side drape {7}, part starts {8} m back" -f `
+                $h.rest.frontRightTipsBehindShoulder, $h.rest.frontRightGuides, $h.rest.frontRightTipsForwardOfShoulder, $h.rest.pointsBesideFace, $h.rest.frontLeftBehindEar, $h.rest.frontLeftGuides, $h.rest.frontPull, $h.rest.sideDrapeBack, $h.rest.partStartBackM)
+        } else {
+            Write-Host ("  rest shape: front-right tips in front of the right shoulder {0:P0} of {1}, front-left behind the ear {2:P0} of {3}" -f `
+                $h.rest.frontRightTipsForwardOfShoulder, $h.rest.frontRightGuides, $h.rest.frontLeftBehindEar, $h.rest.frontLeftGuides)
+        }
     }
 
     function Assert-HairSane([string]$what) {
@@ -98,6 +109,7 @@ if (Test-Path $hairGroomPath) {
     Assert ($h.strandResets -eq 0 -and $h.bake.strandResets -eq 0) "no strand re-hung by the blow-up guard (live $($h.strandResets), bake $($h.bake.strandResets))"
 
     Write-Host "== hair: opacity follows the avatar (VIEWER_SPEC 3.2: avatar + 0.15, ramped to 0 with the body)"
+    $opH0 = [double](Get-State).avatarOpacity  # the viewer default (displayed opacity 0.35): restored after the checks
     function HairOpacityFor([double]$a) { $t = [math]::Min(1.0, [math]::Max(0.0, $a / 0.2)); return [math]::Min(1.0, $a + 0.15 * $t * $t * (3 - 2 * $t)) }
     foreach ($ov in 0.35, 0.1155, 0.035) {
         Invoke-Unity hm_opacity --value (NumH $ov) | Out-Null
@@ -107,7 +119,7 @@ if (Test-Path $hairGroomPath) {
         Assert ($h.opacitySource -eq "avatar" -and [math]::Abs([double]$h.opacity - $want) -lt 0.01 -and [math]::Abs([double]$h.glowFade - $glowWant) -lt 0.01) `
             ("avatar {0:0.000}: hair opacity {1:0.000} (= a + 0.15 x smoothstep(0, 0.2, a)), tip glow x {2:0.00}" -f $h.avatarOpacity, $h.opacity, $h.glowFade)
     }
-    Invoke-Unity hm_opacity --value 0.35 | Out-Null
+    Invoke-Unity hm_opacity --value (NumH $opH0) | Out-Null
     $h = Get-Hair @("--action", "set", "--opacity", "0.65")
     Assert ($h.opacitySource -eq "override" -and [math]::Abs($h.opacity - 0.65) -lt 0.01) "hm_hair --opacity 0.65 overrides it"
     $h = Get-Hair @("--action", "set", "--opacity", "-1")
@@ -118,10 +130,10 @@ if (Test-Path $hairGroomPath) {
     Invoke-Transport seek @("--time", (NumH ($base + 1.0))) | Out-Null
     Invoke-Unity hm_hair --action set --lod 0 | Out-Null
     Invoke-Unity hm_hair --action frame --azimuth 160 --elevation 8 --radius 1.0 --drop 0.25 --solo true | Out-Null
-    Invoke-Unity hm_opacity --value 1 | Out-Null  # an opaque body: her white top is the white-balance reference
+    Invoke-Unity hm_opacity --value 1 | Out-Null  # an opaque body: its bright unsaturated region is the white-balance reference
     Start-Sleep -Milliseconds 400
     $pr = Get-Hair @("--action", "probe", "--opacities", "1,0.65,0.45,0.3")
-    Invoke-Unity hm_opacity --value 0.35 | Out-Null
+    Invoke-Unity hm_opacity --value (NumH $opH0) | Out-Null
     if ($null -ne $pr) {
         $fadeTxt = ($pr.fade.PSObject.Properties | ForEach-Object { "{0}: {1:0.00}" -f $_.Name, $_.Value.hairShare }) -join ", "
         Assert ($pr.hairPixels -gt 2000) "hair pixels in the review render: $($pr.hairPixels)"
@@ -132,15 +144,19 @@ if (Test-Path $hairGroomPath) {
             $pr.hdrPixelsGlowOn, $pr.hdrPixelsGlowOff, $pr.glowHaloPixels)
         Assert ($pr.glowHaloPixels -ge 20) "the tip glow has a soft halo, not only 1 px lines ($($pr.glowHaloPixels) pixels)"
         Assert ($pr.litBodyMaxLinear -le 0.7) ("lit hair body {0:0.000} linear (p99.5 over a dark background; soft clamp 0.66: below URP's bloom threshold 1.0)" -f $pr.litBodyMaxLinear)
-        $target = if ($pr.colourSource -eq "portrait") { "portrait shadow / mid / highlight #37070B / #63131F / #832937" } else { "video p10 / p50 / p90 #4D160E / #732C24 / #B54D43" }
-        Write-Host ("  hair colour ({0}), white-balanced on her top (HAIR_REFERENCE 4: {1}): p10 {2} p50 {3} p90 {4} (raw {5} / {6} / {7})" -f `
+        # reference colour targets are per-capture appearance data: they live in the git-ignored Tools/local.ps1
+        if (Test-Path "$PSScriptRoot/local.ps1") { . "$PSScriptRoot/local.ps1" }
+        if (-not $HairTargetPortrait) { $HairTargetPortrait = "(define `$HairTargetPortrait in Tools/local.ps1)" }
+        if (-not $HairTargetVideo) { $HairTargetVideo = "(define `$HairTargetVideo in Tools/local.ps1)" }
+        $target = if ($pr.colourSource -eq "portrait") { "portrait shadow / mid / highlight $HairTargetPortrait" } else { "video p10 / p50 / p90 $HairTargetVideo" }
+        Write-Host ("  hair colour ({0}), white-balanced on the bright body reference (HAIR_REFERENCE 4: {1}): p10 {2} p50 {3} p90 {4} (raw {5} / {6} / {7})" -f `
             $pr.colourSource, $target, $pr.colour.p10.whiteBalancedHex, $pr.colour.p50.whiteBalancedHex, $pr.colour.p90.whiteBalancedHex, $pr.colour.p10.hex, $pr.colour.p50.hex, $pr.colour.p90.hex)
     }
     Invoke-Unity hm_hair --action release | Out-Null
     Invoke-Unity hm_hair --action set --lod auto | Out-Null
 
     Write-Host "== hair: whole-capture sweep"
-    $sw = Get-Hair @("--action", "sweep")
+    $sw = Get-Hair @("--action", "sweep", "--timeout", "300")  # a 38 s capture can exceed the CLI's default 30 s
     $tg = $groomH.dynamics.targets
     Assert ($sw.nonFinite -eq 0 -and $sw.strandResets -eq 0 -and $sw.maxStretch -lt 1.05) ("sweep of {0} frames stable (stretch {1:0.000}, resets {2}, NaN {3})" -f $sw.frames, $sw.maxStretch, $sw.strandResets, $sw.nonFinite)
     Assert ($sw.faceIntrusionsMax -eq 0) ("face clear on every frame: {0} guide points in the face box at worst ({1} frames); card vertices {2} at worst ({3} frames)" -f `

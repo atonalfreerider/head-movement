@@ -2,13 +2,21 @@
 VIEWER_SPEC v3 dance-layer checks, dot-sourced by Tools/playtest.ps1 inside its per-capture loop (uses its
 Invoke-Unity / Get-State / Invoke-Transport / Assert / Shot helpers and $cap / $prefix). Covers:
   - origin (3.0): couple centre within 1 cm of (0,0) at the first frame; physics COM moved with the dancers
-  - counterbalance (3.9/3.5): yellow axis on/off within +-1 frame of the synthetic truth interval, floor dot
-    under the truth combined COM (<= 2 cm), pivot ring at the truth anchored foot (<= 3 cm), pivot ring timing
-  - follower traces (3.7) and the counterbalance / traces / graph layer switches
+  - counterbalance (3.9/3.5): yellow COM floor marker on/off within +-1 frame of the synthetic truth interval, floor
+    dot under the truth combined COM (<= 2 cm), no vertical couple axis, pivot ring at the truth anchored foot
+    (<= 3 cm), pivot ring timing
+  - follower traces (3.7): never on a step (every drawn foot run is a leg gesture: peak >= 12 cm or >= 0.6 s), never
+    at floor height, the counterbalance's free leg trails; the counterbalance / traces / neck / graph layer switches
+  - physics colours (3.8): tension / compression joints keep their hue (low minor channels, LDR)
+  - the follower's neck axis (3.7, user 2026-10-07): none while her neck is within 15 deg of her chest's axis, then a
+    white axis from her neck that fades in and grows (alpha = length / 0.5 m = smoothstep of 15..35 deg) on every
+    sampled frame; never an axis on the leader (no F_net arrow, no plumb, no vertical couple axis)
   - dance graph (3.10/3.11): every segment maps to a node, the miniature couple reaches each node by the segment
     start, glides in between, new links flagged, placeholder badge; fingerprint dwell seconds sum to the
     labelled duration
   - hm_tour (6): the state sequence, per-state avatar opacity, layers restored after stop
+  - the move caption (3.12): Portuguese name + English alias + narration confidence, changes at every narrated
+    boundary, unlabelled gaps, no placeholder text, graph inset in directed playback (Tools/playtest_move_caption.ps1)
 Review screenshots are also copied to $ReviewDir (default ../dancecap/work/review/unity_moves).
 #>
 
@@ -58,7 +66,7 @@ if ($null -ne $s.origin) {
 }
 
 Write-Host "== dance layers: layer switches"
-foreach ($layer in "counterbalance", "traces", "graph") {
+foreach ($layer in "counterbalance", "traces", "neck", "graph", "axis", "floorcraft", "balance", "grid", "moves") {
     $before = [bool](Get-State).layers.$layer
     $flip = (-not $before).ToString().ToLower(); $back = $before.ToString().ToLower()
     Invoke-Unity hm_layer --layer $layer --visible $flip | Out-Null
@@ -67,17 +75,175 @@ foreach ($layer in "counterbalance", "traces", "graph") {
     Invoke-Unity hm_layer --layer $layer --visible $back | Out-Null
 }
 
+Write-Host "== floor, skeleton modes, free-extremity traces (VIEWER_SPEC 3.1 / 3.3 / 3.5-3.8, user 2026-10-07)"
+Invoke-Unity hm_layer --layer physics --visible false | Out-Null  # the main playtest turned the physics view on
+Invoke-Unity hm_floor --footprints recent | Out-Null
+$s = Get-State
+Assert ($s.layers.grid -and $s.grid.crosses -gt 20) "floor grid on by default: $($s.grid.crosses) light-teal 1 m crosses, plane alpha $($s.grid.planeAlpha)"
+Assert ($s.footprints.mode -eq "recent") "footprints not all shown by default (mode $($s.footprints.mode), $($s.footprints.recentSeconds) s fade)"
+$fpMax = 0
+foreach ($k in 0, [int]($script:frameTimes.Count / 3), [int]($script:frameTimes.Count * 2 / 3)) { if ($script:frameTimes.Count -gt 0) { $st = Seek-Frame $k; $fpMax = [math]::Max($fpMax, [int]$st.footprints.visiblePrints) } }
+Assert ($fpMax -le 8) "recent footprints only: at most $fpMax prints on the floor at a time (of $($s.footprints.steps))"
+Assert ($s.connectionLines -eq 0) "no partner tension / pressure connector lines"
+Assert ($s.skeletonMode -eq "rhythm" -and -not $s.layers.physics) "rhythm mode with the physics view off"
+$sk = Invoke-Json @("hm_skeleton")
+if ($null -ne $sk) {
+    Assert ($sk.beats -gt 0) "beat pulse: $($sk.beats) beats from $($sk.beatSource); accents: $($sk.accentSource)"
+    # the pulse starts at the stance foot and reaches the head later: find a frame just after a strong beat
+    $ok = $false
+    for ($k = 2; $k -lt [math]::Min($script:frameTimes.Count, 400) -and -not $ok; $k += 2) {
+        $st = Seek-Frame $k
+        $sk = Invoke-Json @("hm_skeleton")
+        if ($null -eq $sk.lastBeat -or $sk.lastBeat.strength -lt 0.5 -or $sk.lastBeat.age -gt 0.06) { continue }
+        $f = $sk.follow
+        $foot = [math]::Max([double]$f.pulse[10], [double]$f.pulse[11]); $head = [double]$f.pulse[15]
+        Assert ($foot -gt $head) ("pulse travels up from the stance foot: {0:0.00} s after a beat foot {1:0.00} > head {2:0.00} (stance {3})" -f $sk.lastBeat.age, $foot, $head, $f.stance)
+        $ok = $true
+    }
+    $ph = Invoke-Json @("hm_skeleton", "--mode", "physics")
+    Assert ($ph.mode -eq "physics" -and $ph.layerPhysics -and (Get-State).skeletonLegend) "physics mode colours the skeletons (legend shown; loads from $($ph.loadSource))"
+    # tension orange, compression blue: the line colour keeps its minor channels low (no gold on screen)
+    $hueBad = 0; $tensionN = 0
+    foreach ($who in "lead", "follow") {
+        $ld = @($ph.$who.load); $cl = @($ph.$who.colour)
+        for ($j = 0; $j -lt $ld.Count; $j++) {
+            $c = $cl[$j]
+            if ([double]$ld[$j] -gt 0.7) { $tensionN++; if ([double]$c[1] -gt 0.3 * [double]$c[0] -or [double]$c[0] -gt 1.0) { $hueBad++ } }
+            if ([double]$ld[$j] -lt -0.7 -and [double]$c[1] -gt 0.45 * [double]$c[2]) { $hueBad++ }
+        }
+    }
+    Assert ($hueBad -eq 0) "load colours stay orange / blue (green <= 0.3 red on tension, <= 0.45 blue on compression, LDR): $tensionN tension joints this frame, $hueBad off-hue"
+    $lf = @($ph.follow.load)
+    Assert ($ph.follow.stance -eq "" -or ([double]$lf[1] -lt 0) -or ([double]$lf[2] -lt 0)) ("a stance leg is in compression (follow stance {2}, hips {0:0.00} / {1:0.00})" -f $lf[1], $lf[2], $ph.follow.stance)
+    Invoke-Json @("hm_skeleton", "--mode", "rhythm") | Out-Null
+    Assert ((Get-State).skeletonMode -eq "rhythm") "back to rhythm mode"
+}
+$fc = (Get-State).floorCraft
+if ($null -ne $fc) {
+    Assert ($fc.axisVisible -and $fc.recordVisible) "leader floor axis + floor-craft record on by default ($($fc.axisSource); mode $($fc.mode): $($fc.tAxes) Ts, $($fc.transitions) transitions, $($fc.axisPivots) axis pivots, $($fc.dials) dials)"
+    if ($fc.mode -eq "t_axes") {
+        # the stable T (user 2026-10-07; Tools/playtest_floorcraft.ps1 checks it in depth): the whole record by the end
+        $end = Seek-Frame ($script:frameTimes.Count - 1)
+        $e = $end.floorCraft
+        $current = if ([int]$e.currentT -ge 0) { 1 } else { 0 }
+        Assert ([int]$e.oldTShown + $current -eq [int]$e.tAxes -and [int]$e.transitionsShown -eq [int]$e.transitionsDrawable -and [int]$e.axisPivotsShown -eq [int]$e.axisPivotsDrawable -and [int]$e.dialsShown -eq [int]$e.dials) `
+            "by the end the floor keeps the whole record ($($e.oldTShown) old Ts + $current current, $($e.transitionsShown) transitions, $($e.axisPivotsShown) axis pivots, $($e.dialsShown) dials)"
+        $first = Seek-Frame 0
+        Assert ([int]$first.floorCraft.oldTShown -eq 0 -and [int]$first.floorCraft.dialsShown -eq 0) "nothing from the future at the start ($($first.floorCraft.oldTShown) old Ts, $($first.floorCraft.dialsShown) dials)"
+    } else {
+        $st = Seek-Frame ([int]($script:frameTimes.Count / 2))
+        Assert ($st.floorCraft.axisToChestM -le 0.05) ("live axis origin under the leader's chest ({0:0.0} mm; no v3 floorcraft.json)" -f ($st.floorCraft.axisToChestM * 1000))
+    }
+}
+$tr = (Get-State).traces
+if ($null -ne $tr) {
+    Assert ($tr.visible -and $tr.windowSeconds -le 0.4) "follower traces on, brief window $($tr.windowSeconds) s ($($tr.windowFrames) frames)"
+    $bad = 0
+    for ($k = 0; $k -lt $script:frameTimes.Count; $k += 15) {
+        $st = Seek-Frame $k
+        foreach ($p in $st.traces.extremities.PSObject.Properties) {
+            # a trace on an attached extremity may only be the fading tail of a free run (<= window frames old)
+            if (-not $p.Value.freeNow -and $p.Value.points -gt $tr.windowFrames + 1) { $bad++ }
+        }
+    }
+    Assert ($bad -eq 0) "no trace longer than the window on an attached extremity ($bad)"
+    # feet (review 2026-10-07): a step never trails - every drawn foot run is a leg gesture (peak >= 12 cm or >= 0.6 s),
+    # and a shown foot trace is never at floor height
+    $stepRuns = 0; $runsN = 0; $floorShown = 0
+    foreach ($foot in "LeftAnkle", "RightAnkle") {
+        foreach ($r in @($tr.extremities.$foot.runs)) {
+            if ($null -eq $r) { continue }
+            $runsN++
+            if ([double]$r[2] -lt 0.12 -and [double]$r[3] -lt 0.6) { $stepRuns++; Write-Host ("  step-like {0} run {1}-{2}: peak {3:0.0} cm, {4:0.00} s" -f $foot, $r[0], $r[1], ([double]$r[2] * 100), [double]$r[3]) }
+        }
+    }
+    for ($k = 0; $k -lt $script:frameTimes.Count; $k += 15) {
+        $st = Seek-Frame $k
+        foreach ($foot in "LeftAnkle", "RightAnkle") {
+            $e = $st.traces.extremities.$foot
+            if ($e.freeNow -and $e.points -gt 0 -and [double]$e.footHeightM -le [double]$st.traces.footRule.floorBandM) { $floorShown++ }
+        }
+    }
+    Assert ($stepRuns -eq 0) "no foot trace on a step (a run under 12 cm and 0.6 s): $runsN gesture run(s) drawn, $stepRuns step-like"
+    Assert ($floorShown -eq 0) "no foot trace at floor height (sliding / pivoting foot) on the sampled frames ($floorShown)"
+    $cbNow = (Get-State).counterbalance
+    if ($cbNow.loaded -and $cbNow.intervals -gt 0 -and $script:frameTimes.Count -gt 0) {
+        # the counterbalance's free leg still trails: a drawn run of the non-pivot foot overlaps the first interval
+        $iv0 = @($cbNow.intervalTimes)[0]
+        $fa = 0; $fb = $script:frameTimes.Count - 1
+        for ($k = 0; $k -lt $script:frameTimes.Count; $k++) { if ($script:frameTimes[$k] -lt [double]$iv0[0]) { $fa = $k + 1 }; if ($script:frameTimes[$k] -le [double]$iv0[1]) { $fb = $k } }
+        $overlap = 0
+        foreach ($foot in "LeftAnkle", "RightAnkle") {
+            foreach ($r in @($tr.extremities.$foot.runs)) { if ($null -ne $r -and [int]$r[1] -gt $fa -and [int]$r[0] -le $fb) { $overlap++ } }
+        }
+        Assert ($overlap -ge 1) ("the counterbalance's free leg trails during it (frames {0}-{1}: {2} drawn foot run(s))" -f $fa, $fb, $overlap)
+    }
+    $fr = $tr.extremities
+    Write-Host ("  free fractions: L hand {0:P1}, R hand {1:P1}, L foot {2:P1}, R foot {3:P1}, head {4:P1}" -f $fr.LeftWrist.freeFraction, $fr.RightWrist.freeFraction, $fr.LeftAnkle.freeFraction, $fr.RightAnkle.freeFraction, $fr.Head.freeFraction)
+}
+
+$na = (Get-State).neckAxis
+if ($null -ne $na -and $script:frameTimes.Count -gt 0) {
+    Write-Host "== follower neck axis (VIEWER_SPEC 3.7)"
+    Invoke-Unity hm_layer --layer neck --visible true | Out-Null
+    Assert ($na.visible -and $na.role -eq "follow") ("neck axis layer on by default, follower only (source: {0}, reference {1}, {2} of {3} frames over {4} deg, max {5:0.0} deg)" -f `
+        $na.source, $na.reference, $na.framesOverThreshold, $na.frames, $na.thresholdDeg, $na.maxAngleDeg)
+    if ($capJson.smplx) { Assert ($na.source -eq "smplx rotations") "angle from the SMPL-X head / chest rotations" }
+    function Ramp([double]$a) { $t = [math]::Min(1.0, [math]::Max(0.0, ($a - $na.thresholdDeg) / ($na.fullDeg - $na.thresholdDeg))); return $t * $t * (3 - 2 * $t) }
+    # every 3rd frame: no axis at or below the threshold, alpha / length = the ramp of the angle above it
+    $bad = 0; $shownN = 0; $leadAxis = 0; $nf = $script:frameTimes.Count
+    for ($k = 0; $k -lt $nf; $k += 3) {
+        $st = Seek-Frame $k
+        $n = $st.neckAxis
+        $want = Ramp ([double]$n.angleDeg)
+        $ok = [math]::Abs([double]$n.alpha - $want) -le 1e-3 -and [math]::Abs([double]$n.lengthM - $want * $n.maxLengthM) -le 1e-3 -and
+              ($n.shown -eq ($want -gt 1e-3)) -and ([double]$n.angleDeg -gt $n.thresholdDeg -or -not $n.shown)
+        if (-not $ok) { $bad++; if ($bad -le 3) { Write-Host ("  frame {0}: angle {1:0.0} alpha {2:0.000} length {3:0.000} shown {4}" -f $k, $n.angleDeg, $n.alpha, $n.lengthM, $n.shown) } }
+        if ($n.shown) { $shownN++ }
+        if ($null -ne $st.physics -and ($st.physics.lead.axisLines -gt 0 -or $st.physics.follow.axisLines -gt 0)) { $leadAxis++ }
+        if ($st.counterbalance.axisRendered -and [double]$st.counterbalance.axisToLeaderM -lt [double]$st.counterbalance.leaderClearanceM) { $leadAxis++ }
+    }
+    Assert ($bad -eq 0) ("neck axis = smoothstep ramp of the angle on every sampled frame ({0} of {1} sampled frames show it; {2} wrong)" -f $shownN, [math]::Ceiling($nf / 3), $bad)
+    Assert ($leadAxis -eq 0) "no up axis on the leader on any sampled frame (physics arrows / plumbs, couple axis in his torso: $leadAxis)"
+    $up = Seek-Frame ([int]$na.uprightFrame)
+    Assert (-not $up.neckAxis.shown -and $up.neckAxis.alpha -eq 0) ("neck upright (frame {0}, {1:0.0} deg): no axis" -f $na.uprightFrame, $up.neckAxis.angleDeg)
+    if ($na.rampFrame -ge 0) {
+        $rp = Seek-Frame ([int]$na.rampFrame)
+        $h = $rp.avatars.follow
+        $base0 = $rp.neckAxis.start; $tip = $rp.neckAxis.tip
+        $dHead = if ($null -ne $h) { Dist $base0 $h.skeletonHead } else { 0 }
+        $belowHead = ($null -eq $h) -or ($base0[1] -lt $h.skeletonHead[1])
+        Assert ($rp.neckAxis.shown -and $rp.neckAxis.alpha -gt 0 -and $rp.neckAxis.alpha -lt 1 -and $dHead -lt 0.3 -and $belowHead) `
+            ("neck off-axis {0:0.0} deg (frame {1}): axis fading in, alpha {2:0.00}, {3:0.00} m from her neck ({4:0.00} m below her head joint)" -f $rp.neckAxis.angleDeg, $na.rampFrame, $rp.neckAxis.alpha, $rp.neckAxis.lengthM, $dHead)
+        # close-up around her head (hm_hair frame needs her hair; without it, a near orbit of the couple)
+        $hasHair = Test-Path (Join-Path $capDir "hair_groom.json")
+        if ($hasHair) { Invoke-Unity hm_hair --action frame --azimuth 70 --elevation 5 --radius 1.7 --drop 0.35 --solo false | Out-Null }
+        else { Invoke-Unity hm_orbit --azimuth 60 --elevation 12 --radius 2.6 | Out-Null }
+        ReviewShot "${cap}_neck_axis_ramp"
+        Seek-Frame ([int]$na.uprightFrame) | Out-Null
+        ReviewShot "${cap}_neck_axis_upright"
+        if ($na.fullFrame -ge 0) { Seek-Frame ([int]$na.fullFrame) | Out-Null; ReviewShot "${cap}_neck_axis_full" }
+        if ($hasHair) { Invoke-Unity hm_hair --action release | Out-Null }
+    }
+}
+
 $cb = (Get-State).counterbalance
 if ($cb.loaded -and $script:frameTimes.Count -gt 0) {
     Write-Host "== counterbalance (VIEWER_SPEC 3.9, 14)"
     Invoke-Unity hm_layer --layer counterbalance --visible true | Out-Null
-    Assert ($cb.intervals -gt 0) "counterbalance.json: $($cb.intervals) interval(s), $($cb.pivots) pivot(s)"
+    # a real take's detector may find no interval inside the capture's window (a valid, empty file: nothing to draw)
+    if ($cb.intervals -gt 0 -or $null -ne $truth -or $cap -like "*Synthetic*") {
+        Assert ($cb.intervals -gt 0) "counterbalance.json: $($cb.intervals) interval(s), $($cb.pivots) pivot(s)"
+    } else {
+        Write-Host "  (counterbalance.json: no interval in this capture's window - the layer draws nothing)"
+    }
     # data-independent alignment: mid-pivot, the ring sits under the follower's anchored foot as the skeleton shows it
     $firstPivot = @($cb.intervalTimes | Where-Object { $null -ne $_[2] }) | Select-Object -First 1
     if ($null -ne $firstPivot) {
         $st = Invoke-Transport seek @("--time", (Num (([double]$firstPivot[2] + [double]$firstPivot[3]) / 2)))
         Assert ($st.counterbalance.pivotRunning -and $st.counterbalance.pivotToFootM -le 0.03) ("pivot ring under the follower's anchored foot (skeleton): {0:0.0} mm" -f ($st.counterbalance.pivotToFootM * 1000))
-        Assert ($st.counterbalance.axisVisible) "yellow axis shown mid-pivot"
+        Assert ($st.counterbalance.axisVisible -and $st.counterbalance.comMarkerRendered) "yellow COM floor dot + ring shown mid-pivot"
+        Assert (-not $st.counterbalance.axisRendered) "no vertical couple axis (review 2026-10-07: it stood in front of the leader; axis to leader $([math]::Round([double]$st.counterbalance.axisToLeaderM, 3)) m)"
     }
     $truthPath = if ($take) { Join-Path (Split-Path (Get-Location) -Parent) "dancecap\work\$take\truth.json" } else { $null }
     $truth = $null
@@ -113,7 +279,7 @@ if ($cb.loaded -and $script:frameTimes.Count -gt 0) {
         $px = $iv.pivot[0] + $off[0]; $pz = -$iv.pivot[2] + $off[2]
         $dp = [math]::Sqrt([math]::Pow($st.counterbalance.pivot[0] - $px, 2) + [math]::Pow($st.counterbalance.pivot[2] - $pz, 2))
         Assert ($dp -le 0.03) ("pivot ring at the truth anchored foot: {0:0.0} mm" -f ($dp * 1000))
-        Assert ($st.counterbalance.connection) "taut connection line drawn during the counterbalance"
+        Assert (-not $st.counterbalance.connection -and $st.connectionLines -eq 0) "no tension / pressure connector line during the counterbalance (user 2026-10-07)"
         Assert (-not $st.counterbalance.dashed) "high-confidence interval drawn solid"
         $tr = (Get-State).traces
         Invoke-Unity hm_layer --layer traces --visible true | Out-Null
@@ -191,6 +357,9 @@ if ($null -ne $g -and $g.nodes -gt 0) {
     Invoke-Json @("hm_graph", "--mode", "off") | Out-Null
 }
 
+# the move caption, unlabelled gaps, provenance and the graph inset (VIEWER_SPEC 3.12, 10; Tools/playtest_move_caption.ps1)
+if (Test-Path "$PSScriptRoot/playtest_move_caption.ps1") { . "$PSScriptRoot/playtest_move_caption.ps1" }
+
 Write-Host "== hm_tour (VIEWER_SPEC 6)"
 $layersBefore = (Get-State).layers
 $s0 = Get-State
@@ -210,7 +379,7 @@ $order = @($hist | Select-Object -First $expected.Count | ForEach-Object { $_.st
 Assert (($order -join ",") -eq ($expected -join ",")) "tour order: $($order -join ' -> ') (camera tour slot: $($t.note))"
 if ($hist.Count -gt $expected.Count) { Assert ($hist[$expected.Count].state -eq "orbit") "tour loops back to Orbit" }
 $frameDt = $s0.meanFrameInterval
-# a short take can start mid-measure (02_LarissaKadu: 0.14 s into measure 17); a state entered at the capture's first
+# a short take can start mid-measure (a demo take: 0.14 s into measure 17); a state entered at the capture's first
 # frame (restart / loop wrap) is then on the earliest instant of that measure the take has
 $takeStart = if ($null -ne $base) { [double]$base } else { [double]::NaN }
 foreach ($h in ($hist | Select-Object -First $expected.Count)) {
