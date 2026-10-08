@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// Procedural icon meshes for the dance-graph node shapes of Zouk1.json (legend confirmed 2026-10-06,
+/// Procedural icon meshes for the dance-graph node shapes of the user's move-graph file (legend confirmed 2026-10-06,
 /// VIEWER_SPEC 3.10): Cylinder (standing rest), Hourglass = two cones tip to tip (holds / embraces /
 /// isolations), Diamond = octahedron (steps and basics), Plus = 3D cross (open / hand-connection moves),
 /// Star = spiky star (turns and spins), Tetra = tetrahedron (head movements and dips), Ball = sphere (special
