@@ -3,12 +3,26 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// Glowing footprints on the floor for every detected step, coloured by how close the step landed to the
-/// nearest zouk beat. Upcoming steps are drawn faintly so the floor pattern of the figure is visible before
-/// it is danced; recent steps flare up and fade.
+/// Layer "floor": glowing footprints for the detected steps, coloured by how close the step landed to the nearest zouk
+/// beat (on the beat green, near amber, off magenta - no red, which is the lead's colour).
+/// Mode (hm_floor --footprints, T key): RECENT (default, user 2026-10-07 "the floorcraft should not display all the
+/// footprints by default"): a print appears at its touchdown and fades out completely over RecentSeconds (~1.2 s, about
+/// three eighths at zouk tempo) - the step-timing feedback stays at the feet, the floor's long-term record is the
+/// leader-axis floor craft (FloorCraftOverlay); ALL: every print of the take (upcoming faint, past dim) joined by a
+/// thin trail per dancer - the old coverage look; OFF: none. Hidden prints are collapsed to a point (the bloom
+/// material is opaque, so a black print would still cover the floor craft under it).
 /// </summary>
 public class FloorPatterns : MonoBehaviour
 {
+    public enum FootprintMode
+    {
+        Off,
+        Recent,
+        All
+    }
+
+    public FootprintMode Mode = FootprintMode.Recent;
+
     [Header("Step detection (ankle contact with hysteresis)")]
     [Tooltip("ankle height (m) above its floor level at which a descending foot counts as landed")]
     public float ContactHeight = 0.02f;
@@ -28,13 +42,13 @@ public class FloorPatterns : MonoBehaviour
     public float NearBeatMs = 100f;
 
     [Header("Display")]
-    public float RecentSeconds = 2.5f;
+    public float RecentSeconds = 1.2f;
     public float FutureBrightness = 0.07f;
     public float PastBrightness = 0.22f;
 
     static readonly Color OnBeat = new(0.15f, 1f, 0.55f);
     static readonly Color NearBeat = new(1f, 0.65f, 0.1f);
-    static readonly Color OffBeat = new(1f, 0.12f, 0.08f);
+    static readonly Color OffBeat = new(1f, 0.2f, 0.85f);
     static readonly Color NoBeats = new(0.6f, 0.6f, 0.6f);
 
     public struct Step
@@ -52,6 +66,9 @@ public class FloorPatterns : MonoBehaviour
 
     readonly List<GameObject> spawned = new();
     readonly Dictionary<Role, (Mesh mesh, Color[] colors, List<int> steps)> meshes = new();
+    readonly Dictionary<Role, (Vector3[] full, Vector3[] shown)> printVertices = new();
+    readonly List<GameObject> trails = new();
+    bool visible = true;
     const int VertsPerPrint = 7;
     float fps;
     float audioOffset;
@@ -89,16 +106,31 @@ public class FloorPatterns : MonoBehaviour
 
         spawned.Clear();
         meshes.Clear();
+        printVertices.Clear();
+        trails.Clear();
         Steps.Clear();
     }
 
-    public void SetVisible(bool visible)
+    public void SetVisible(bool on)
     {
+        visible = on;
         foreach (GameObject go in spawned)
         {
-            if (go != null) go.SetActive(visible);
+            if (go != null) go.SetActive(on && (Mode == FootprintMode.All || !trails.Contains(go)));
         }
     }
+
+    public void SetMode(FootprintMode mode)
+    {
+        Mode = mode;
+        SetVisible(visible);
+        int f = lastFrame;
+        lastFrame = -2;
+        if (f >= 0) SetFrame(f);
+    }
+
+    /// <summary>prints drawn at the current frame</summary>
+    public int VisiblePrints { get; private set; }
 
     void DetectSteps(Dancer dancer, BeatGrid beats, SmplJoint foot, SmplJoint ankle, bool left)
     {
@@ -198,7 +230,9 @@ public class FloorPatterns : MonoBehaviour
         }
 
         Mesh mesh = new() { name = $"{role} footprints", indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
+        mesh.MarkDynamic();
         mesh.vertices = vertices;
+        printVertices[role] = ((Vector3[])vertices.Clone(), vertices);
         mesh.triangles = triangles;
         Color[] colors = new Color[vertices.Length];
         mesh.colors = colors;
@@ -235,6 +269,8 @@ public class FloorPatterns : MonoBehaviour
         Color c = role == Role.Lead ? new Color(0.2f, 0.01f, 0f) : new Color(0.12f, 0.12f, 0.12f);
         line.startColor = line.endColor = c;
         spawned.Add(go);
+        trails.Add(go);
+        go.SetActive(Mode == FootprintMode.All);
     }
 
     public void SetFrame(int frame)
@@ -242,26 +278,39 @@ public class FloorPatterns : MonoBehaviour
         if (frame == lastFrame) return;
         lastFrame = frame;
 
-        foreach ((Mesh mesh, Color[] colors, List<int> indices) in meshes.Values)
+        int shown = 0;
+        foreach ((Role role, (Mesh mesh, Color[] colors, List<int> indices)) in meshes)
         {
+            (Vector3[] full, Vector3[] verts) = printVertices[role];
             for (int k = 0; k < indices.Count; k++)
             {
                 Step s = Steps[indices[k]];
                 float age = (frame - s.Frame) / fps;
-                float brightness = age < 0 ? FutureBrightness
-                    : age < RecentSeconds ? Mathf.Lerp(1f, PastBrightness, age / RecentSeconds)
-                    : PastBrightness;
+                float brightness = Mode switch
+                {
+                    FootprintMode.All => age < 0 ? FutureBrightness
+                        : age < RecentSeconds ? Mathf.Lerp(1f, PastBrightness, age / RecentSeconds)
+                        : PastBrightness,
+                    FootprintMode.Recent => age < 0 || age > RecentSeconds ? 0f : 1f - Mathf.SmoothStep(0f, 1f, age / RecentSeconds),
+                    _ => 0f
+                };
+                bool on = brightness > 0.01f;
+                if (on) shown++;
                 Color c = TimingColor(s.ErrorMs) * brightness;
                 c.a = 1;
                 for (int j = 0; j < VertsPerPrint; j++)
                 {
-                    // hotter centre
+                    // hotter centre; a hidden print collapses to its centre (nothing drawn)
                     colors[k * VertsPerPrint + j] = j == 0 ? c * 1.6f : c;
+                    verts[k * VertsPerPrint + j] = on ? full[k * VertsPerPrint + j] : full[k * VertsPerPrint];
                 }
             }
 
+            mesh.vertices = verts;
             mesh.colors = colors;
         }
+
+        VisiblePrints = visible ? shown : 0;
     }
 
     /// <summary>the most recent step at or before frame for a role (for the HUD)</summary>
