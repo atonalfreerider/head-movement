@@ -94,8 +94,7 @@ Details:
 - Audit without staging: `python Tools/githooks/guard.py --profile unity --worktree [paths]` checks the working tree
   as if everything were about to be added. `python Tools/githooks/guard.py --profile unity --self-test` runs the decoy tests
   (65 cases). Check what a push would send without pushing:
-  `printf 'refs/heads/main %s refs/heads/main %s
-' $(git rev-parse main) $(git rev-parse origin/main) | python Tools/githooks/guard.py --profile unity --pre-push origin x`.
+  `printf 'refs/heads/main %s refs/heads/main %s\n' $(git rev-parse main) $(git rev-parse origin/main) | python Tools/githooks/guard.py --profile unity --pre-push origin x`.
 - When a commit is blocked: unstage the path (`git restore --staged <path>`), remove or genericise the content, or
   git-ignore the file. Do **not** work around the hook.
 - **Emergency bypass, repository owner only:** `HM_GUARD_BYPASS="reason" git commit ...` (or `git commit --no-verify`).
