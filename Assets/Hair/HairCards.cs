@@ -131,9 +131,11 @@ public sealed class HairCardLayout
     /// "X" marks)</param>
     /// <param name="glowMinAbsAz">no glow on cards whose guide root is nearer the face than this |azimuth| (the front
     /// sections hang over her chest, in the middle of every face-on view: the stylisation stays on the back and sides)</param>
+    /// <param name="partMinZ">part cards only for roots at least this far back (head-bone z, + = back): the part starts
+    /// behind the hairline, the hair in front of it is pulled back (style part_start_back_m)</param>
     public static HairCardLayout Build(Layer[] layers, Vector3[] roots, Vector3[] rest, int points, float[] az, float[] el, int[] side,
         float[] length, float partX, float scale, int seed, int glowsPerOuterCard = 1, int outerStride = 1,
-        Func<int, Vector2> glowAnchor = null, float glowSpacing = 0f, float glowMinAbsAz = 0f)
+        Func<int, Vector2> glowAnchor = null, float glowSpacing = 0f, float glowMinAbsAz = 0f, float partMinZ = float.NegativeInfinity)
     {
         System.Random rng = new(seed);
         List<Card> cards = new();
@@ -149,7 +151,7 @@ public sealed class HairCardLayout
                 {
                     List<int> c = new();
                     for (int g = 0; g < n; g++)
-                        if (side[g] == s && Mathf.Abs(roots[g].x - partX) < 0.035f * scale && el[g] > 30f) c.Add(g);
+                        if (side[g] == s && Mathf.Abs(roots[g].x - partX) < 0.035f * scale && el[g] > 30f && roots[g].z >= partMinZ) c.Add(g);
                     groups.Add((R($"part_{s}", l.Count / 2), c));
                 }
             }

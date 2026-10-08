@@ -299,6 +299,29 @@ public static class HairCliCommands
 
         static float Lum(Color c) => 0.2126f * c.r + 0.7152f * c.g + 0.0722f * c.b;
         static float Max3(Color c) => Mathf.Max(c.r, Mathf.Max(c.g, c.b));
+        // the floor grid, floor craft and other glow overlays are HDR too: hidden while the hair is measured
+        HeadMovement hm = HeadMovement.Instance;
+        string[] overlayLayers = { "grid", "axis", "floorcraft", "traces", "neck", "counterbalance", "floor", "timing", "physics" };
+        Dictionary<string, bool> keepLayers = new();
+        if (hm != null)
+        {
+            foreach (string l in overlayLayers)
+            {
+                keepLayers[l] = hm.LayerVisible(l);
+                if (keepLayers[l]) hm.SetLayerVisible(l, false);
+            }
+
+            DanceLayers.Instance?.Refresh();
+        }
+
+        // the glowing skeletons are HDR (bloom material) and pulse with the beat: hidden while the hair is measured
+        GameObject[] skeletons = hm != null ? new[] { hm.LeadDancer != null ? hm.LeadDancer.gameObject : null, hm.FollowDancer != null ? hm.FollowDancer.gameObject : null } : new GameObject[0];
+        bool[] skeletonsActive = skeletons.Select(g => g != null && g.activeSelf).ToArray();
+        foreach (GameObject g in skeletons)
+        {
+            if (g != null) g.SetActive(false);
+        }
+
         try
         {
             hair.Visible = false;
@@ -375,7 +398,7 @@ public static class HairCliCommands
             foreach (int i in mask)
                 if (Max3(full[i]) > 0.9f && Max3(bg[i]) < 0.15f) whiteNoGlow++;
 
-            // white balance as HAIR_REFERENCE 4: her white top (bright, unsaturated body pixels of the hidden-hair render
+            // white balance as HAIR_REFERENCE 4: the bright reference region (bright, unsaturated body pixels of the hidden-hair render
             // near the hair) scaled to an albedo of 0.80
             int minX = w, maxX = 0, minY = h, maxY = 0;
             foreach (int i in mask)
@@ -444,6 +467,19 @@ public static class HairCliCommands
         }
         finally
         {
+            if (hm != null)
+            {
+                foreach (KeyValuePair<string, bool> kv in keepLayers)
+                {
+                    if (kv.Value) hm.SetLayerVisible(kv.Key, true);
+                }
+            }
+
+            for (int i = 0; i < skeletons.Length; i++)
+            {
+                if (skeletons[i] != null && skeletonsActive[i]) skeletons[i].SetActive(true);
+            }
+
             hair.OpacityOverride = keepOverride;
             hair.TipGlow = keepGlow;
             hair.Visible = keepVisible;

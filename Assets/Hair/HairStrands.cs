@@ -18,9 +18,9 @@ using Stopwatch = System.Diagnostics.Stopwatch;
 ///   * Guides: 160 strands x 16 segments from the capture's hair_groom.json (dancecap hair_groom.py: roots on the SMPL-X
 ///     scalp, layered lengths, colour, style, colliders), simulated with Burst jobs (HairJobs.StrandSim: Verlet + XPBD
 ///     shape / bending / stretch, capsule collisions incl. frictionless arm capsules, a head-attached face box,
-///     deviation cone, follow-the-leader, substeps). Rest shape = sleek and straight like her portrait: deep side part
-///     on her left, swept to her right, the right front section over the temple and down in front of the right
-///     shoulder, the left front behind the ear, ~1 cm over the scalp; the face box keeps every strand off her face in
+///     deviation cone, follow-the-leader, substeps). Rest shape = sleek and straight, set by the take's groom file (a part, a sweep,
+///     the front sections over the temple or behind the ear, the drape of the sides; private per-take data, never
+///     stored in this repository), ~1 cm over the scalp; the face box keeps every strand off the face in
 ///     the settle AND every simulation step.
 ///   * Render: guide-driven hair CARDS (HairCardLayout: inner / mid / outer / part / flyaway layers, each card a blend
 ///     of 3 neighbouring guides) + a scalp cap, textured by a procedural strand atlas (HairAtlas, coverage-preserving
@@ -119,11 +119,21 @@ public partial class HairStrands : MonoBehaviour
     int[] dynZone;     // dynamics, right of the part: 1 = front-right (|az| < FrontRightAbsAz), 2 = side (|az| < SideAbsAz), else 0
     FaceBox faceBox;
 
-    // style (hair_groom.json "style"; defaults = the portrait's sleek side-swept look)
+    // style (hair_groom.json "style"; defaults = a plain sleek look; the real values come from the groom file)
     Vector3 combFrontRight = new(-1f, -0.2f, -0.1f), combFrontLeft = new(0.5f, -0.3f, 0.9f), combBack = new(-0.2f, -1f, 0.5f);
     float frontAz0 = 60f, frontAz1 = 150f, rootLift = 0.15f, outwardBias = 0.06f, downSlerp = 0.30f, frontDevAz = 100f;
     float settleShapeRoot = 0.08f, settleShapeFalloff = 0.12f, settleShapeFalloffFrontRight = 0.3f; // per settle iteration
     float hugVolume = 0.045f, hugBelow = 0.3f, faceClear = 0.02f, frontRightForward = 0.5f;
+    // 2026-10-07 "pulled back" (user: the part pulled back more): the forehead / part hair combed toward the back
+    // (frontPull at |az| < frontPullAz, fading out to 2x that), the sides draped behind the shoulders (sideDrapeBack for
+    // |az| < sideDrapeAz), the side part starting partStartBack (m, rest model) behind the front of the scalp
+    float frontPull, frontPullAz = 40f, sideDrapeBack, sideDrapeAz = 120f, partStartBack, pullFlatten;
+    Vector3 combPullBack = new(0f, -0.25f, 1f);
+    // 2026-10-07 evening "part forward again": right of the part, the forehead roots (|az| < foreheadAz, fading out by 2x)
+    // are combed from the part ACROSS the forehead toward combForehead by foreheadSweep (0 = off, the default)
+    float foreheadSweep, foreheadAz = 28f;
+    Vector3 combForehead = new(-1f, -0.3f, -0.15f);
+    string frontRightDrape = "front_of_shoulder";
     float lod0Px = 160f, lod1Px = 60f;
 
     struct ColliderDef
@@ -316,6 +326,17 @@ public partial class HairStrands : MonoBehaviour
             hugBelow = F(style, "hug_below_r", hugBelow);
             faceClear = F(style, "face_clear_m", faceClear);
             frontRightForward = F(style, "front_right_forward", frontRightForward);
+            frontPull = F(style, "front_pull", frontPull);
+            frontPullAz = F(style, "front_pull_abs_az_deg", frontPullAz);
+            pullFlatten = Mathf.Clamp01(F(style, "front_pull_flatten", pullFlatten));
+            if (style["comb_unity"]?["pull_back"] is JArray pb) combPullBack = V3(pb);
+            if (style["comb_unity"]?["forehead"] is JArray fh) combForehead = V3(fh);
+            foreheadSweep = Mathf.Clamp01(F(style, "forehead_sweep", foreheadSweep));
+            foreheadAz = F(style, "forehead_sweep_abs_az_deg", foreheadAz);
+            sideDrapeBack = F(style, "side_drape_back", sideDrapeBack);
+            sideDrapeAz = F(style, "side_drape_abs_az_deg", sideDrapeAz);
+            partStartBack = F(style, "part_start_back_m", partStartBack);
+            frontRightDrape = style.Value<string>("front_right") ?? frontRightDrape;
         }
 
         hugVolume *= LengthScale;
@@ -442,17 +463,34 @@ public partial class HairStrands : MonoBehaviour
         capsules = new NativeArray<Capsule>(colliderDefs.Length + 1, Allocator.Persistent);
     }
 
-    /// <summary>comb direction of a root (head-bone axes): front right over the temple, front left behind the ear,
-    /// back down with a right bias; blended by |azimuth|</summary>
+    /// <summary>comb direction of a root (head-bone axes): front right swept to her right (and back, "pulled back"),
+    /// front left behind the ear, back down with a right bias; blended by |azimuth|; the forehead / part zone pulled
+    /// toward the back by frontPull</summary>
     Vector3 Comb(float az, int side)
     {
         Vector3 front = (side > 0 ? combFrontLeft : combFrontRight).normalized;
-        float wb = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(frontAz0, frontAz1, Mathf.Abs(az)));
-        return Vector3.Lerp(front, combBack.normalized, wb);
+        float a = Mathf.Abs(az);
+        float wb = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(frontAz0, frontAz1, a));
+        Vector3 comb = Vector3.Lerp(front, combBack.normalized, wb);
+        float wp = PullWeight(az);
+        if (wp > 0f) comb = Vector3.Slerp(comb.normalized, combPullBack.normalized, wp);
+        if (side < 0 && foreheadSweep > 0f)
+        {
+            // swept from the part across the forehead to her right (eyes stay clear: the face box)
+            float wf = foreheadSweep * (1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(foreheadAz, 2f * foreheadAz, a)));
+            if (wf > 0f) comb = Vector3.Slerp(comb.normalized, combForehead.normalized, wf);
+        }
+
+        return comb;
     }
 
+    /// <summary>how much a root's comb is pulled toward the back (forehead / part zone): frontPull up to |az| =
+    /// frontPullAz, smoothly 0 by 2x that</summary>
+    float PullWeight(float az) =>
+        frontPull <= 0f ? 0f : frontPull * (1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(frontPullAz, 2f * frontPullAz, Mathf.Abs(az))));
+
     /// <summary>
-    /// Rest shape, sleek and straight like her portrait. Every strand leaves its root along the comb direction of its
+    /// Rest shape, sleek and straight (styled by the groom file). Every strand leaves its root along the comb direction of its
     /// zone; above the skull's equator it runs ALONG the skull (direction projected onto the head collider's tangent
     /// plane, kept at a hug distance that grows with the root's elevation: strands from the crown lie over the lower
     /// ones, a few cm of layered volume at the sides, none on top); while in front of the face it keeps sweeping
@@ -494,8 +532,13 @@ public partial class HairStrands : MonoBehaviour
             pos[o + 1] = p;
             Vector3 dir = d1;
             float arc = L;
-            float layer = Mathf.Clamp01((guideEl[k] + 30f) / 120f) * hugVolume;
-            Vector3 drape = frontRight[k] ? (Vector3.down + Vector3.back * frontRightForward).normalized : Vector3.down;
+            // pulled-back front strands lie flat over the crown (sleek): their layered volume shrinks with the pull
+            float layer = Mathf.Clamp01((guideEl[k] + 30f) / 120f) * hugVolume * (1f - pullFlatten * PullWeight(guideAz[k]) / Mathf.Max(frontPull, 1e-3f));
+            // front-right drape: + frontRightForward = in front of the right shoulder (Vector3.back = her forward), - = behind
+            // it; the other side strands (|az| < sideDrapeAz) lean back by sideDrapeBack so they fall behind the shoulders
+            Vector3 drape = frontRight[k] ? (Vector3.down + Vector3.back * frontRightForward).normalized
+                : sideDrapeBack > 0f && Mathf.Abs(guideAz[k]) < sideDrapeAz ? (Vector3.down + Vector3.forward * sideDrapeBack).normalized
+                : Vector3.down;
             for (int i = 2; i < points; i++)
             {
                 arc += L;
@@ -597,19 +640,30 @@ public partial class HairStrands : MonoBehaviour
     {
         Vector3 headJ = restJoints[HeadJoint];
         Vector3 rsh = restJoints[17] - headJ;
-        int inBox = 0, fr = 0, frOk = 0, fl = 0, flOk = 0;
+        int inBox = 0, fr = 0, frOk = 0, frBehind = 0, fl = 0, flOk = 0, faceSide = 0;
+        float faceHalf = faceBox.halfWidth * headRadius;
         float earY = headCentreLocal.y - 0.35f * headRadius;
         for (int k = 0; k < guides; k++)
         {
             int o = k * points;
             for (int i = 1; i < points; i++)
+            {
                 if (faceBox.Inside(restLocal[o + i])) inBox++;
+                // in front of the face plane and within half a head radius of the face's sides, between the brow and
+                // the chin: hair hanging beside / over the cheeks ("less hanging forward over the right temple")
+                float3 q = restLocal[o + i];
+                float dy = q.y - headCentreLocal.y;
+                if (headCentreLocal.z - q.z > 0.25f * headRadius && Mathf.Abs(q.x - headCentreLocal.x) < faceHalf + headRadius * 0.5f &&
+                    dy < 0.45f * headRadius && dy > -1.55f * headRadius) faceSide++;
+            }
+
             if (Mathf.Abs(guideAz[k]) >= frontAz0) continue;
             float3 tip = restLocal[o + points - 1];
             if (guideSide[k] < 0)
             {
                 fr++;
                 if (tip.z < rsh.z - 0.02f * LengthScale) frOk++;
+                if (tip.z > rsh.z + 0.02f * LengthScale) frBehind++;
             }
             else
             {
@@ -624,6 +678,9 @@ public partial class HairStrands : MonoBehaviour
         restStats = new Dictionary<string, object>
         {
             ["faceBoxPoints"] = inBox, ["frontRightGuides"] = fr, ["frontRightTipsForwardOfShoulder"] = fr > 0 ? (float)frOk / fr : float.NaN,
+            ["frontRightTipsBehindShoulder"] = fr > 0 ? (float)frBehind / fr : float.NaN, ["frontRightDrape"] = frontRightDrape,
+            ["pointsBesideFace"] = faceSide, ["frontPull"] = frontPull, ["sideDrapeBack"] = sideDrapeBack, ["partStartBackM"] = partStartBack,
+            ["foreheadSweep"] = foreheadSweep,
             ["frontLeftGuides"] = fl, ["frontLeftBehindEar"] = fl > 0 ? (float)flOk / fl : float.NaN
         };
     }
@@ -669,6 +726,17 @@ public partial class HairStrands : MonoBehaviour
 
     // ------------------------------------------------------------------------------------------------ cards
 
+    /// <summary>head-bone z (+ = back) where the side part starts: partStartBack behind the front-most root near the part
+    /// (no part cards ahead of it: the hair there is pulled back); -inf = the part runs to the hairline</summary>
+    float PartMinZ(Vector3[] roots)
+    {
+        if (partStartBack <= 0f) return float.NegativeInfinity;
+        float front = float.PositiveInfinity;
+        for (int g = 0; g < guides; g++)
+            if (Mathf.Abs(roots[g].x - partX) < 0.035f * LengthScale && guideEl[g] > 30f) front = Mathf.Min(front, roots[g].z);
+        return float.IsInfinity(front) ? float.NegativeInfinity : front + partStartBack * LengthScale;
+    }
+
     void BuildCards(Vector3[] roots, SmplxData.Skin skin)
     {
         HairCardLayout.Layer[] layers = HairCardLayout.FromGroom(groom["cards"] as JObject);
@@ -680,7 +748,7 @@ public partial class HairStrands : MonoBehaviour
         bool anchored = tg?["anchor_to_strands"] == null || tg.Value<bool>("anchor_to_strands");
         layout = HairCardLayout.Build(layers, roots, rest, points, guideAz, guideEl, guideSide, guideLength, partX, LengthScale, 7,
             (int)F(tg, "per_outer_card", 1), (int)F(tg, "outer_card_stride", 1), anchored ? HairAtlas.GlowAnchor : null, F(tg, "spacing_m", 0f),
-            F(tg, "min_abs_az_deg", 0f));
+            F(tg, "min_abs_az_deg", 0f), PartMinZ(roots));
         GlowsAnchored = layout.Glows.Count(gd => gd.vEnd > 0f);
         cardCount = layout.Cards.Length;
         BuildCap(skin);
@@ -818,7 +886,7 @@ public partial class HairStrands : MonoBehaviour
     /// |az| up to abs_az_max) start lower: their root is offset down toward the cap's (painted) hairline - to
     /// above_cap_deg above it, never below min_el_deg in front of the face (|az| &lt; face_abs_az: the face box) - and
     /// the offset fades out over fade_m of the card (CardMeshJob). The front of the hair then begins at the hairline
-    /// painted into the avatar texture and sweeps up into the combed sheet, like the portrait's soft swept hairline.
+    /// painted into the avatar texture and sweeps up into the combed sheet, giving a soft hairline.
     /// </summary>
     void RootDrops(Vector3[] roots)
     {
@@ -1123,7 +1191,7 @@ public partial class HairStrands : MonoBehaviour
 
     float glowWindow = 0.32f, glowSpan = 0.20f, glowWidthRoot = 0.0025f, glowWidthTip = 0.0008f, glowEnd = 0.92f;
 
-    /// <summary>albedo source: "video" (the demo video's observed colour x gain) or "portrait" (her portrait's crimson,
+    /// <summary>albedo source: "video" (the demo video's observed colour x gain) or "portrait" (the colour read from the take's reference photo,
     /// white-balanced the same way); the groom's render.albedo_default picks the one shown at load</summary>
     public bool SetColourSource(string source)
     {
