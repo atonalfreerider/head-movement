@@ -62,15 +62,15 @@ public class PhysicsData
 }
 
 /// <summary>
-/// Layer "physics": per dancer a COM marker (with a plumb line to the floor), the extrapolated COM (XCoM) on the
-/// floor coloured by the balance margin, the support polygon, and the net external force F_net = m(a - g) as an
-/// arrow from the COM with its 95 % band (ring = horizontal band, tick = vertical band at the tip).
+/// Layer "physics": per dancer a COM marker, the extrapolated COM (XCoM) on the floor coloured by the balance margin
+/// and the support polygon. The net external force F_net = m(a - g) and its 95 % band are numbers only (HUD line,
+/// hm_state): its arrow from the COM (mostly straight up: body weight) with the band ring at the tip, and the plumb
+/// line from the COM to the floor, were removed 2026-10-07 - together they drew a gold up-arrow axis through the
+/// leader and a white one through the follower (user: the leader never gets an up axis; the follower only gets the
+/// white neck axis while her neck is more than 15 deg off-axis, NeckAxisOverlay).
 /// </summary>
 public class PhysicsOverlay : MonoBehaviour
 {
-    [Tooltip("arrow length per newton (body weight ~ 0.7-0.9 m)")]
-    public float MetresPerNewton = 0.001f;
-
     PhysicsData data;
     CaptureTimeline timeline;
     double[] audioT;
@@ -80,7 +80,7 @@ public class PhysicsOverlay : MonoBehaviour
     class Visual
     {
         public GameObject Com, Xcom;
-        public LineRenderer Plumb, Arrow, BandRing, BandTick, Support;
+        public LineRenderer Support;
     }
 
     readonly Dictionary<Role, Visual> visuals = new();
@@ -99,17 +99,9 @@ public class PhysicsOverlay : MonoBehaviour
             {
                 Com = OverlayDraw.Marker(transform, $"{role} COM", PrimitiveType.Sphere, 0.07f, c),
                 Xcom = OverlayDraw.Marker(transform, $"{role} XCoM", PrimitiveType.Cylinder, 1f, Color.green),
-                Plumb = OverlayDraw.Line(transform, $"{role} COM plumb", glow, 0.004f),
-                Arrow = OverlayDraw.Line(transform, $"{role} F_net", glow, 0.014f, 5),
-                BandRing = OverlayDraw.Line(transform, $"{role} F_net band", glow, 0.005f, 24, true),
-                BandTick = OverlayDraw.Line(transform, $"{role} F_net band (vertical)", glow, 0.006f),
                 Support = OverlayDraw.Line(transform, $"{role} support polygon", glow, 0.006f, 2, true)
             };
             v.Xcom.transform.localScale = new Vector3(0.06f, 0.002f, 0.06f);
-            OverlayDraw.SetColor(v.Plumb, c * 0.6f);
-            OverlayDraw.SetColor(v.Arrow, c * 2.2f);
-            OverlayDraw.SetColor(v.BandRing, c * 1.2f);
-            OverlayDraw.SetColor(v.BandTick, c * 1.2f);
             OverlayDraw.SetColor(v.Support, c * 0.9f);
             visuals[role] = v;
         }
@@ -123,30 +115,77 @@ public class PhysicsOverlay : MonoBehaviour
         {
             int f = frame;
             frame = -1;
-            Apply(f);
+            Apply(f, blendOther, blendK);
         }
     }
 
     public void SetTime(float audioTime)
     {
         int f = CaptureTimeline.Nearest(audioT, audioTime);
-        if (f == frame) return;
+        if (f == frame && blendK == 0f) return;
         if (!visible)
         {
             frame = f;
+            blendOther = -1;
+            blendK = 0f;
             return;
         }
 
-        Apply(f);
+        Apply(f, -1, 0f);
+    }
+
+    /// <summary>sub-frame time (the film director's slow motion): the COM and XCoM markers lerp between the two
+    /// neighbouring frames, so they glide with the (also blended) skeleton instead of stepping at the capture rate. The
+    /// support polygon, balance colour and everything else stay on the nearer frame.</summary>
+    public void SetExactTime(float audioTime)
+    {
+        if (audioT == null || audioT.Length == 0) return;
+        int f = CaptureTimeline.Nearest(audioT, audioTime);
+        int other = -1;
+        float k = 0f;
+        if (f >= 0)
+        {
+            int o = audioTime >= audioT[f] ? f + 1 : f - 1;
+            if (o >= 0 && o < audioT.Length && audioT[o] != audioT[f])
+            {
+                other = o;
+                k = Mathf.Clamp01((float)(System.Math.Abs(audioTime - audioT[f]) / System.Math.Abs(audioT[o] - audioT[f])));
+            }
+        }
+
+        if (f == frame && other == blendOther && Mathf.Abs(k - blendK) < 1e-4f) return;
+        if (!visible)
+        {
+            frame = f;
+            blendOther = other;
+            blendK = k;
+            return;
+        }
+
+        Apply(f, other, k);
+    }
+
+    // sub-frame blend of the shown frame toward the neighbour `blendOther` by blendK (0..0.5; -1 = none)
+    int blendOther = -1;
+    float blendK;
+
+    static Vector3 BlendCom(Vector3[] a, int f, int o, float k)
+    {
+        Vector3 nan = new(float.NaN, float.NaN, float.NaN);
+        Vector3 v = a != null && f < a.Length ? a[f] : nan;
+        if (o < 0 || k <= 0f || a == null || o >= a.Length) return v;
+        Vector3 w = a[o];
+        return Finite(v) && Finite(w) ? Vector3.Lerp(v, w, k) : v;
     }
 
     static bool Finite(float x) => !float.IsNaN(x) && !float.IsInfinity(x);
     static bool Finite(Vector3 v) => Finite(v.x) && Finite(v.y) && Finite(v.z);
 
-    void Apply(int f)
+    void Apply(int f, int other, float k)
     {
         frame = f;
-        Vector3 viewer = Camera.main != null ? Camera.main.transform.position : Vector3.zero;
+        blendOther = other;
+        blendK = k;
         foreach ((Role role, Visual v) in visuals)
         {
             PhysicsData.DancerTrack d = data.Dancers[role];
@@ -154,31 +193,23 @@ public class PhysicsOverlay : MonoBehaviour
             // of a dancer is shown only when its inputs are finite this frame: nothing keeps a stale position and
             // no LineRenderer ever receives a NaN point.
             Vector3 nan3 = new(float.NaN, float.NaN, float.NaN);
-            Vector3 com = d.Com != null && f < d.Com.Length ? d.Com[f] : nan3;
-            Vector3 force = d.FNet != null && f < d.FNet.Length ? d.FNet[f] : nan3;
-            Vector3 band = d.FNetBand != null && f < d.FNetBand.Length ? d.FNetBand[f] : nan3;
+            Vector3 com = d.Com != null ? BlendCom(d.Com, f, other, k) : nan3;
             Vector2 x = d.XcomXZ != null && f < d.XcomXZ.Length ? d.XcomXZ[f] : new Vector2(float.NaN, float.NaN);
+            if (other >= 0 && k > 0f && d.XcomXZ != null && other < d.XcomXZ.Length)
+            {
+                Vector2 xo = d.XcomXZ[other];
+                if (Finite(x.x) && Finite(x.y) && Finite(xo.x) && Finite(xo.y)) x = Vector2.Lerp(x, xo, k);
+            }
             Vector2[] poly = d.Support != null && f < d.Support.Length ? d.Support[f] : null;
             bool comOk = Finite(com);
-            bool forceOk = comOk && Finite(force);
-            bool bandOk = forceOk && Finite(band);
             bool xcomOk = Finite(x.x) && Finite(x.y);
             bool supportOk = comOk && poly != null && poly.Length >= 2;
 
             v.Com.SetActive(comOk);
-            v.Plumb.gameObject.SetActive(comOk);
-            v.Arrow.gameObject.SetActive(forceOk);
-            v.BandRing.gameObject.SetActive(bandOk);
-            v.BandTick.gameObject.SetActive(bandOk);
             v.Xcom.SetActive(xcomOk);
             v.Support.gameObject.SetActive(supportOk);
 
-            if (comOk)
-            {
-                v.Com.transform.position = com;
-                v.Plumb.SetPosition(0, com);
-                v.Plumb.SetPosition(1, new Vector3(com.x, 0.003f, com.z));
-            }
+            if (comOk) v.Com.transform.position = com;
 
             if (xcomOk)
             {
@@ -187,21 +218,6 @@ public class PhysicsOverlay : MonoBehaviour
                 OverlayDraw.SetMarkerColor(v.Xcom, !Finite(margin) ? Color.gray
                     : margin >= 0.03f ? new Color(0.2f, 1f, 0.4f)
                     : margin >= 0f ? new Color(1f, 0.8f, 0.1f) : new Color(1f, 0.15f, 0.1f));
-            }
-
-            if (forceOk)
-            {
-                Vector3 tip = com + force * MetresPerNewton;
-                OverlayDraw.Arrow(v.Arrow, com, tip, viewer);
-                if (bandOk)
-                {
-                    Vector3 b = band * MetresPerNewton;
-                    float ring = new Vector2(b.x, b.z).magnitude; // finite: bandOk
-                    float tick = Mathf.Abs(b.y);
-                    OverlayDraw.Ring(v.BandRing, tip, ring > 0.01f ? ring : 0.01f);
-                    v.BandTick.SetPosition(0, tip - Vector3.up * (tick > 0.005f ? tick : 0.005f));
-                    v.BandTick.SetPosition(1, tip + Vector3.up * (tick > 0.005f ? tick : 0.005f));
-                }
             }
 
             if (supportOk)
@@ -216,11 +232,7 @@ public class PhysicsOverlay : MonoBehaviour
     public int ActiveVisuals(Role role)
     {
         if (!visuals.TryGetValue(role, out Visual v)) return 0;
-        GameObject[] all =
-        {
-            v.Com, v.Xcom, v.Plumb.gameObject, v.Arrow.gameObject, v.BandRing.gameObject, v.BandTick.gameObject,
-            v.Support.gameObject
-        };
+        GameObject[] all = { v.Com, v.Xcom, v.Support.gameObject };
         return all.Count(g => g.activeInHierarchy);
     }
 
@@ -264,6 +276,20 @@ public class PhysicsOverlay : MonoBehaviour
         }
     }
 
+    /// <summary>vertical lines / arrows this overlay draws through a dancer (playtests: 0 - no F_net arrow, no plumb)</summary>
+    public int AxisLines(Role role)
+    {
+        if (!visuals.TryGetValue(role, out Visual v)) return 0;
+        int n = 0;
+        foreach (LineRenderer l in GetComponentsInChildren<LineRenderer>())
+        {
+            if (l == v.Support || !l.gameObject.activeInHierarchy || !l.name.StartsWith(role.ToString(), System.StringComparison.Ordinal)) continue;
+            n++;
+        }
+
+        return n;
+    }
+
     /// <summary>com/xcom/margin of a dancer at the current frame, for playtests</summary>
     public Dictionary<string, object> State(Role role)
     {
@@ -273,7 +299,7 @@ public class PhysicsOverlay : MonoBehaviour
         {
             ["com"] = new[] { com.x, com.y, com.z }, ["fNetN"] = d.FNet[frame].magnitude,
             ["balanceMargin"] = d.BalanceMargin[frame], ["comMarkerActive"] = visuals[role].Com.activeInHierarchy,
-            ["activeVisuals"] = ActiveVisuals(role)
+            ["activeVisuals"] = ActiveVisuals(role), ["axisLines"] = AxisLines(role)
         };
     }
 }

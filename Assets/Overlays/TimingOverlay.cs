@@ -39,10 +39,23 @@ public class TimingData
     public readonly Dictionary<Role, float[][]> Jerk = new();
     public float FollowMinusLeadMs = float.NaN;
 
+    /// <summary>timing.json absolute_timing.valid: false = no audio-video sync event pins the camera clocks to the
+    /// soundtrack, so a step's offset from the beat includes an unknown A/V offset and absolute verdicts (on beat / late /
+    /// early, hit rate) are not shown - only relative timing (follow - lead). A file without the field keeps the old
+    /// verdicts (AbsoluteKnown false).</summary>
+    public bool AbsoluteValid = true;
+    public bool AbsoluteKnown;
+
     public static TimingData Load(string path)
     {
         JObject root = JObject.Parse(File.ReadAllText(path));
         TimingData d = new();
+        if (root["absolute_timing"] is JObject abs && abs["valid"]?.Type == JTokenType.Boolean)
+        {
+            d.AbsoluteKnown = true;
+            d.AbsoluteValid = abs.Value<bool>("valid");
+        }
+
         if (root["beats"]?["grid"] is JArray grid)
         {
             foreach (JToken row in grid)
@@ -198,17 +211,28 @@ public class TimingOverlay : MonoBehaviour
         return false;
     }
 
+    /// <summary>false when timing.json says the absolute (on-the-beat) timing is not pinned by an A/V sync event</summary>
+    public bool AbsoluteValid => data == null || data.AbsoluteValid;
+
     public IEnumerable<string> HudLines(float audioTime)
     {
+        bool absolute = data.AbsoluteValid;
         foreach (Role role in new[] { Role.Lead, Role.Follow })
         {
             string last = Latest(role, audioTime, out TimingData.Touchdown td)
-                ? $"last touchdown {td.AsyncMs:+0;-0} ms ({(td.Left ? "L" : "R")})"
+                ? $"last touchdown {td.AsyncMs:+0;-0} ms{(absolute ? "" : " vs beat")} ({(td.Left ? "L" : "R")})"
                 : "no touchdown yet";
+            // without an A/V sync event the hit rate is an absolute on-beat claim: not shown
             string summary = data.Summaries.TryGetValue(role, out TimingData.Summary s) && s.N > 0
-                ? $"   mean {s.MeanMs:+0;-0} ms [{s.Ci0:+0;-0}, {s.Ci1:+0;-0}]  hit {s.HitRate:P0}"
+                ? $"   mean {s.MeanMs:+0;-0} ms [{s.Ci0:+0;-0}, {s.Ci1:+0;-0}]{(absolute ? $"  hit {s.HitRate:P0}" : "")}"
                 : "";
             yield return $"{role}: {last}{summary}";
+        }
+
+        if (!absolute)
+        {
+            yield return "timing vs beat UNSYNCED (no A/V sync event): relative only" +
+                         (float.IsNaN(data.FollowMinusLeadMs) ? "" : $" - follow - lead {data.FollowMinusLeadMs:+0;-0} ms");
         }
     }
 

@@ -127,6 +127,15 @@ public class GlowMesh : MonoBehaviour
 
     public void FloorStrip(Vector3 a, Vector3 b, float width, Color c) => Strip(a, b, width, c, c, Vector3.up);
 
+    /// <summary>filled triangle (arrowheads); drawn from both sides (the glow shader does not cull)</summary>
+    public void Triangle(Vector3 a, Vector3 b, Vector3 c, Color color)
+    {
+        if (color.a <= 0) return;
+        Ensure(3, 3);
+        int i0 = V(a, color), i1 = V(b, color), i2 = V(c, color);
+        T(i0, i1, i2);
+    }
+
     /// <summary>3D line: a strip facing Viewer when set, else two crossed strips (readable from any side)</summary>
     public void Line(Vector3 a, Vector3 b, float width, Color ca, Color cb)
     {

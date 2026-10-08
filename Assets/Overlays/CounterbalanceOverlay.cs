@@ -187,13 +187,22 @@ public class CounterbalanceData
 
 /// <summary>
 /// Layer "counterbalance" (VIEWER_SPEC 3.9, 3.5), visible in every view state:
-/// - while the couple is in a counterbalance: a yellow dot on the floor under the combined centre of mass, a
-///   yellow vertical axis up to the COM (small sphere), 0.2 s fade inside the interval edges, dashed when the
-///   detection confidence is low; the connection drawn as a taut line between the connected hands;
+/// - while the couple is in a counterbalance: a yellow dot and ring on the floor under the combined centre of mass,
+///   0.2 s fade inside the interval edges (the taut connection line between the hands was removed 2026-10-07 - user:
+///   no extra lines for tension and pressure; the physics view colours the holding arms instead, SkeletonStyle). The
+///   vertical axis up to the COM (+ small sphere; dashed at low confidence) is OFF by default (DrawCoupleAxis, review
+///   2026-10-07): the couple's COM stays 0.25-0.40 m from the leader's torso for the whole counterbalance, so from the
+///   default camera the yellow vertical stood right in front of his legs and read as the gold up axis the user banned;
+///   the floor dot + ring mark the COM without it;
 /// - for every counterbalance pivot: a yellow ring at the follower's anchored foot, the leader's circling path as
 ///   a yellow floor arc that grows with time, a tick per beat and the swept angle ("360°"); after the pivot the
 ///   marker stays in the floor craft and fades over the footprint history (4 measures); ShowAllPivots (the
 ///   overhead coverage view) keeps every pivot of the dance on the floor.
+/// When DrawCoupleAxis is switched on, the yellow axis is still a COUPLE marker (the combined COM), never the leader's:
+/// within LeaderClearance of the leader's torso (pelvis / chest projected to the floor) only the floor dot and ring are
+/// drawn (user 2026-10-07: the leader never gets a gold up axis).
+/// Since 2026-10-07 the floor-craft overlay (FloorCraftOverlay) draws the pivot markers as part of the trailing floor
+/// record (DrawPivots = false); this overlay still tracks them for hm_state.
 /// Rebuilt only when the frame, the camera or a setting changes; no per-frame allocations.
 /// </summary>
 public class CounterbalanceOverlay : MonoBehaviour
@@ -204,7 +213,14 @@ public class CounterbalanceOverlay : MonoBehaviour
     public float HistorySeconds = 12.6f; // 4 measures at 76 BPM; set from the beat grid
     public bool ShowAllPivots;
     public Color Yellow = new(1f, 0.85f, 0.1f);
+    [Tooltip("draw the vertical couple axis + sphere up to the combined COM (off by default: the floor dot + ring mark it)")]
+    public bool DrawCoupleAxis;
+
+    [Tooltip("m: no vertical couple axis closer than this to the leader's torso (floor projection)")]
+    public float LeaderClearance = 0.5f;
     public Color Tension = new(1f, 0.6f, 0.15f);
+    [Tooltip("draw the pivot ring / leader arc / label here (false: FloorCraftOverlay draws them in the floor record)")]
+    public bool DrawPivots = true;
 
     CounterbalanceData data;
     Dancer lead, follow;
@@ -227,6 +243,15 @@ public class CounterbalanceOverlay : MonoBehaviour
     public float AxisAlpha { get; private set; }
     public bool AxisVisible => visible && ActiveInterval >= 0 && AxisAlpha > 0;
     public bool Dashed { get; private set; }
+
+    /// <summary>the vertical axis was suppressed this frame because it would stand in the leader's torso</summary>
+    public bool AxisOnLeaderSuppressed { get; private set; }
+
+    /// <summary>the vertical couple axis was drawn this frame (only with DrawCoupleAxis)</summary>
+    public bool VerticalAxisDrawn { get; private set; }
+
+    /// <summary>floor distance from the axis to the leader's torso (pelvis / chest), m</summary>
+    public float AxisToLeaderM { get; private set; } = float.NaN;
     public Vector3 Com { get; private set; }
     public Vector3 Dot { get; private set; }
     public int PivotsShown { get; private set; }
@@ -314,6 +339,9 @@ public class CounterbalanceOverlay : MonoBehaviour
         CounterbalanceData.Interval active = Active;
         Dashed = false;
         ConnectionShown = false;
+        AxisOnLeaderSuppressed = false;
+        VerticalAxisDrawn = false;
+        AxisToLeaderM = float.NaN;
         if (active != null)
         {
             Vector3 com = CounterbalanceData.Sample(active.ComT, active.Com, time);
@@ -328,15 +356,17 @@ public class CounterbalanceOverlay : MonoBehaviour
             Color c = Yellow * AxisAlpha;
             glow.Disc(Dot, 0.06f, c, c * 0.5f);
             glow.Ring(Dot, 0.09f, 0.01f, c);
-            if (Dashed) glow.DashedLine(Dot, com, 0.018f, c, 0.05f, 0.035f);
-            else glow.Line(Dot, com, 0.018f, c);
-            glow.Sphere(com, 0.035f, c);
-
-            if (lead != null && follow != null && TryConnection(active.Pair, frame, out Vector3 a, out Vector3 b))
+            AxisToLeaderM = LeaderDistance(Dot, frame);
+            AxisOnLeaderSuppressed = DrawCoupleAxis && AxisToLeaderM < LeaderClearance;
+            if (DrawCoupleAxis && !AxisOnLeaderSuppressed)
             {
-                glow.Line(a, b, 0.01f, Tension * AxisAlpha);
-                ConnectionShown = true;
+                if (Dashed) glow.DashedLine(Dot, com, 0.018f, c, 0.05f, 0.035f);
+                else glow.Line(Dot, com, 0.018f, c);
+                glow.Sphere(com, 0.035f, c);
+                VerticalAxisDrawn = true;
             }
+
+            // no taut connection line (user 2026-10-07); ConnectionShown stays false
         }
 
         PivotMarkers(time);
@@ -365,6 +395,19 @@ public class CounterbalanceOverlay : MonoBehaviour
             PivotsShown++;
             bool running = time >= p.T0 && time <= p.T1;
             if (running) CurrentPivot = i;
+            if (!DrawPivots)
+            {
+                label.gameObject.SetActive(false);
+                if (running)
+                {
+                    int lastK = -1;
+                    for (int k = 1; k < p.PathPos.Length && p.PathT[k] <= time; k++) lastK = k;
+                    CurrentSweptDeg = lastK >= 0 ? p.PathCumDeg[lastK] : 0f;
+                }
+
+                continue;
+            }
+
             Color c = Yellow * a;
             Vector3 centre = new(p.Point.x, 0.006f, p.Point.z);
             glow.Ring(centre, 0.09f, 0.012f, c);
@@ -414,6 +457,21 @@ public class CounterbalanceOverlay : MonoBehaviour
         }
     }
 
+    /// <summary>floor distance from p to the leader's torso: the nearer of his pelvis and chest (spine3) projections</summary>
+    float LeaderDistance(Vector3 p, int frame)
+    {
+        if (lead == null || frame < 0 || frame >= lead.FrameCount) return float.PositiveInfinity;
+        float best = float.PositiveInfinity;
+        foreach (SmplJoint j in new[] { SmplJoint.Pelvis, SmplJoint.Spine3 })
+        {
+            Vector3 q = lead.Joint(frame, j);
+            if (float.IsNaN(q.x)) continue;
+            best = Mathf.Min(best, new Vector2(q.x - p.x, q.z - p.z).magnitude);
+        }
+
+        return best;
+    }
+
     bool TryConnection(string pair, int frame, out Vector3 a, out Vector3 b)
     {
         a = b = default;
@@ -455,7 +513,11 @@ public class CounterbalanceOverlay : MonoBehaviour
         {
             ["loaded"] = Loaded, ["visible"] = visible, ["intervals"] = IntervalCount,
             ["pivots"] = allPivots.Count, ["active"] = ActiveInterval >= 0, ["axisVisible"] = AxisVisible,
-            ["axisRendered"] = glow != null && glow.Visible && glow.VertexCount > 0 && ActiveInterval >= 0,
+            // axisVisible = the couple's COM floor marker (dot + ring) is up; axisRendered = a VERTICAL axis was drawn
+            ["axisRendered"] = glow != null && glow.Visible && glow.VertexCount > 0 && ActiveInterval >= 0 && VerticalAxisDrawn,
+            ["drawCoupleAxis"] = DrawCoupleAxis, ["comMarkerRendered"] = glow != null && glow.Visible && glow.VertexCount > 0 && ActiveInterval >= 0,
+            ["axisOnLeaderSuppressed"] = AxisOnLeaderSuppressed, ["axisToLeaderM"] = AxisToLeaderM,
+            ["leaderClearanceM"] = LeaderClearance,
             ["alpha"] = AxisAlpha, ["dashed"] = Dashed, ["pivotsShown"] = PivotsShown,
             ["showAllPivots"] = ShowAllPivots, ["connection"] = ConnectionShown, ["time"] = lastTime,
             ["pivotRunning"] = CurrentPivot >= 0,
