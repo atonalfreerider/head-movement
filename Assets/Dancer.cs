@@ -18,9 +18,13 @@ public class Dancer : MonoBehaviour
     
     Material BloomMat;
     HairSimulation hairSimulation;
+    Color[] currentColours;
     readonly Dictionary<SmplJoint, float[]> jerkByFrameByJoint = new();
 
-    LineRenderer followSpineRenderer;
+    // the follower's spine: a chain of glowing beads, not a line (user 2026-10-07; Overlays/SpineBeads.cs)
+    SpineBeads followSpineBeads;
+    readonly Vector3[] spineJoints = new Vector3[5];
+    readonly Color[] spineColours = new Color[5];
     LineRenderer followLegsRenderer;
     LineRenderer followShouldersRenderer;
     LineRenderer followLeftArmRenderer;
@@ -127,6 +131,7 @@ public class Dancer : MonoBehaviour
 
         Role = role;
         PosesByFrame = posesByFrame.Take(frameTimes.Length).ToArray();
+        if (followSpineBeads != null) followSpineBeads.SetTypicalLength(MedianSpineLength());
         JerkSource = "central differences";
 
         int jointCount = Enum.GetNames(typeof(SmplJoint)).Length;
@@ -196,9 +201,6 @@ public class Dancer : MonoBehaviour
                 followLegsCurve.AddKey(new Keyframe(0.5f, 0.03f));
                 followLegsCurve.AddKey(new Keyframe(1.0f, 0.01f));
 
-                followSpineRenderer = NewLineRenderer(0.01f, BloomMat);
-                followSpineRenderer.transform.SetParent(transform, false);
-
                 followLegsRenderer = NewLineRenderer(0.01f, BloomMat);
                 followLegsRenderer.transform.SetParent(transform, false);
 
@@ -222,6 +224,10 @@ public class Dancer : MonoBehaviour
                 followRightArmRenderer.transform.SetParent(transform, false);
 
                 followRightArmRenderer.widthCurve = followArmCurve;
+
+                // her spine is a bead chain; it shows / fades with her other skeleton lines (SpineBeads.VisibilitySource)
+                followSpineBeads = SpineBeads.Create(transform, Role.Follow);
+                followSpineBeads.VisibilitySource = followShouldersRenderer;
 
                 break;
             case Role.Lead:
@@ -268,6 +274,9 @@ public class Dancer : MonoBehaviour
     /// write (lead 1, follow 2); SmplxAvatar's translucent colour pass then skips the pixels with its own dancer's bit.</summary>
     public static int SkeletonStencilBit(Role role) => 1 << ((int)role & 1);
 
+    /// <summary>the skeleton stencil option is on (the follower's spine beads write their bit in their own pass)</summary>
+    public static bool SkeletonStencilOn => skeletonStencilOn;
+
     /// <summary>draw the skeleton stencil markers (SmplxAvatar.SkeletonsOverBodies switches this); off = their pass is
     /// disabled, so they cost no draw calls</summary>
     public static void EnableSkeletonStencil(bool on)
@@ -301,7 +310,7 @@ public class Dancer : MonoBehaviour
         if (marker == null) return;
         LineRenderer[] lines =
         {
-            followSpineRenderer, followLegsRenderer, followShouldersRenderer, followLeftArmRenderer, followRightArmRenderer,
+            followLegsRenderer, followShouldersRenderer, followLeftArmRenderer, followRightArmRenderer,
             leadArmsRenderer, leadLeftLegRenderer, leadRightLegRenderer
         };
         foreach (LineRenderer line in lines)
@@ -312,9 +321,49 @@ public class Dancer : MonoBehaviour
         }
     }
 
-    public void SetPoseToFrame(int frameNumber, float beatIntensity)
+    List<Vector3> blendScratch;
+
+    /// <summary>sub-frame pose (Assets/Film slow motion via HeadMovement.DriveExternally): the joints lerp between frames
+    /// f0 and f1 at k (a NaN joint keeps the nearer frame's value); colours, jerk and everything keyed by frame use the
+    /// nearer frame. The nearer frame's pose is swapped for the blend only while SetPoseToFrame runs.</summary>
+    public void SetPoseToFrameBlend(int f0, int f1, float k, float beatIntensity, Color[] jointColours = null)
+    {
+        f0 = Mathf.Clamp(f0, 0, PosesByFrame.Length - 1);
+        f1 = Mathf.Clamp(f1, 0, PosesByFrame.Length - 1);
+        int nearest = k < 0.5f ? f0 : f1;
+        if (f0 == f1 || !(k > 1e-4f) || k >= 1f - 1e-4f)
+        {
+            SetPoseToFrame(nearest, beatIntensity, jointColours);
+            return;
+        }
+
+        List<Vector3> p0 = PosesByFrame[f0], p1 = PosesByFrame[f1], keep = PosesByFrame[nearest];
+        blendScratch ??= new List<Vector3>(p0.Count);
+        blendScratch.Clear();
+        for (int j = 0; j < p0.Count; j++)
+        {
+            Vector3 a = p0[j], b = j < p1.Count ? p1[j] : a;
+            bool bad = float.IsNaN(a.x) || float.IsNaN(b.x);
+            blendScratch.Add(bad ? keep[j] : Vector3.LerpUnclamped(a, b, k));
+        }
+
+        PosesByFrame[nearest] = blendScratch;
+        try
+        {
+            SetPoseToFrame(nearest, beatIntensity, jointColours);
+        }
+        finally
+        {
+            PosesByFrame[nearest] = keep;
+        }
+    }
+
+    /// <param name="jointColours">colour of each SMPL-24 joint this frame (SkeletonStyle: the beat pulse in rhythm mode,
+    /// the estimated load in physics mode); null = the legacy jerk x beat-intensity glow</param>
+    public void SetPoseToFrame(int frameNumber, float beatIntensity, Color[] jointColours = null)
     {
         List<Vector3> pose = PosesByFrame[frameNumber];
+        currentColours = jointColours;
 
         switch (Role)
         {
@@ -331,25 +380,17 @@ public class Dancer : MonoBehaviour
                     hairSimulation.Init(BloomMat);
                 }
 
-                Vector3[] spineArray = new Vector3[smplFollowSpine.Length];
+                // spine beads on the same Catmull-Rom curve, coloured like the line's gradient keys (one per joint)
                 for (int i = 0; i < smplFollowSpine.Length; i++)
                 {
-                    spineArray[i] = pose[smplFollowSpine[i]];
+                    int joint = smplFollowSpine[i];
+                    spineJoints[i] = pose[joint];
+                    spineColours[i] = currentColours != null && currentColours.Length >= 24
+                        ? currentColours[joint]
+                        : LegacyJointColour(frameNumber, beatIntensity, joint);
                 }
 
-                Vector3[] spineBez = CatmullRomSpline.Generate(spineArray);
-                followSpineRenderer.positionCount = spineBez.Length;
-                followSpineRenderer.SetPositions(spineBez);
-                
-                (GradientColorKey[] followSpineColorKeys, GradientAlphaKey[] followSpineAlphaKeys) = IntensityGradient(
-                    frameNumber, beatIntensity, smplFollowSpine,
-                    Array.Empty<int>());
-
-                followSpineRenderer.colorGradient = new Gradient
-                {
-                    colorKeys = followSpineColorKeys,
-                    alphaKeys = followSpineAlphaKeys
-                };
+                followSpineBeads.SetChain(spineJoints, spineColours);
 
                 Vector3[] legsArray = new Vector3[smplFollowLegs.Length];
                 for (int i = 0; i < smplFollowLegs.Length; i++)
@@ -550,6 +591,22 @@ public class Dancer : MonoBehaviour
     {
         List<GradientColorKey> colorKeys = new();
         GradientAlphaKey[] alphas = { new(1, 0), new(1, 1) };
+        if (currentColours != null && currentColours.Length >= 24)
+        {
+            // SkeletonStyle colours: one key per joint that is not excluded (<= 8 keys, the Gradient limit)
+            for (int i = 0; i < limbArray.Length; i++)
+            {
+                int x = limbArray[i];
+                if (exclusions.Contains(x)) continue;
+                int joint = x > 0 ? x : x == 0 && i > 0 && limbArray[i - 1] > 0 ? limbArray[i - 1] : (int)SmplJoint.Spine3;
+                if (x == 0 && i == 0) joint = (int)SmplJoint.Pelvis;
+                Color c = currentColours[joint];
+                // key at the joint's place along the spline (the line runs through every limb point, pseudo ones too)
+                colorKeys.Add(new GradientColorKey(c, limbArray.Length > 1 ? i / (float)(limbArray.Length - 1) : 0f));
+            }
+
+            return new Tuple<GradientColorKey[], GradientAlphaKey[]>(colorKeys.ToArray(), alphas);
+        }
 
         for (int i = 0; i < limbArray.Length; i++)
         {
@@ -569,6 +626,35 @@ public class Dancer : MonoBehaviour
 
         return new Tuple<GradientColorKey[], GradientAlphaKey[]>(colorKeys.ToArray(), alphas);
     }
+
+    /// <summary>the legacy jerk x beat-intensity glow of one joint (IntensityGradient without SkeletonStyle colours)</summary>
+    Color LegacyJointColour(int frameNumber, float intensity, int joint)
+    {
+        float jerk = jerkByFrameByJoint[(SmplJoint)joint][frameNumber] / 200;
+        float jerkIntensity = jerk * intensity;
+        int colorIndex = float.IsFinite(jerkIntensity) ? Mathf.Clamp(Mathf.RoundToInt(jerkIntensity), 0, colorSpectrum.Length - 1) : 0;
+        return colorSpectrum[colorIndex];
+    }
+
+    /// <summary>median pelvis -> neck spine curve length over the take (every 4th frame; sizes the bead chain)</summary>
+    float MedianSpineLength()
+    {
+        List<float> lengths = new();
+        Vector3[] joints = new Vector3[smplFollowSpine.Length];
+        for (int f = 0; f < PosesByFrame.Length; f += 4)
+        {
+            for (int i = 0; i < joints.Length; i++) joints[i] = PosesByFrame[f][smplFollowSpine[i]];
+            float l = SpineBeads.CurveLength(joints);
+            if (float.IsFinite(l) && l > 0.05f) lengths.Add(l);
+        }
+
+        if (lengths.Count == 0) return float.NaN;
+        lengths.Sort();
+        return lengths[lengths.Count / 2];
+    }
+
+    /// <summary>the follower's spine bead chain (null on the leader)</summary>
+    public SpineBeads Spine => followSpineBeads;
 
     #region GETTERS
     
@@ -778,6 +864,10 @@ public class Dancer : MonoBehaviour
 
     /// <summary>where the per-joint jerk driving the glow came from (for hm_state)</summary>
     public string JerkSource { get; private set; }
+
+    /// <summary>|jerk| per frame of one SMPL-24 joint (timing.json spline jerk, or central differences of the exported
+    /// joints on the real frame times - see JerkSource); null when unknown. Shared array: do not modify.</summary>
+    public float[] JerkSeries(SmplJoint joint) => jerkByFrameByJoint.TryGetValue(joint, out float[] a) ? a : null;
 
     /// <summary>true when the original LineRenderer hair is attached (v1/v2 captures only)</summary>
     public bool HasLegacyHair => hairSimulation != null;

@@ -71,6 +71,10 @@ public static class CatmullRomSpline
         }
     }
 
+    /// <summary>one point of the segment p1 -> p2 (the curve Generate samples; for allocation-free callers such as
+    /// SpineBeads)</summary>
+    public static Vector3 Position(Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3, float t) => CatmullRomPosition(p0, p1, p2, p3, t);
+
     /// <summary>
     /// Evaluates the position on the Catmull-Rom spline at parameter t in [0..1],
     /// given four control points p0, p1, p2, p3.

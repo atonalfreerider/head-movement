@@ -15,6 +15,10 @@ using UnityEngine;
 /// L0 is the median frame length while that connection is in contact (the couple's neutral frame), u points
 /// from the follow towards the lead. Positive = tension (pull), negative = compression (push). The weights are
 /// tuning knobs to calibrate against dancers' own sense of the connection, not measured physics.
+///
+/// No lines are drawn (user 2026-10-07: "we don't need extra lines drawn for tension and pressure"): the signal colours
+/// the holding arms of the skeletons in the physics view instead (SkeletonStyle). DrawLines = true brings the old
+/// connector lines back for debugging.
 /// </summary>
 public class PartnerConnection : MonoBehaviour
 {
@@ -24,6 +28,7 @@ public class PartnerConnection : MonoBehaviour
     [Tooltip("frames of centred smoothing applied before differentiating (pose noise dominates otherwise)")]
     public int SmoothRadius = 3;
     public float MaxWidth = 0.035f;
+    public bool DrawLines;
 
     static readonly Color TensionColor = new(1f, 0.35f, 0.05f);
     static readonly Color CompressionColor = new(0.1f, 0.55f, 1f);
@@ -92,7 +97,7 @@ public class PartnerConnection : MonoBehaviour
         foreach (Connection c in Connections)
         {
             Compute(c, n, fps, com, comAcceleration);
-            c.Line = NewLine(glowMat, c.Name);
+            if (DrawLines) c.Line = NewLine(glowMat, c.Name);
         }
     }
 
