@@ -120,3 +120,7 @@ Assets/StreamingAssets/*
 # python caches from Tools/githooks/guard.py
 __pycache__/
 *.pyc
+
+# Unity crash-recovery scene backups (written after an editor crash; never source)
+/Assets/_Recovery/
+/Assets/_Recovery.meta
