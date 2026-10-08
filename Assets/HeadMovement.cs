@@ -35,6 +35,10 @@ public class HeadMovement : MonoBehaviour
 
     ContactDetection contactDetection;
     FloorPatterns floorPatterns;
+    FloorGrid floorGrid;
+    SkeletonStyle skeletonStyle;
+    SkeletonLegend skeletonLegend;
+    PhysicsData physicsData;
     PartnerConnection partnerConnection;
     SplatCloud splatCloud;
     RoomMesh roomMesh;
@@ -59,14 +63,20 @@ public class HeadMovement : MonoBehaviour
     int speedIndex = Speeds.Length - 1;
     bool loopMeasure;
     int loopedMeasure;
-    bool showFloor = true, showConnection = true, showCameras = false, showHud = true;
-    bool showAvatars = true, showTiming = true, showPhysics = true;
+    // "tension" draws nothing since 2026-10-07 (user: no extra lines for tension and pressure; PartnerConnection feeds the
+    // physics skeleton colours); "physics" = the PHYSICS view mode (skeletons coloured by the estimated load + legend + COM /
+    // XCoM / support markers), off by default: the default is the RHYTHM mode (skeletons pulse with the beat, SkeletonStyle)
+    bool showFloor = true, showConnection = true, showCameras = false, showHud = true, showGrid = true;
+    bool showAvatars = true, showTiming = true, showPhysics;
 
     // VIEWER_SPEC 3.2a: splats show the dancers only and start off; the room reconstruction is not shown by default
     // (M / hm_layer room still toggle it for QA; the tour never turns it on)
     bool showSplats, showRoom;
 
-    /// <summary>VIEWER_SPEC 3.2: avatars are semi-transparent by default (the skeleton reads inside the body)</summary>
+    /// <summary>VIEWER_SPEC 3.2: avatars are 65 % transparent AS DISPLAYED by default (the skeleton and the partner read
+    /// through the body). Opacity = what the screen shows (hm_opacity --probe: background contribution through one body
+    /// layer, Game-view pipeline); the colour pass looks the alpha up per pixel from the shaded colour (SmplxAvatar.AlphaMode,
+    /// DisplayTransparency: a flat alpha 0.35 showed a bright body 48 % and a dark body 74 % transparent).</summary>
     public const float DefaultAvatarOpacity = 0.35f;
 
     float avatarOpacity = DefaultAvatarOpacity; // the user default (hm_opacity)
@@ -83,6 +93,8 @@ public class HeadMovement : MonoBehaviour
         captures = Directory.GetDirectories(assetPath).OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToArray();
 
         floorPatterns = gameObject.AddComponent<FloorPatterns>();
+        floorGrid = new GameObject("Floor").AddComponent<FloorGrid>();
+        skeletonLegend = gameObject.AddComponent<SkeletonLegend>();
         partnerConnection = gameObject.AddComponent<PartnerConnection>();
         splatCloud = new GameObject("Splats").AddComponent<SplatCloud>();
         roomMesh = new GameObject("Room").AddComponent<RoomMesh>();
@@ -130,6 +142,12 @@ public class HeadMovement : MonoBehaviour
     public Dancer FollowDancer => Follow;
     public IReadOnlyDictionary<Role, SmplxAvatar> Avatars => avatars;
     public CameraControl OrbitCamera => cameraControl;
+    public SkeletonStyle Skeletons => skeletonStyle;
+    public FloorPatterns Footprints => floorPatterns;
+    public FloorGrid Grid => floorGrid;
+
+    /// <summary>skeleton colouring now: physics (estimated load) while the physics layer / view is on, else rhythm</summary>
+    public SkeletonStyle.Mode SkeletonMode => showPhysics ? SkeletonStyle.Mode.Physics : SkeletonStyle.Mode.Rhythm;
 
     /// <summary>the user default avatar opacity (hm_opacity); view states scale it</summary>
     public float AvatarOpacity => avatarOpacity;
@@ -161,10 +179,10 @@ public class HeadMovement : MonoBehaviour
         }
     }
 
-    /// <summary>current flag of a layer (floor|tension|splats|cameras|hud|avatars|timing|physics|counterbalance|traces|graph)</summary>
+    /// <summary>current flag of a layer (floor|grid|tension|splats|cameras|hud|avatars|timing|physics|counterbalance|traces|neck|graph|axis|floorcraft)</summary>
     public bool LayerVisible(string layer) => layer.ToLowerInvariant() switch
     {
-        "floor" => showFloor, "tension" => showConnection, "splats" => showSplats, "room" => showRoom, "cameras" => showCameras,
+        "floor" => showFloor, "grid" => showGrid, "tension" => showConnection, "splats" => showSplats, "room" => showRoom, "cameras" => showCameras,
         "hud" => showHud, "avatars" => showAvatars, "timing" => showTiming, "physics" => showPhysics,
         _ => DanceLayers.LayerOn(layer.ToLowerInvariant())
     };
@@ -199,6 +217,8 @@ public class HeadMovement : MonoBehaviour
 
         currentFolder = selection;
         currentFrame = -1;
+        if (ExternallyDriven && audioSource != null) audioSource.mute = externalSavedMute;
+        externalAudioTime = float.NaN; // a new capture is never externally driven until its director says so
         loopMeasure = false;
 
         manifest = CaptureManifest.Load(captures[currentFolder]);
@@ -258,7 +278,60 @@ public class HeadMovement : MonoBehaviour
 
         LoadV3();
 
+        BuildGrid();
+        skeletonStyle = new SkeletonStyle { Current = SkeletonMode };
+        try
+        {
+            skeletonStyle.Init(Lead, Follow, timeline, timingData, beatGrid, physicsData, partnerConnection);
+        }
+        catch (Exception e)
+        {
+            Warn($"skeleton colours failed ({e.Message}) - legacy glow");
+            skeletonStyle = null;
+        }
+
+        skeletonLegend.Show = showPhysics && skeletonStyle != null;
+        skeletonLegend.Source = skeletonStyle?.LoadSource ?? "";
+
         StartCoroutine(LoadAudio());
+    }
+
+    /// <summary>the floor grid covers both dancers over the whole take (+ margin), aligned to the origin</summary>
+    void BuildGrid()
+    {
+        float x0 = float.MaxValue, x1 = float.MinValue, z0 = float.MaxValue, z1 = float.MinValue;
+        int n = Mathf.Min(Lead.FrameCount, Follow.FrameCount);
+        for (int f = 0; f < n; f += 3)
+        {
+            foreach (Dancer d in new[] { Lead, Follow })
+            {
+                Vector3 p = d.Joint(f, SmplJoint.Pelvis);
+                if (float.IsNaN(p.x)) continue;
+                x0 = Mathf.Min(x0, p.x);
+                x1 = Mathf.Max(x1, p.x);
+                z0 = Mathf.Min(z0, p.z);
+                z1 = Mathf.Max(z1, p.z);
+            }
+        }
+
+        floorGrid.Build(x0 > x1 ? new Rect(-1, -1, 2, 2) : Rect.MinMaxRect(x0, z0, x1, z1));
+        floorGrid.SetVisible(showGrid);
+    }
+
+    /// <summary>re-colour the skeletons of the shown frame (mode switch while paused)</summary>
+    public void RefreshSkeletons()
+    {
+        if (skeletonStyle != null) skeletonStyle.Current = SkeletonMode;
+        skeletonLegend.Show = showPhysics && skeletonStyle != null;
+        if (!audioLoaded || timeline == null || Lead == null) return;
+        if (ExternallyDriven)
+        {
+            externalF0 = -1; // re-pose (re-colour) the driven time on the next Update
+            return;
+        }
+
+        currentFrame = -1;
+        SetToFrameNumber();
     }
 
     /// <summary>skinned SMPL-X avatars + timing/physics overlays, each only when the capture has its files</summary>
@@ -314,6 +387,7 @@ public class HeadMovement : MonoBehaviour
             {
                 PhysicsData physics = PhysicsData.Load(physicsPath);
                 DanceOrigin.Shift(physics);
+                physicsData = physics;
                 physicsOverlay = new GameObject("Physics Overlay").AddComponent<PhysicsOverlay>();
                 physicsOverlay.Init(physics, timeline, BloomMaterial);
                 physicsOverlay.SetVisible(showPhysics);
@@ -354,6 +428,7 @@ public class HeadMovement : MonoBehaviour
         if (physicsOverlay != null) Destroy(physicsOverlay.gameObject);
         timingOverlay = null;
         physicsOverlay = null;
+        physicsData = null;
         timingData = null;
         loadWarnings.Clear();
     }
@@ -516,8 +591,9 @@ public class HeadMovement : MonoBehaviour
 
         float currentBeatIntensity = beatIntensityByFrame.GetValueOrDefault(frameNumber, 0);
 
-        Lead.SetPoseToFrame(frameNumber, currentBeatIntensity);
-        Follow.SetPoseToFrame(frameNumber, currentBeatIntensity);
+        // VIEWER_SPEC 3.3 / 3.8: rhythm mode = the beat pulse, physics mode = the estimated load (SkeletonStyle)
+        Lead.SetPoseToFrame(frameNumber, currentBeatIntensity, skeletonStyle?.Colours(Role.Lead, frameNumber));
+        Follow.SetPoseToFrame(frameNumber, currentBeatIntensity, skeletonStyle?.Colours(Role.Follow, frameNumber));
 
         contactDetection.DetectContact(frameNumber);
         floorPatterns.SetFrame(frameNumber);
@@ -660,13 +736,14 @@ public class HeadMovement : MonoBehaviour
 
     public void Stop() => Pause();
 
-    /// <summary>show/hide a visual layer: floor | tension | splats | room | cameras | hud | avatars | timing | physics.
-    /// Returns the new state.</summary>
+    /// <summary>show/hide a visual layer: floor (footprints) | grid | tension | splats | room | cameras | hud | avatars |
+    /// timing | physics | counterbalance | traces | neck | graph | axis | floorcraft | balance. Returns the new state.</summary>
     public bool SetLayerVisible(string layer, bool visible)
     {
         switch (layer.ToLowerInvariant())
         {
             case "floor": floorPatterns.SetVisible(showFloor = visible); break;
+            case "grid": floorGrid.SetVisible(showGrid = visible); break;
             case "tension": partnerConnection.SetVisible(showConnection = visible); break;
             case "splats": splatCloud.SetVisible(showSplats = visible); break;
             case "room":
@@ -679,9 +756,9 @@ public class HeadMovement : MonoBehaviour
             case "avatars": SetAvatarsVisible(visible); break;
             case "timing": SetTimingVisible(visible); break;
             case "physics": SetPhysicsVisible(visible); break;
-            case "counterbalance" or "traces" or "graph": DanceLayers.SetLayer(layer.ToLowerInvariant(), visible); break;
+            case "counterbalance" or "traces" or "neck" or "graph" or "axis" or "floorcraft" or "balance" or "moves": DanceLayers.SetLayer(layer.ToLowerInvariant(), visible); break;
             default:
-                throw new ArgumentException($"unknown layer '{layer}' (floor|tension|splats|room|cameras|hud|avatars|timing|physics|counterbalance|traces|graph)");
+                throw new ArgumentException($"unknown layer '{layer}' (floor|grid|tension|splats|room|cameras|hud|avatars|timing|physics|counterbalance|traces|neck|graph|axis|floorcraft|balance|moves)");
         }
 
         return visible;
@@ -703,7 +780,11 @@ public class HeadMovement : MonoBehaviour
     {
         showPhysics = visible;
         if (physicsOverlay != null) physicsOverlay.SetVisible(visible);
+        RefreshSkeletons(); // physics mode colours the skeletons by load; rhythm mode pulses them
     }
+
+    /// <summary>skeleton mode by name (hm_skeleton): physics turns the physics layer on, rhythm turns it off</summary>
+    public void SetSkeletonMode(SkeletonStyle.Mode mode) => SetPhysicsVisible(mode == SkeletonStyle.Mode.Physics);
 
     /// <summary>machine-readable state for CLI playtests</summary>
     public Dictionary<string, object> State()
@@ -721,13 +802,14 @@ public class HeadMovement : MonoBehaviour
             ["loopMeasure"] = loopMeasure,
             ["layers"] = new Dictionary<string, bool>
             {
-                ["floor"] = showFloor, ["tension"] = showConnection, ["splats"] = showSplats, ["room"] = showRoom,
+                ["floor"] = showFloor, ["grid"] = showGrid, ["tension"] = showConnection, ["splats"] = showSplats, ["room"] = showRoom,
                 ["cameras"] = showCameras, ["hud"] = showHud, ["avatars"] = showAvatars, ["timing"] = showTiming,
                 ["physics"] = showPhysics
             },
             ["version"] = manifest?.version ?? 0,
             ["timesDriven"] = timeline?.FromTimes ?? false,
-            ["warnings"] = loadWarnings.ToList()
+            ["warnings"] = loadWarnings.ToList(),
+            ["externalTime"] = ExternallyDriven ? (object)externalAudioTime : null
         };
         DanceLayers.AppendState(state);
         state["avatarOpacity"] = avatarOpacity;
@@ -761,7 +843,8 @@ public class HeadMovement : MonoBehaviour
         {
             state["timing"] = new Dictionary<string, object>
             {
-                ["touchdowns"] = timingOverlay.TouchdownCount, ["visibleRings"] = timingOverlay.VisibleRings
+                ["touchdowns"] = timingOverlay.TouchdownCount, ["visibleRings"] = timingOverlay.VisibleRings,
+                ["absoluteValid"] = timingOverlay.AbsoluteValid, ["absoluteKnown"] = timingData != null && timingData.AbsoluteKnown
             };
         }
 
@@ -780,6 +863,20 @@ public class HeadMovement : MonoBehaviour
         }
 
         state["steps"] = floorPatterns.Steps.Count;
+        state["footprints"] = new Dictionary<string, object>
+        {
+            ["mode"] = floorPatterns.Mode.ToString().ToLowerInvariant(), ["visiblePrints"] = floorPatterns.VisiblePrints,
+            ["recentSeconds"] = floorPatterns.RecentSeconds, ["steps"] = floorPatterns.Steps.Count
+        };
+        state["grid"] = new Dictionary<string, object>
+        {
+            ["visible"] = floorGrid.Visible, ["crosses"] = floorGrid.CrossCount, ["planeAlpha"] = floorGrid.PlaneAlpha,
+            ["extent"] = new[] { floorGrid.Extent.xMin, floorGrid.Extent.yMin, floorGrid.Extent.xMax, floorGrid.Extent.yMax },
+            ["crossArmM"] = floorGrid.CrossArm, ["crossWidthM"] = floorGrid.CrossWidth, ["crossBrightness"] = floorGrid.Brightness
+        };
+        state["skeletonMode"] = SkeletonMode.ToString().ToLowerInvariant();
+        state["skeletonLegend"] = skeletonLegend.Show;
+        state["connectionLines"] = partnerConnection.Connections.Count(c => c.Line != null && c.Line.enabled);
         state["stepsOnBeat"] = floorPatterns.Steps.Count(s => !float.IsNaN(s.ErrorMs) && Mathf.Abs(s.ErrorMs) <= floorPatterns.OnBeatMs);
         state["activeConnections"] = partnerConnection.Connections
             .Where(c => c.Active != null && currentFrame >= 0 && currentFrame < c.Active.Length && c.Active[currentFrame])
@@ -797,8 +894,128 @@ public class HeadMovement : MonoBehaviour
 
     #endregion
 
+    #region EXTERNAL CLOCK (Assets/Film: the film director owns dance time)
+
+    // NaN = HeadMovement's own audio clock drives the frame; otherwise the film director's dance time (audio clock)
+    float externalAudioTime = float.NaN;
+    bool externalSavedMute;
+    int externalF0 = -1, externalF1 = -1;
+    float externalK = -1f;
+
+    /// <summary>true while a director (FilmDirector) drives the shown time: the song AudioSource is muted, the lesson
+    /// keys are ignored and poses blend between the two neighbouring frames (smooth slow motion)</summary>
+    public bool ExternallyDriven => !float.IsNaN(externalAudioTime);
+
+    public float ExternalAudioTime => externalAudioTime;
+
+    /// <summary>physics.json of the loaded capture (Unity coordinates, origin-shifted), null without one</summary>
+    public PhysicsData Physics => physicsData;
+
+    /// <summary>show this audio-clock time (seconds; reference time + timeline.TimeToAudio) on the next Update and keep
+    /// showing it until the next call: the caller owns the clock (film slow motion, holds, replays). Mutes and pauses the
+    /// song; ReleaseExternal hands the clock back.</summary>
+    public void DriveExternally(float audioTime)
+    {
+        if (!audioLoaded || timeline == null || !float.IsFinite(audioTime)) return;
+        if (!ExternallyDriven)
+        {
+            Pause();
+            if (audioSource != null)
+            {
+                externalSavedMute = audioSource.mute;
+                audioSource.mute = true;
+            }
+
+            externalF0 = externalF1 = -1;
+        }
+
+        externalAudioTime = audioTime;
+    }
+
+    /// <summary>back to the song clock, paused at the time shown last (no-op when not driven)</summary>
+    public void ReleaseExternal()
+    {
+        if (!ExternallyDriven) return;
+        float t = externalAudioTime;
+        externalAudioTime = float.NaN;
+        externalF0 = externalF1 = -1;
+        if (audioSource != null) audioSource.mute = externalSavedMute;
+        currentFrame = -1; // re-pose (and un-blend) the nearest frame
+        if (audioLoaded && timeline != null) Seek(t);
+    }
+
+    /// <summary>pose the externally driven time: joints lerp / bone rotations slerp between the two neighbouring frames;
+    /// everything keyed by frame (colours, contacts, footprints, overlays, hair) uses the nearer frame</summary>
+    void ShowExternalTime()
+    {
+        double t = externalAudioTime;
+        double[] ts = timeline.AudioTimes;
+        int n = ts.Length;
+        int f0, f1;
+        float k;
+        if (n == 0) return;
+        if (t <= ts[0] || n == 1)
+        {
+            f0 = f1 = 0;
+            k = 0f;
+        }
+        else if (t >= ts[n - 1])
+        {
+            f0 = f1 = n - 1;
+            k = 0f;
+        }
+        else
+        {
+            int lo = 0, hi = n - 1;
+            while (hi - lo > 1)
+            {
+                int mid = (lo + hi) >> 1;
+                if (ts[mid] <= t) lo = mid;
+                else hi = mid;
+            }
+
+            f0 = lo;
+            f1 = hi;
+            k = (float)((t - ts[lo]) / Math.Max(1e-9, ts[hi] - ts[lo]));
+        }
+
+        int nearest = k < 0.5f ? f0 : f1;
+        if (f0 == externalF0 && f1 == externalF1 && Mathf.Abs(k - externalK) < 1e-6f && currentFrame == nearest) return;
+        externalF0 = f0;
+        externalF1 = f1;
+        externalK = k;
+        currentFrame = nearest;
+
+        float beat = beatIntensityByFrame != null ? beatIntensityByFrame.GetValueOrDefault(nearest, 0) : 0f;
+        Lead.SetPoseToFrameBlend(f0, f1, k, beat, skeletonStyle?.Colours(Role.Lead, nearest));
+        Follow.SetPoseToFrameBlend(f0, f1, k, beat, skeletonStyle?.Colours(Role.Follow, nearest));
+        contactDetection.DetectContact(nearest);
+        floorPatterns.SetFrame(nearest);
+        partnerConnection.SetFrame(nearest);
+        splatCloud.SetFrame(nearest, Fps);
+        foreach (SmplxAvatar avatar in avatars.Values) avatar.SetFrameBlend(f0, f1, k);
+        float frameTime = timeline.AudioTimeOf(nearest);
+        if (timingOverlay != null) timingOverlay.SetTime(frameTime);
+        if (physicsOverlay != null) physicsOverlay.SetExactTime((float)System.Math.Min(System.Math.Max(t, ts[0]), ts[n - 1])); // sub-frame COM / XCoM
+    }
+
+    #endregion
+
     void Update()
     {
+        if (ExternallyDriven && (!audioLoaded || timeline == null || Lead == null || Follow == null))
+        {
+            if (audioSource != null) audioSource.mute = externalSavedMute;
+            externalAudioTime = float.NaN; // a reload dropped the capture: back to the normal clock
+        }
+
+        if (ExternallyDriven)
+        {
+            ShowExternalTime();
+            FeedCamera();
+            return;
+        }
+
         HandleKeyboard();
 
         if (!audioLoaded) return;
@@ -879,7 +1096,15 @@ public class HeadMovement : MonoBehaviour
         if (keyboard.homeKey.wasPressedThisFrame || keyboard.rKey.wasPressedThisFrame) Restart();
 
         if (keyboard.fKey.wasPressedThisFrame) floorPatterns.SetVisible(showFloor = !showFloor);
-        if (keyboard.tKey.wasPressedThisFrame) partnerConnection.SetVisible(showConnection = !showConnection);
+        if (keyboard.tKey.wasPressedThisFrame) // footprints: recent -> all -> off -> recent
+        {
+            floorPatterns.SetMode(floorPatterns.Mode switch
+            {
+                FloorPatterns.FootprintMode.Recent => FloorPatterns.FootprintMode.All,
+                FloorPatterns.FootprintMode.All => FloorPatterns.FootprintMode.Off,
+                _ => FloorPatterns.FootprintMode.Recent
+            });
+        }
         if (keyboard.gKey.wasPressedThisFrame) SetLayerVisible("splats", !showSplats);
         if (keyboard.mKey.wasPressedThisFrame) SetLayerVisible("room", !showRoom);
         if (keyboard.cKey.wasPressedThisFrame) virtualCameraRig.SetVisible(showCameras = !showCameras);
@@ -934,17 +1159,20 @@ public class HeadMovement : MonoBehaviour
             {
                 if (floorPatterns.LatestStep(role, currentFrame, out FloorPatterns.Step step) && !float.IsNaN(step.ErrorMs))
                 {
+                    // no on-beat verdict when timing.json says the A/V offset is unknown (absolute_timing.valid false)
+                    bool unsynced = timingData != null && !timingData.AbsoluteValid;
                     GUILayout.Label($"{role} last step: {(step.ErrorMs >= 0 ? "+" : "")}{step.ErrorMs:0} ms " +
-                                    $"({(Mathf.Abs(step.ErrorMs) <= floorPatterns.OnBeatMs ? "on beat" : step.ErrorMs > 0 ? "late" : "early")})");
+                                    (unsynced ? "vs beat (unsynced)"
+                                        : $"({(Mathf.Abs(step.ErrorMs) <= floorPatterns.OnBeatMs ? "on beat" : step.ErrorMs > 0 ? "late" : "early")})"));
                 }
             }
 
-            foreach (PartnerConnection.Connection c in partnerConnection.Connections)
+            foreach (PartnerConnection.Connection c in showPhysics ? partnerConnection.Connections : Enumerable.Empty<PartnerConnection.Connection>())
             {
                 if (c.Active != null && currentFrame < c.Active.Length && c.Active[currentFrame])
                 {
                     float s = c.Signal[currentFrame];
-                    GUILayout.Label($"{c.Name}: {(s >= 0 ? "tension" : "compression")} {Mathf.Abs(s):0.00}");
+                    GUILayout.Label($"{c.Name}: {(s >= 0 ? "tension" : "compression")} {Mathf.Abs(s):0.00} (estimated)");
                 }
             }
         }
@@ -966,7 +1194,7 @@ public class HeadMovement : MonoBehaviour
         string cameraMode = cameraControl == null ? "" : cameraControl.Mode == CameraControl.Owner.Director ? "   [camera: director]" : "   [camera: free]";
         GUILayout.Label("space play/pause   , . beat   [ ] measure   L loop   R restart   <- -> speed\n" +
                         "camera: A D orbit   W S dolly   Q E height   Z X tilt   shift fast   O director/free" + cameraMode + "\n" +
-                        "F floor   T tension   G splats   C cameras   H hud   V avatars   B timing   P physics   M room");
+                        "F footprints   T footprints recent/all/off   G splats   C cameras   H hud   V avatars   B timing   P physics mode   M room");
         GUILayout.EndArea();
 
         if (audioLoaded && timingOverlay != null && showTiming)

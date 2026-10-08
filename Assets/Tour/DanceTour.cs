@@ -43,8 +43,8 @@ public class DanceTour : MonoBehaviour, ICameraDirector
 
     static readonly string[] HeadLayers = { "floor", "timing", "physics", "tension", "avatars", "hud" };
 
-    // avatar opacity per state as a factor of the user default (HeadMovement.AvatarOpacity, ~0.3):
-    // Orbit 0.3, Overhead 0.2, Geometry 0.15, Physics 0.1 at the 0.3 default (VIEWER_SPEC 4)
+    // avatar opacity per state as a factor of the user default (HeadMovement.AvatarOpacity: the DISPLAYED opacity, 0.35 =
+    // 65 % transparent on screen): Orbit 0.35, Overhead 0.23, Geometry 0.175, Physics 0.12 (VIEWER_SPEC 4)
     static float OpacityFactor(View v) => v switch
     {
         View.Orbit or View.CameraTour => 1f,
@@ -197,7 +197,10 @@ public class DanceTour : MonoBehaviour, ICameraDirector
         {
             Layers.CounterbalanceOverride = null;
             Layers.TracesOverride = null;
+            Layers.NeckOverride = null;
             Layers.GraphOverride = null;
+            Layers.MovesOverride = null;
+            Layers.InsetOverride = null;
             Layers.ShowAllPivots = false;
             Layers.ApplyVisibility();
             if (Layers.Graph != null) Layers.Graph.SetFade(1f);
@@ -304,11 +307,14 @@ public class DanceTour : MonoBehaviour, ICameraDirector
         SetHead(hm, "avatars", true);
         SetHead(hm, "hud", false);
         layers.CounterbalanceOverride = !graphView;
-        layers.TracesOverride = view == View.Geometry;
+        layers.TracesOverride = view == View.Geometry ? true : graphView ? false : (bool?)null; // on by default (free extremities only)
+        layers.NeckOverride = graphView ? false : null; // the neck axis follows its layer flag; never over the graph
         layers.ShowAllPivots = view == View.Overhead;
         layers.GraphOverride = view == View.DanceGraph ? DanceGraphLayer.Mode.Path
             : view == View.Fingerprint ? DanceGraphLayer.Mode.Fingerprint
             : DanceGraphLayer.Mode.Off;
+        layers.MovesOverride = true; // the move caption throughout directed playback (VIEWER_SPEC 3.12)
+        layers.InsetOverride = !graphView; // the graph inset; hidden where the full graph is on screen
         layers.ApplyVisibility();
 
         avatarAlphaFrom = avatarAlphaNow < 0 ? hm.EffectiveAvatarOpacity : avatarAlphaNow;
