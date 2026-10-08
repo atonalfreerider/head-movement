@@ -2,11 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 using Newtonsoft.Json;
 using Unity.Pipeline.Commands;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.Rendering;
+using UnityEngine.Rendering.Universal;
 using VRTKLite.Controllers;
 
 /// <summary>
@@ -18,8 +21,13 @@ using VRTKLite.Controllers;
 ///   unity command hm_transport --action seek --time 3.5
 ///   unity command hm_layer --layer tension --visible false
 ///   unity command hm_orbit --azimuth 45 --elevation 70 --radius 3
+///   unity command hm_orbit --mode park --at 0.5,-0.2 --azimuth 210 --elevation 55 --radius 2.4   # fixed still camera
 ///   unity command hm_orbit --height 1.6 --look 0.95 --distance 2.9
-///   unity command hm_opacity --value 0.35
+///   unity command hm_opacity --value 0.35                          # displayed opacity (65 % transparent)
+///   unity command hm_opacity --probe both --opacities 0.35 --hair true   # measured transparency as displayed
+///   unity command hm_neckaxis [--threshold 15 --full 35 --length 0.5 --reference neutral|torso|vertical]
+///   unity command hm_skeleton [--mode rhythm|physics]        # skeleton colours: beat pulse / estimated load
+///   unity command hm_floor [--footprints off|recent|all] [--plane 0.6]   # floor grid, footprints, floor craft
 ///   unity command hm_camtrace --action start      (then hm_camtrace --action stop --path trace.csv)
 ///   unity command hm_state
 /// </summary>
@@ -85,9 +93,9 @@ public static class HeadMovementCliCommands
         return JsonConvert.SerializeObject(hm.State());
     }
 
-    [CliCommand("hm_layer", "Show or hide a visual layer: floor | tension | splats | room | cameras | hud | avatars | timing | physics | counterbalance | traces | graph")]
+    [CliCommand("hm_layer", "Show or hide a visual layer: floor | tension | splats | room | cameras | hud | avatars | timing | physics | counterbalance | traces | neck | graph")]
     public static string Layer(
-        [CliArg("layer", "floor|tension|splats|room|cameras|hud|avatars|timing|physics|counterbalance|traces|graph")] string layer,
+        [CliArg("layer", "floor|tension|splats|room|cameras|hud|avatars|timing|physics|counterbalance|traces|neck|graph")] string layer,
         [CliArg("visible", "true to show, false to hide")] bool visible = true)
     {
         Require().SetLayerVisible(layer, visible);
@@ -102,7 +110,8 @@ public static class HeadMovementCliCommands
         [CliArg("height", "eye height above the floor in metres (absolute; stays fixed while the dancers move)")] float height = float.NaN,
         [CliArg("look", "look-at height in metres (default 0.95)")] float look = float.NaN,
         [CliArg("distance", "horizontal distance from the couple in metres")] float distance = float.NaN,
-        [CliArg("mode", "free (default) | director | toggle (the O key: director <-> free, blended)")] string mode = "free")
+        [CliArg("mode", "free (default) | director | toggle (the O key: director <-> free, blended) | park (freeze the camera: no follow, no director, until the next hm_orbit)")] string mode = "free",
+        [CliArg("at", "park: aim the parked camera at this floor point 'x,z' (world, after the origin offset) from --azimuth / --elevation / --radius (look height --look, default 0.3 m)")] string at = null)
     {
         HeadMovement hm = Require();
         CameraControl control = hm.OrbitCamera;
@@ -113,6 +122,31 @@ public static class HeadMovementCliCommands
         }
 
         if (control == null) throw new InvalidOperationException("no Simulator/CameraControl in the scene");
+        if (string.Equals(mode, "park", StringComparison.OrdinalIgnoreCase))
+        {
+            // a fixed viewpoint for review stills over time (e.g. the leader's T while he walks on it)
+            if (!string.IsNullOrEmpty(at))
+            {
+                string[] xz = at.Split(',');
+                if (xz.Length != 2) throw new ArgumentException("--at x,z");
+                float x = float.Parse(xz[0], CultureInfo.InvariantCulture), z = float.Parse(xz[1], CultureInfo.InvariantCulture);
+                float phi = float.IsNaN(azimuth) ? control.Azimuth : azimuth * Mathf.Deg2Rad;
+                float el = (float.IsNaN(elevation) ? 90f - control.Polar * Mathf.Rad2Deg : elevation) * Mathf.Deg2Rad;
+                float r = float.IsNaN(radius) ? control.Radius : radius;
+                Vector3 target = new(x, float.IsNaN(look) ? 0.3f : look, z);
+                control.enabled = false;
+                control.transform.position = target + new Vector3(Mathf.Cos(phi) * Mathf.Cos(el), Mathf.Sin(el), Mathf.Sin(phi) * Mathf.Cos(el)) * r;
+                control.transform.LookAt(target);
+            }
+            else
+            {
+                control.enabled = false;
+            }
+
+            return Describe(control);
+        }
+
+        if (!control.enabled) control.enabled = true; // un-park
         if (string.Equals(mode, "toggle", StringComparison.OrdinalIgnoreCase))
         {
             hm.ToggleDirector(); // exactly the O key
@@ -148,11 +182,48 @@ public static class HeadMovementCliCommands
         $"azimuth={c.Azimuth * Mathf.Rad2Deg:0} elevation={90f - c.Polar * Mathf.Rad2Deg:0} radius={c.Radius:0.0} " +
         $"height={c.EyeHeight:0.00} look={c.LookHeight:0.00} distance={c.Distance:0.00} mode={(c.Parked ? "parked" : c.Mode.ToString().ToLowerInvariant())}";
 
-    [CliCommand("hm_opacity", "Avatar opacity (VIEWER_SPEC 3.2): --value sets the user default (0..1, view states scale it; hair = avatar + 0.15); no value reports it. --skeletons dimmed (default: each translucent body blends over its own skeleton) | over (the body skips its own skeleton's pixels: raw skeleton colour, VIEWER_SPEC 3.3 option)")]
+    [CliCommand("hm_opacity", "Avatar opacity (VIEWER_SPEC 3.2): --value sets the user default (0..1 = the opacity the screen SHOWS: 0.35 = 65 % transparent; each body blends with its own alpha for it, reported as blendAlpha; view states scale it; hair = avatar + 0.15); no value reports it. --skeletons dimmed (default: each translucent body blends over its own skeleton) | over (the body skips its own skeleton's pixels: raw skeleton colour, VIEWER_SPEC 3.3 option). --probe follow|lead|both measures the transparency AS DISPLAYED at --opacities (one body alone, parked camera, black and grey backgrounds, the Game-view pipeline with post-processing, and linear HDR with it off)")]
     public static string Opacity([CliArg("value", "default avatar opacity 0..1")] float value = float.NaN,
-        [CliArg("skeletons", "dimmed (default) | over: whether a translucent body blends over its own skeleton")] string skeletons = null)
+        [CliArg("skeletons", "dimmed (default) | over: whether a translucent body blends over its own skeleton")] string skeletons = null,
+        [CliArg("probe", "follow | lead | both: measure the displayed transparency of that body (restores everything after)")] string probe = null,
+        [CliArg("opacities", "probe: comma-separated opacities (default: the current default)")] string opacities = null,
+        [CliArg("hair", "probe: also measure the follow's hair at the hair opacity of each avatar opacity (true|false)")] bool hair = false,
+        [CliArg("mode", "pixel (default: per-fragment alpha, every part shows the opacity) | body (one alpha per body) | raw (alpha = opacity, before 2026-10-07)")] string mode = null)
     {
         HeadMovement hm = Require();
+        if (!string.IsNullOrEmpty(mode))
+        {
+            SmplxAvatar.AlphaMode = mode.ToLowerInvariant() switch
+            {
+                "pixel" => SmplxAvatar.AlphaModes.Pixel,
+                "body" => SmplxAvatar.AlphaModes.Body,
+                "raw" => SmplxAvatar.AlphaModes.Raw,
+                _ => throw new ArgumentException($"--mode pixel|body|raw, not '{mode}'")
+            };
+        }
+
+        if (!string.IsNullOrEmpty(probe))
+        {
+            float[] ops = string.IsNullOrEmpty(opacities)
+                ? new[] { hm.AvatarOpacity }
+                : opacities.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(x => float.Parse(x.Trim(), CultureInfo.InvariantCulture)).ToArray();
+            Dictionary<string, object> probes = new();
+            foreach (Role role in probe.ToLowerInvariant() switch
+                     {
+                         "both" => new[] { Role.Follow, Role.Lead },
+                         "lead" => new[] { Role.Lead },
+                         "follow" => new[] { Role.Follow },
+                         _ => throw new ArgumentException($"--probe follow|lead|both, not '{probe}'")
+                     })
+            {
+                probes[role.ToString().ToLowerInvariant()] = OpacityProbe.Measure(hm, role, ops, includeHair: hair);
+            }
+
+            probes["defaultOpacity"] = hm.AvatarOpacity;
+            probes["alphaMode"] = SmplxAvatar.AlphaMode.ToString().ToLowerInvariant();
+            return JsonConvert.SerializeObject(probes);
+        }
+
         if (!float.IsNaN(value)) hm.SetAvatarOpacity(value);
         if (!string.IsNullOrEmpty(skeletons))
         {
@@ -168,7 +239,8 @@ public static class HeadMovementCliCommands
         {
             avatars[kv.Key.ToString().ToLowerInvariant()] = new Dictionary<string, object>
             {
-                ["opacity"] = kv.Value.Opacity, ["visible"] = kv.Value.Visible, ["feetHidden"] = kv.Value.FeetHidden,
+                ["opacity"] = kv.Value.Opacity, ["blendAlpha"] = kv.Value.BlendAlpha,
+                ["predictedTransparency"] = kv.Value.PredictedTransparency, ["visible"] = kv.Value.Visible, ["feetHidden"] = kv.Value.FeetHidden,
                 ["queueOffset"] = kv.Value.QueueOffset, ["queues"] = kv.Value.SortedQueues(),
                 ["skeletonOverBody"] = kv.Value.SkeletonOverBody, ["skeletonStencilBit"] = kv.Value.SkeletonStencilBit
             };
@@ -177,7 +249,92 @@ public static class HeadMovementCliCommands
         return JsonConvert.SerializeObject(new Dictionary<string, object>
         {
             ["avatarOpacity"] = hm.AvatarOpacity, ["effective"] = hm.EffectiveAvatarOpacity, ["sortBackToFront"] = SmplxAvatar.SortBackToFront,
+            ["alphaMode"] = SmplxAvatar.AlphaMode.ToString().ToLowerInvariant(),
             ["skeletonsOverBodies"] = SmplxAvatar.SkeletonsOverBodies, ["avatars"] = avatars
+        });
+    }
+
+    [CliCommand("hm_neckaxis", "Follower neck axis (VIEWER_SPEC 3.7, layer 'neck'): a white axis from her neck along her head's up direction, shown only while her neck is off-axis by more than --threshold deg (angle between her head's and her chest's up axes, SMPL-X rotations, smoothed), fading in and growing to --length m by --full deg. Reports the shown frame's angle / alpha / length, the frames over the threshold and example upright / ramp / full frames; the leader never has one.")]
+    public static string NeckAxis(
+        [CliArg("threshold", "deg: no axis up to this off-axis angle (default 15)")] float threshold = float.NaN,
+        [CliArg("full", "deg: full alpha and length from this angle (default 35)")] float full = float.NaN,
+        [CliArg("length", "m: length at full (default 0.5)")] float length = float.NaN,
+        [CliArg("reference", "neutral (head on chest relative to her calibrated neutral carriage, default) | torso (relative to the chest's rest axis) | vertical (head up vs world up)")] string reference = null)
+    {
+        Require();
+        DanceLayers layers = DanceLayers.Ensure();
+        NeckAxisOverlay axis = layers != null ? layers.NeckAxis : null;
+        if (axis == null) throw new InvalidOperationException("no neck axis: load a capture first (hm_load)");
+        if (!float.IsNaN(threshold)) axis.ThresholdDeg = Mathf.Clamp(threshold, 0f, 89f);
+        if (!float.IsNaN(full)) axis.FullDeg = Mathf.Clamp(full, axis.ThresholdDeg + 1f, 90f);
+        if (!float.IsNaN(length)) axis.MaxLength = Mathf.Clamp(length, 0.05f, 2f);
+        if (!string.IsNullOrEmpty(reference))
+        {
+            axis.Mode = reference.ToLowerInvariant() switch
+            {
+                "neutral" or "calibrated" => NeckAxisOverlay.Reference.Neutral,
+                "torso" or "chest" => NeckAxisOverlay.Reference.Torso,
+                "vertical" or "world" => NeckAxisOverlay.Reference.Vertical,
+                _ => throw new ArgumentException($"--reference neutral|torso|vertical, not '{reference}'")
+            };
+        }
+
+        axis.MarkDirty();
+        if (layers.Traces != null) layers.Traces.SetHeadGate(axis.Gate()); // the head trail follows the axis
+        layers.Refresh();
+        return JsonConvert.SerializeObject(axis.State());
+    }
+
+    [CliCommand("hm_skeleton", "Skeleton colours (VIEWER_SPEC 3.3 / 3.8): --mode rhythm (default view: a pulse travels from the stance feet up through the body on every beat, strength by beat type and by how well each body part's jerk accent lands on the beat) | physics (limbs coloured by the ESTIMATED axial load: tension orange, neutral, compression blue; turns the physics layer on). Reports the mode, beat / accent / load sources, per-joint pulse, stance, load and colour of the shown frame and each dancer's accent hit rate / mean lag per body part.")]
+    public static string Skeleton([CliArg("mode", "rhythm | physics (omit: report only)")] string mode = null)
+    {
+        HeadMovement hm = Require();
+        if (!string.IsNullOrEmpty(mode))
+        {
+            hm.SetSkeletonMode(mode.ToLowerInvariant() switch
+            {
+                "rhythm" or "beat" or "default" => SkeletonStyle.Mode.Rhythm,
+                "physics" or "load" => SkeletonStyle.Mode.Physics,
+                _ => throw new ArgumentException($"--mode rhythm|physics, not '{mode}'")
+            });
+        }
+
+        if (hm.Skeletons == null) throw new InvalidOperationException("no skeleton colours: load a capture first (hm_load)");
+        Dictionary<string, object> s = hm.Skeletons.State(hm.CurrentFrame);
+        s["layerPhysics"] = hm.LayerVisible("physics");
+        return JsonConvert.SerializeObject(s);
+    }
+
+    [CliCommand("hm_floor", "Floor (VIEWER_SPEC 3.1 / 3.5 / 3.6): --footprints off | recent (default: each print fades out ~1.2 s after its touchdown) | all; --plane sets the floor plane alpha (0.6 default, 0.25 passthrough). Reports the grid (teal 1 m crosses), the footprints, the leader's live floor axis and the floor-craft record (plants / moves / rotations / pivots shown now).")]
+    public static string Floor(
+        [CliArg("footprints", "off | recent | all")] string footprints = null,
+        [CliArg("plane", "floor plane alpha 0..1")] float plane = float.NaN)
+    {
+        HeadMovement hm = Require();
+        if (!string.IsNullOrEmpty(footprints))
+        {
+            hm.Footprints.SetMode(footprints.ToLowerInvariant() switch
+            {
+                "off" or "none" => FloorPatterns.FootprintMode.Off,
+                "recent" => FloorPatterns.FootprintMode.Recent,
+                "all" => FloorPatterns.FootprintMode.All,
+                _ => throw new ArgumentException($"--footprints off|recent|all, not '{footprints}'")
+            });
+        }
+
+        if (!float.IsNaN(plane)) hm.Grid.SetPlaneAlpha(plane);
+        DanceLayers layers = DanceLayers.Ensure();
+        if (layers != null)
+        {
+            if (layers.FloorCraft != null) layers.FloorCraft.MarkDirty();
+            layers.Refresh();
+        }
+
+        Dictionary<string, object> st = hm.State();
+        return JsonConvert.SerializeObject(new Dictionary<string, object>
+        {
+            ["grid"] = st.GetValueOrDefault("grid"), ["footprints"] = st.GetValueOrDefault("footprints"),
+            ["floorCraft"] = st.GetValueOrDefault("floorCraft"), ["frame"] = hm.CurrentFrame
         });
     }
 
