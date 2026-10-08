@@ -1,0 +1,11 @@
+# hm-guard allow list: paths (glob, "*" also matches "/") that are exempt from the SIZE and the
+# NEW-IMAGE / NEW-3D-MODEL rules only.  Keys, gated models, weights, audio/video, terms and secret
+# patterns can never be allow-listed.
+#
+# Add an entry only with the repository owner's approval, in a commit of its own, with a reason:
+#   <glob>   # why this file is safe to commit
+#
+# The list is read from the last commit (HEAD), so an entry applies from the commit AFTER the one
+# that adds it.
+
+Assets/Resources/Meshes/*   # third-party VR controller models and textures (large, tracked since the original project)

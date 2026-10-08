@@ -1,0 +1,10 @@
+#!/bin/sh
+# hm-guard pre-commit hook (unity profile, PUBLIC repository): rejects keys, gated body models,
+# weights, audio/video, new images and 3D models, oversize files, secret patterns, absolute user
+# paths and entries of the private terms list in what is staged.
+# Install: Tools/install_hooks.sh   Rules and bypass: docs/GIT.md
+HM_GUARD_PROFILE=unity
+here=$(cd "$(dirname "$0")" && pwd)
+. "$here/hm-guard.sh"
+hm_guard pre-commit --staged
+exit $?

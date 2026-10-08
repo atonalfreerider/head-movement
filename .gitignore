@@ -69,3 +69,54 @@ Assets/StreamingAssets/*
 # CLI playtest screenshots (Tools/playtest.ps1)
 /Assets/Screenshots/
 /Assets/Screenshots.meta
+# Film renders (Head Movement / Record ..., hm_film): private - they contain the copyrighted song and the narration voice
+/Recordings/
+
+# ---- private-data safety net ---------------------------------------------------------------------
+# This repository is PUBLIC. Tools/githooks/guard.py rejects the same classes at commit time
+# (docs/GIT.md). Ignore rules never touch files that are already tracked.
+
+# audio and video: recordings, songs, narration, footage
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.m4v
+*.m4a
+*.wav
+*.mp3
+*.flac
+*.aac
+*.ogg
+
+# model weights, arrays, pickles, point clouds, splats (gated body models, dancer captures)
+*.ply
+*.splat
+*.npz
+*.npy
+*.pkl
+*.pickle
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+
+# secrets and the private forbidden-terms list
+*-key.txt
+*.key
+*.pem
+*.jks
+*.keystore
+.env
+.env.*
+!.env.example
+.hm-forbidden-terms*
+
+# per-machine defaults for the playtest scripts (may name capture folders): never committed
+/Tools/local.ps1
+
+# python caches from Tools/githooks/guard.py
+__pycache__/
+*.pyc
