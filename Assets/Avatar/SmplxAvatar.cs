@@ -20,7 +20,7 @@ using UnityEngine.Rendering;
 /// dancer's own glowing skeleton (stencil), so the body does not tint its skeleton (VIEWER_SPEC 3.3). HideFeet clips the
 /// bare feet for the shoes (a per-vertex rest height
 /// above the ankle, TEXCOORD1.x, so the cut rides on the skinned mesh). Attachments (shoes) share the materials'
-/// opacity, visibility and lifetime via Attach(). Interface: dancecap/work/larissa_kadu/review/realism/INTERFACES.md
+/// opacity, visibility and lifetime via Attach(). Interface: the realism INTERFACES.md notes in the workspace repo (dancecap/work/<capture>/review/realism/).
 /// </summary>
 public class SmplxAvatar : MonoBehaviour
 {
@@ -54,6 +54,32 @@ public class SmplxAvatar : MonoBehaviour
 
     static bool skeletonsOverBodies;
 
+    /// <summary>how the colour pass turns the displayed Opacity into a blend alpha (VIEWER_SPEC 3.2):
+    /// Pixel (default) per fragment from its shaded luminance (DisplayTransparency.AlphaLut: every part of a body shows
+    /// 1 - Opacity on screen), Body one alpha per body (its median), Raw alpha = Opacity (before 2026-10-07)</summary>
+    public enum AlphaModes
+    {
+        Pixel,
+        Body,
+        Raw
+    }
+
+    static AlphaModes alphaMode = AlphaModes.Pixel;
+
+    public static AlphaModes AlphaMode
+    {
+        get => alphaMode;
+        set
+        {
+            if (alphaMode == value) return;
+            alphaMode = value;
+            foreach (SmplxAvatar a in Live)
+            {
+                if (a != null) a.ApplyAppearance();
+            }
+        }
+    }
+
     /// <summary>false (default, the reviewed look): each translucent body blends over its own skeleton (the skeleton
     /// keeps ~65 % of its colour, tinted by the body). true: the body skips its own skeleton's pixels, so the skeleton
     /// shows in its raw colour (crisp red lead; the follow's skeleton reads mid-grey between beats). Switch with
@@ -83,6 +109,7 @@ public class SmplxAvatar : MonoBehaviour
     SkinnedMeshRenderer skinned;
     Material depthMaterial, colourMaterial;
     Texture2D albedo;
+    DisplayTransparency display; // displayed opacity -> this body's blend alpha (VIEWER_SPEC 3.2)
     int frame = -1;
     float opacity = 1f;
     bool layerVisible = true, feetHidden;
@@ -268,7 +295,8 @@ public class SmplxAvatar : MonoBehaviour
         float lightInfluence = 0.35f; // the photo albedo carries the studio lighting
         if (skin.Textured && !string.IsNullOrEmpty(albedoPath) && System.IO.File.Exists(albedoPath))
         {
-            albedo = LoadTexture(albedoPath, $"{role} albedo");
+            albedo = LoadTexture(albedoPath, $"{role} albedo",
+                readable => display = DisplayTransparency.FromTexture(readable, skin.RestVertices, skin.Triangles, skin.Uv, Color.white));
             tex = albedo;
         }
         else
@@ -282,6 +310,8 @@ public class SmplxAvatar : MonoBehaviour
             tint = role == Role.Lead ? new Color(0.74f, 0.64f, 0.58f) : new Color(0.60f, 0.66f, 0.76f);
             lightInfluence = 0.9f;
         }
+
+        display ??= DisplayTransparency.FromColour(tint);
 
         (depthMaterial, colourMaterial) = NewMaterials($"{role} avatar{(albedo != null ? " (textured)" : "")}", tex, tint, lightInfluence);
         skinned.sharedMaterials = new[] { depthMaterial, colourMaterial }; // one submesh, drawn once per material
@@ -370,12 +400,27 @@ public class SmplxAvatar : MonoBehaviour
         {
             if (m == null) continue;
             m.SetFloat("_Opacity", opacity);
+            // what the colour pass blends with for the displayed opacity: per pixel (LUT), this body's alpha, or raw
+            m.SetFloat("_BlendAlpha", alphaMode == AlphaModes.Raw ? -1f : BlendAlpha);
+            m.SetFloat("_PerPixelAlpha", alphaMode == AlphaModes.Pixel ? 1f : 0f);
+            m.SetTexture("_AlphaLut", DisplayTransparency.AlphaLut());
             m.SetFloat("_HideFeet", hideFeet ? 1f : 0f);
             m.SetFloat("_FootCut", footCut);
             m.SetFloat("_SkelRef", SkeletonStencilBit);
             m.SetFloat("_SkelComp", overSkeleton ? (float)CompareFunction.NotEqual : (float)CompareFunction.Always);
         }
     }
+
+    /// <summary>VIEWER_SPEC 3.2: Opacity is the opacity the SCREEN shows (0.35 = 65 % transparent); the colour pass blends
+    /// with this body's alpha for it (DisplayTransparency: a bright body needs a lower alpha than a dark one)</summary>
+    public float BlendAlpha => display != null ? display.BlendAlpha(opacity) : opacity;
+
+    /// <summary>predicted displayed transparency at the current opacity: 1 - Opacity per pixel; the body model's median
+    /// in Body mode; at alpha = Opacity in Raw mode</summary>
+    public float PredictedTransparency => alphaMode == AlphaModes.Pixel || display == null ? 1f - opacity
+        : display.TransparencyAt(alphaMode == AlphaModes.Raw ? opacity : BlendAlpha);
+
+    public DisplayTransparency Display => display;
 
     /// <summary>the colour pass skips this dancer's own skeleton pixels now (translucent and SkeletonsOverBodies)</summary>
     public bool SkeletonOverBody => skeletonsOverBodies && opacity < SkeletonOverBodyBelowOpacity;
@@ -532,7 +577,7 @@ public class SmplxAvatar : MonoBehaviour
 
     /// <summary>PNG -> sRGB texture with mipmaps, block-compressed on the device (DXT/BC on desktop, ETC2/ASTC on
     /// Quest) and released from CPU memory</summary>
-    public static Texture2D LoadTexture(string path, string name)
+    public static Texture2D LoadTexture(string path, string name, Action<Texture2D> whileReadable = null)
     {
         Texture2D tex = new(2, 2, TextureFormat.RGBA32, true, false) { name = name };
         if (!tex.LoadImage(System.IO.File.ReadAllBytes(path), false))
@@ -540,6 +585,8 @@ public class SmplxAvatar : MonoBehaviour
             Destroy(tex);
             throw new System.IO.InvalidDataException($"{path}: not a PNG/JPEG");
         }
+
+        whileReadable?.Invoke(tex); // before compression: the pixels are still readable
 
         tex.wrapMode = TextureWrapMode.Clamp;
         tex.filterMode = FilterMode.Trilinear;
@@ -590,16 +637,67 @@ public class SmplxAvatar : MonoBehaviour
     public void SetFrame(int frameNumber)
     {
         frameNumber = Mathf.Clamp(frameNumber, 0, motion.FrameCount - 1);
-        if (frameNumber == frame) return;
+        if (frameNumber == frame && blendTo < 0) return;
         frame = frameNumber;
+        blendTo = -1;
         PoseBones(frame);
     }
 
+    // sub-frame pose (Assets/Film slow motion): between blendFrom and blendTo at blendK; CurrentFrame is the nearer frame
+    int blendFrom = -1, blendTo = -1;
+    float blendK;
+
+    /// <summary>true while the bones show a pose between two motion frames (SetFrameBlend)</summary>
+    public bool Blended => blendTo >= 0;
+
+    /// <summary>pose between two motion frames (film slow motion, HeadMovement.DriveExternally): root translation lerp,
+    /// joint rotations slerp; CurrentFrame becomes the nearer frame (hair, face, shoes key on it) and PoseBones of that
+    /// frame restores this blended pose (the hair's pre-roll ends on "the shown pose")</summary>
+    public void SetFrameBlend(int f0, int f1, float k)
+    {
+        f0 = Mathf.Clamp(f0, 0, motion.FrameCount - 1);
+        f1 = Mathf.Clamp(f1, 0, motion.FrameCount - 1);
+        if (f1 == f0 || !(k > 1e-4f))
+        {
+            SetFrame(f0);
+            return;
+        }
+
+        if (k >= 1f - 1e-4f)
+        {
+            SetFrame(f1);
+            return;
+        }
+
+        if (blendTo == f1 && blendFrom == f0 && Mathf.Abs(blendK - k) < 1e-6f) return;
+        frame = k < 0.5f ? f0 : f1;
+        blendFrom = f0;
+        blendTo = f1;
+        blendK = k;
+        PoseBlend();
+    }
+
+    void PoseBlend()
+    {
+        int o0 = blendFrom * SmplxData.Joints, o1 = blendTo * SmplxData.Joints;
+        bones[0].localPosition = restRoot + Vector3.Lerp(motion.Transl[blendFrom], motion.Transl[blendTo], blendK);
+        for (int j = 0; j < SmplxData.Joints; j++)
+        {
+            bones[j].localRotation = Quaternion.Slerp(motion.Rotations[o0 + j], motion.Rotations[o1 + j], blendK);
+        }
+    }
+
     /// <summary>pose the bones at a frame without changing CurrentFrame (hair pre-roll / catch-up reads earlier frames
-    /// and then poses the shown frame again)</summary>
+    /// and then poses the shown frame again; while a sub-frame blend is shown, posing CurrentFrame restores the blend)</summary>
     public void PoseBones(int frameNumber)
     {
         frameNumber = Mathf.Clamp(frameNumber, 0, motion.FrameCount - 1);
+        if (blendTo >= 0 && frameNumber == frame)
+        {
+            PoseBlend();
+            return;
+        }
+
         int o = frameNumber * SmplxData.Joints;
         bones[0].localPosition = restRoot + motion.Transl[frameNumber];
         for (int j = 0; j < SmplxData.Joints; j++)

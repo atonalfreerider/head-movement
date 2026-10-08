@@ -5,7 +5,10 @@
 //
 // Translucency (VIEWER_SPEC 3.2: avatars ~0.3 opacity, depth-correct): the renderer carries TWO materials of this
 // shader. Material 1 keeps only the "SRPDefaultUnlit" depth prepass (queue 2990: ZWrite, no colour); material 2
-// keeps only the "UniversalForward" colour pass (queue 3000: ZTest LEqual, alpha blend, no ZWrite). Every
+// keeps only the "UniversalForward" colour pass (queue 3000: ZTest LEqual, alpha blend, no ZWrite). The blend alpha is
+// per pixel from the shaded colour's luminance and the displayed opacity _Opacity (_PerPixelAlpha, the default for the
+// dancers: every part of a body shows the same transparency on screen - sRGB display, VIEWER_SPEC 3.2;
+// Avatar/DisplayTransparency.cs AlphaLut), else _BlendAlpha (one alpha per body), or _Opacity when that is negative. Every
 // translucent prepass runs before any translucent colour pass, so each pixel gets the colour of its front-most
 // translucent surface once, blended over the opaque skeleton inside - no back faces, no sorting pops between the
 // dancers. Material.SetShaderPassEnabled switches the passes per material (pass names = their LightMode tags).
@@ -26,7 +29,13 @@ Shader "HeadMovement/AvatarLit"
         _LightInfluence ("Light Influence", Range(0, 1)) = 0.35
         _Wrap ("Wrap Lighting", Range(0, 1)) = 0.5
         _Exposure ("Exposure", Float) = 1.0
-        _Opacity ("Opacity", Range(0, 1)) = 1.0
+        _Opacity ("Opacity (displayed)", Range(0, 1)) = 1.0
+        // the alpha the colour pass blends with (SmplxAvatar: this body's alpha for the displayed _Opacity,
+        // DisplayTransparency); negative = use _Opacity directly (other users of the shader)
+        _BlendAlpha ("Blend alpha (< 0: _Opacity)", Float) = -1.0
+        // per pixel (SmplxAvatar.AlphaMode Pixel, the default): alpha from the shaded colour's luminance and _Opacity
+        [NoScaleOffset] _AlphaLut ("Alpha LUT (DisplayTransparency)", 2D) = "white" {}
+        _PerPixelAlpha ("Per-pixel displayed alpha", Float) = 0
         [Toggle] _UseVertexColor ("Multiply Vertex Colour", Float) = 0
         _Specular ("Specular (Blinn sheen, 0 = off)", Range(0, 1)) = 0
         _SpecPower ("Specular Power", Range(2, 256)) = 32
@@ -43,6 +52,8 @@ Shader "HeadMovement/AvatarLit"
 
     TEXTURE2D(_BaseMap);
     SAMPLER(sampler_BaseMap);
+    TEXTURE2D(_AlphaLut);
+    SAMPLER(sampler_AlphaLut);
 
     CBUFFER_START(UnityPerMaterial)
         float4 _BaseMap_ST;
@@ -51,6 +62,8 @@ Shader "HeadMovement/AvatarLit"
         half _Wrap;
         half _Exposure;
         half _Opacity;
+        half _BlendAlpha;
+        half _PerPixelAlpha;
         half _UseVertexColor;
         half _Specular;
         half _SpecPower;
@@ -207,7 +220,17 @@ Shader "HeadMovement/AvatarLit"
                 }
 
                 // _BaseColor.a: legacy per-material fade (the dance-graph miniature couple); 1 for the full-size dancers
-                return half4(colour, _Opacity * _BaseColor.a);
+                half alpha = _BlendAlpha >= 0.0h ? _BlendAlpha : _Opacity;
+                if (_PerPixelAlpha > 0.5h)
+                {
+                    // DisplayTransparency.AlphaLut: 64 x 33, x = ln(Y) over [ln 1e-4, ln 2], y = displayed opacity
+                    float y = max(dot((float3)colour, float3(0.2126, 0.7152, 0.0722)), 1e-4);
+                    float u = saturate((log(y) + 9.2103404) / (0.6931472 + 9.2103404));
+                    float2 lutUv = float2((u * 63.0 + 0.5) / 64.0, (saturate((float)_Opacity) * 32.0 + 0.5) / 33.0);
+                    alpha = SAMPLE_TEXTURE2D_LOD(_AlphaLut, sampler_AlphaLut, lutUv, 0).r;
+                }
+
+                return half4(colour, alpha * _BaseColor.a);
             }
             ENDHLSL
         }
