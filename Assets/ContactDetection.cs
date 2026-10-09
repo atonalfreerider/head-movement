@@ -18,6 +18,31 @@ public class ContactDetection : MonoBehaviour
     
     bool isInitialized = false;
 
+    // layer "contacts" (hand-contact lights): the glowing orbs where the partners' hands meet. The layer flag (DanceLayers,
+    // hm_layer contacts) hides them everywhere; the view state's fade (DanceTour / FilmDirector, 0..1 with the full-size dance)
+    // shrinks and then hides them, so the dance graph states show the graph alone (user 2026-10-08: the yellow hand-contact
+    // light showed in the state machine graph)
+    const float OrbSize = 0.01f;
+    bool orbsOn = true;
+    float orbFade = 1f;
+    int lastFrame = -1;
+    float spanAlpha = 1f;
+
+    public bool OrbsOn => orbsOn;
+    public float OrbFade => orbFade;
+
+    /// <summary>roleHidden (RoleHiddenSpans): a dancer of the pair is hidden in a span, so the light where their hands meet is too</summary>
+    public bool SpanHidden => spanAlpha <= RoleHiddenSpans.HiddenBelow;
+
+    /// <summary>roleHidden fade 0..1 (the lower of the two dancers' alphas): the orbs grow in with it, like the view state's fade</summary>
+    public float SpanAlpha => spanAlpha;
+
+    public bool OrbsAllowed => orbsOn && orbFade * spanAlpha > 0.01f && !SpanHidden;
+
+    /// <summary>orbs drawn now (0..2, for hm_state)</summary>
+    public int OrbsShown => !isInitialized ? 0 : (leadLefHandOrb != null && leadLefHandOrb.gameObject.activeSelf ? 1 : 0) +
+                                                 (leadRightHandOrb != null && leadRightHandOrb.gameObject.activeSelf ? 1 : 0);
+
     public void Init(Dancer lead, Dancer follow, Material bloomMat)
     {
         Lead = lead;
@@ -36,7 +61,63 @@ public class ContactDetection : MonoBehaviour
         leadRightHandOrb.transform.localScale = Vector3.one * .01f;
         leadRightHandOrb.gameObject.SetActive(true);
 
+        lastFrame = -1;
+        ScaleOrbs();
+        if (!OrbsAllowed)
+        {
+            leadLefHandOrb.gameObject.SetActive(false);
+            leadRightHandOrb.gameObject.SetActive(false);
+        }
+
         isInitialized = true;
+    }
+
+    /// <summary>the layer flag: hidden orbs stay hidden until it is switched on again</summary>
+    public void SetOrbsVisible(bool on)
+    {
+        if (orbsOn == on) return;
+        orbsOn = on;
+        RefreshOrbs();
+    }
+
+    /// <summary>roleHidden: the orbs follow the lower of the two dancers' alphas (hidden while either is inside a hidden span)</summary>
+    public void SetSpanAlpha(float alpha)
+    {
+        alpha = Mathf.Clamp01(float.IsFinite(alpha) ? alpha : 1f);
+        if (Mathf.Abs(alpha - spanAlpha) < 1e-4f) return;
+        spanAlpha = alpha;
+        RefreshOrbs();
+    }
+
+    /// <summary>the view state's fade: the orbs shrink with the full-size dance and are hidden at 0</summary>
+    public void SetOrbFade(float k)
+    {
+        k = Mathf.Clamp01(float.IsFinite(k) ? k : 1f);
+        if (Mathf.Approximately(k, orbFade)) return;
+        orbFade = k;
+        RefreshOrbs();
+    }
+
+    void RefreshOrbs()
+    {
+        if (!isInitialized || leadLefHandOrb == null || leadRightHandOrb == null) return;
+        ScaleOrbs();
+        if (!OrbsAllowed)
+        {
+            leadLefHandOrb.gameObject.SetActive(false);
+            leadRightHandOrb.gameObject.SetActive(false);
+        }
+        else if (lastFrame >= 0)
+        {
+            DetectContact(lastFrame); // paused on a frame: show them again now
+        }
+    }
+
+    void ScaleOrbs()
+    {
+        float s = OrbSize * Mathf.Max(orbFade * spanAlpha, 0.0001f);
+        leadLefHandOrb.transform.localScale = Vector3.one * s;
+        leadRightHandOrb.transform.localScale = Vector3.one * s;
     }
 
     public void Reset()
@@ -64,6 +145,7 @@ public class ContactDetection : MonoBehaviour
     /// <param name="frameNumber"></param>
     public void DetectContact(int frameNumber)
     {
+        lastFrame = frameNumber;
         // for the lead, there are 4 lines of contact with the follow
 
         // lead left arm   
@@ -247,6 +329,12 @@ public class ContactDetection : MonoBehaviour
         Vector3 rightOrbToHand = leadRightHandOrb.transform.position - leadRightHandPos;
         if (leadRightD > .12f && Vector3.Dot(rightElbowToHand, rightOrbToHand) < 0)
         {
+            leadRightHandOrb.gameObject.SetActive(false);
+        }
+
+        if (!OrbsAllowed)
+        {
+            leadLefHandOrb.gameObject.SetActive(false);
             leadRightHandOrb.gameObject.SetActive(false);
         }
     }

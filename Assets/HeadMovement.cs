@@ -146,6 +146,137 @@ public class HeadMovement : MonoBehaviour
     public FloorPatterns Footprints => floorPatterns;
     public FloorGrid Grid => floorGrid;
 
+    /// <summary>floorYawDeg: degrees the floor visuals (grid crosses + plane) are turned counter-clockwise as seen from above
+    /// (capture.json floor_yaw_deg; the dancers, camera, room and dancer-tied overlays are never turned)</summary>
+    public float FloorYawDeg => floorGrid != null ? floorGrid.YawDeg : 0f;
+
+    public void SetFloorYaw(float deg)
+    {
+        if (floorGrid != null) floorGrid.SetYaw(deg);
+    }
+
+    #region ROLE HIDDEN (capture.json role_hidden, hm_hide)
+
+    // roleHidden (user 2026-10-08, mute the lead for the first 4 seconds, then fade him in): per-role hidden spans with a fade, in CAPTURE
+    // seconds (from the first frame = the HUD clock; audio clock = capture clock + timeline.First).
+    // A pure visibility switch: poses, clock, camera follow and the other dancer are untouched. A role's alpha (0 inside a span, fading
+    // to 1 around it) scales its avatar (on top of the avatar opacity: hair, shoes), skeleton lines and every overlay derived from its pose.
+    readonly RoleHiddenSpans roleHidden = new();
+    readonly float[] roleAlpha = { 1f, 1f };
+
+    /// <summary>the hidden spans of the loaded capture (capture.json role_hidden; hm_hide edits them for a session)</summary>
+    public RoleHiddenSpans RoleHidden => roleHidden;
+
+    /// <summary>this role's visibility at the time shown now: 0 = hidden, 1 = fully there (the fade between)</summary>
+    public float RoleAlpha(Role role) => roleAlpha[(int)role & 1];
+
+    /// <summary>the lower of the two dancers' alphas: what an overlay derived from both (the couple's axis, the hand-contact lights) gets</summary>
+    public float CoupleAlpha => Mathf.Min(roleAlpha[0], roleAlpha[1]);
+
+    /// <summary>this role is fully hidden (alpha ~ 0) at the time shown now (the song clock, or the director's during directed playback)</summary>
+    public bool IsRoleHidden(Role role) => roleAlpha[(int)role & 1] <= RoleHiddenSpans.HiddenBelow;
+
+    /// <summary>bumped whenever a role's alpha or the spans change (overlays that cache their result re-evaluate)</summary>
+    public int RoleHiddenVersion { get; private set; }
+
+    /// <summary>the audio-clock time shown now (NaN before the audio is loaded)</summary>
+    public double ShownAudioTime => ExternallyDriven ? externalAudioTime : audioLoaded && audioSource != null ? audioSource.time : double.NaN;
+
+    /// <summary>capture seconds (from the first frame; the HUD's clock) of an audio-clock time</summary>
+    public double CaptureTimeOf(double audioTime) => timeline != null ? audioTime - timeline.First : audioTime;
+
+    // within 2e-4 counts as unchanged, except that the end values 0 and 1 are always reached exactly
+    static bool SameAlpha(float now, float shown) => Mathf.Abs(now - shown) < 2e-4f && (now > 0f || shown <= 0f) && (now < 1f || shown >= 1f);
+
+    /// <summary>evaluate the spans at this audio time; applies and returns true when a role's alpha changed</summary>
+    bool SyncRoleHidden(double audioTime)
+    {
+        if (timeline == null || double.IsNaN(audioTime)) return false;
+        float lead = roleHidden.AlphaAtAudio(Role.Lead, audioTime), follow = roleHidden.AlphaAtAudio(Role.Follow, audioTime);
+        if (SameAlpha(lead, roleAlpha[0]) && SameAlpha(follow, roleAlpha[1])) return false;
+        roleAlpha[0] = lead;
+        roleAlpha[1] = follow;
+        ApplyRoleHidden();
+        return true;
+    }
+
+    /// <summary>push the alphas to everything that draws a role (the overlays read RoleAlpha themselves, see DanceLayers.SyncRoleHidden)</summary>
+    void ApplyRoleHidden()
+    {
+        float lead = roleAlpha[0], follow = roleAlpha[1];
+        RoleHiddenVersion++;
+        if (Lead != null) Lead.RoleAlpha = lead;
+        if (Follow != null) Follow.RoleAlpha = follow;
+        ApplyAvatarOpacity(); // the avatars' opacity x the role's alpha (hair and shoes follow)
+        if (contactDetection != null) contactDetection.SetSpanAlpha(Mathf.Min(lead, follow));
+        if (partnerConnection != null) partnerConnection.SpanAlpha = Mathf.Min(lead, follow);
+        if (floorPatterns != null) floorPatterns.RoleHiddenChanged();
+        if (timingOverlay != null) timingOverlay.RoleHiddenChanged();
+        if (physicsOverlay != null) physicsOverlay.SetRoleAlpha(lead, follow);
+    }
+
+    /// <summary>hm_hide: replace a role's spans (capture seconds) and re-pose the shown time</summary>
+    public void SetRoleHiddenSpans(Role role, IEnumerable<RoleHiddenSpans.Span> spans)
+    {
+        roleHidden.Set(role, spans);
+        ResyncRoleHidden();
+    }
+
+    /// <summary>re-evaluate the spans at the time shown now (always re-applies: the spans themselves may have changed) and re-pose</summary>
+    public void ResyncRoleHidden()
+    {
+        if (timeline == null) return;
+        double t = ShownAudioTime;
+        if (!double.IsNaN(t))
+        {
+            roleAlpha[0] = roleHidden.AlphaAtAudio(Role.Lead, t);
+            roleAlpha[1] = roleHidden.AlphaAtAudio(Role.Follow, t);
+        }
+
+        ApplyRoleHidden();
+        RefreshSkeletons();
+    }
+
+    /// <summary>hm_state roleHidden: spans, alphas now, what is actually drawn</summary>
+    public Dictionary<string, object> RoleHiddenState()
+    {
+        double audio = ShownAudioTime;
+        bool timed = timeline != null && !double.IsNaN(audio);
+        return new Dictionary<string, object>
+        {
+            ["clock"] = "capture seconds from the first frame (the HUD clock); audio = capture + origin",
+            ["origin"] = roleHidden.Origin,
+            ["spans"] = roleHidden.State(false), ["spansAudio"] = roleHidden.State(true),
+            ["hiddenNow"] = new Dictionary<string, bool> { ["lead"] = IsRoleHidden(Role.Lead), ["follow"] = IsRoleHidden(Role.Follow) },
+            ["alphaNow"] = new Dictionary<string, float> { ["lead"] = roleAlpha[0], ["follow"] = roleAlpha[1] },
+            ["captureTime"] = timed ? (object)CaptureTimeOf(audio) : null,
+            ["referenceTime"] = timed ? (object)(audio - timeline.TimeToAudio) : null,
+            ["version"] = RoleHiddenVersion,
+            ["skeletonLinesDrawn"] = new Dictionary<string, int>
+            {
+                ["lead"] = Lead != null ? Lead.LinesDrawn : 0, ["follow"] = Follow != null ? Follow.LinesDrawn : 0
+            },
+            ["skeletonAlpha"] = new Dictionary<string, float>
+            {
+                ["lead"] = Lead != null ? Lead.RoleAlpha : 1f, ["follow"] = Follow != null ? Follow.RoleAlpha : 1f
+            },
+            ["avatarDrawn"] = new Dictionary<string, bool>
+            {
+                ["lead"] = avatars.TryGetValue(Role.Lead, out SmplxAvatar la) && la != null && la.Visible,
+                ["follow"] = avatars.TryGetValue(Role.Follow, out SmplxAvatar fa) && fa != null && fa.Visible
+            },
+            ["avatarOpacity"] = new Dictionary<string, float>
+            {
+                ["lead"] = avatars.TryGetValue(Role.Lead, out SmplxAvatar lo) && lo != null ? lo.Opacity : 0f,
+                ["follow"] = avatars.TryGetValue(Role.Follow, out SmplxAvatar fo) && fo != null ? fo.Opacity : 0f
+            },
+            ["contactLightsHidden"] = contactDetection != null && contactDetection.SpanHidden,
+            ["contactLightsAlpha"] = contactDetection != null ? contactDetection.SpanAlpha : 1f
+        };
+    }
+
+    #endregion
+
     /// <summary>skeleton colouring now: physics (estimated load) while the physics layer / view is on, else rhythm</summary>
     public SkeletonStyle.Mode SkeletonMode => showPhysics ? SkeletonStyle.Mode.Physics : SkeletonStyle.Mode.Rhythm;
 
@@ -175,7 +306,7 @@ public class HeadMovement : MonoBehaviour
         float o = EffectiveAvatarOpacity;
         foreach (SmplxAvatar avatar in avatars.Values)
         {
-            if (avatar != null) avatar.Opacity = o;
+            if (avatar != null) avatar.Opacity = o * roleAlpha[(int)avatar.DancerRole & 1];
         }
     }
 
@@ -231,6 +362,9 @@ public class HeadMovement : MonoBehaviour
         timeline = manifest.BuildTimeline(FrameCount);
         FrameCount = timeline.Count;
         AudioOffset = timeline.First;
+        roleHidden.Reset(manifest, (float)timeline.First); // capture.json role_hidden (capture seconds); the song starts at the first frame
+        roleAlpha[0] = roleHidden.AlphaAtAudio(Role.Lead, timeline.First);
+        roleAlpha[1] = roleHidden.AlphaAtAudio(Role.Follow, timeline.First);
 
         string timingPath = manifest.OptionalPath(manifest.timing);
         timingData = null;
@@ -292,6 +426,7 @@ public class HeadMovement : MonoBehaviour
 
         skeletonLegend.Show = showPhysics && skeletonStyle != null;
         skeletonLegend.Source = skeletonStyle?.LoadSource ?? "";
+        ApplyRoleHidden(); // the new dancers / avatars start at their alpha at the first frame (the spans were reloaded above)
 
         StartCoroutine(LoadAudio());
     }
@@ -314,7 +449,7 @@ public class HeadMovement : MonoBehaviour
             }
         }
 
-        floorGrid.Build(x0 > x1 ? new Rect(-1, -1, 2, 2) : Rect.MinMaxRect(x0, z0, x1, z1));
+        floorGrid.Build(x0 > x1 ? new Rect(-1, -1, 2, 2) : Rect.MinMaxRect(x0, z0, x1, z1), manifest != null ? manifest.floor_yaw_deg : 0f);
         floorGrid.SetVisible(showGrid);
     }
 
@@ -353,7 +488,7 @@ public class HeadMovement : MonoBehaviour
                 if (manifest.smplx_albedo != null && !avatar.Textured) Warn($"{role}: albedo declared but not applied");
                 DanceOrigin.Place(avatar.transform);
                 if (avatar.FrameCount < FrameCount) Warn($"{role} avatar has {avatar.FrameCount} frames < {FrameCount}");
-                avatar.Opacity = EffectiveAvatarOpacity;
+                avatar.Opacity = EffectiveAvatarOpacity * roleAlpha[(int)role & 1];
                 avatar.SetVisible(showAvatars);
                 avatars[role] = avatar;
             }
@@ -586,6 +721,7 @@ public class HeadMovement : MonoBehaviour
     void SetToFrameNumber()
     {
         int frameNumber = GetFrameNumber();
+        if (SyncRoleHidden(audioSource.time)) currentFrame = -1; // a hidden span began or ended: re-pose the shown frame
         if (currentFrame == frameNumber) return;
         currentFrame = frameNumber;
 
@@ -756,9 +892,9 @@ public class HeadMovement : MonoBehaviour
             case "avatars": SetAvatarsVisible(visible); break;
             case "timing": SetTimingVisible(visible); break;
             case "physics": SetPhysicsVisible(visible); break;
-            case "counterbalance" or "traces" or "neck" or "graph" or "axis" or "floorcraft" or "balance" or "moves": DanceLayers.SetLayer(layer.ToLowerInvariant(), visible); break;
+            case "counterbalance" or "traces" or "neck" or "graph" or "axis" or "floorcraft" or "balance" or "moves" or "contacts": DanceLayers.SetLayer(layer.ToLowerInvariant(), visible); break;
             default:
-                throw new ArgumentException($"unknown layer '{layer}' (floor|grid|tension|splats|room|cameras|hud|avatars|timing|physics|counterbalance|traces|neck|graph|axis|floorcraft|balance|moves)");
+                throw new ArgumentException($"unknown layer '{layer}' (floor|grid|tension|splats|room|cameras|hud|avatars|timing|physics|counterbalance|traces|neck|graph|axis|floorcraft|balance|moves|contacts)");
         }
 
         return visible;
@@ -812,6 +948,7 @@ public class HeadMovement : MonoBehaviour
             ["externalTime"] = ExternallyDriven ? (object)externalAudioTime : null
         };
         DanceLayers.AppendState(state);
+        state["roleHidden"] = RoleHiddenState();
         state["avatarOpacity"] = avatarOpacity;
         state["avatarOpacityEffective"] = EffectiveAvatarOpacity;
         if (cameraControl != null) state["camera"] = cameraControl.State();
@@ -872,7 +1009,8 @@ public class HeadMovement : MonoBehaviour
         {
             ["visible"] = floorGrid.Visible, ["crosses"] = floorGrid.CrossCount, ["planeAlpha"] = floorGrid.PlaneAlpha,
             ["extent"] = new[] { floorGrid.Extent.xMin, floorGrid.Extent.yMin, floorGrid.Extent.xMax, floorGrid.Extent.yMax },
-            ["crossArmM"] = floorGrid.CrossArm, ["crossWidthM"] = floorGrid.CrossWidth, ["crossBrightness"] = floorGrid.Brightness
+            ["crossArmM"] = floorGrid.CrossArm, ["crossWidthM"] = floorGrid.CrossWidth, ["crossBrightness"] = floorGrid.Brightness,
+            ["yawDeg"] = floorGrid.YawDeg, ["axisU"] = new[] { floorGrid.AxisU.x, floorGrid.AxisU.y }
         };
         state["skeletonMode"] = SkeletonMode.ToString().ToLowerInvariant();
         state["skeletonLegend"] = skeletonLegend.Show;
@@ -944,6 +1082,24 @@ public class HeadMovement : MonoBehaviour
         if (audioLoaded && timeline != null) Seek(t);
     }
 
+    readonly Dictionary<Role, Color[]> blendedColours = new();
+
+    /// <summary>the skeleton's joint colours (the beat pulse in rhythm mode, the estimated load in physics mode) between two
+    /// pose frames: they are keyed by frame, so at 0.25x the lines would otherwise step in brightness at a quarter of the
+    /// capture's frame rate while the bodies glide (the 7.5 Hz judder the review measured in the slow feet close-ups)</summary>
+    Color[] BlendedColours(Role role, int f0, int f1, float k, int nearest)
+    {
+        if (skeletonStyle == null) return null;
+        if (f0 == f1 || !(k > 1e-4f) || k >= 1f - 1e-4f) return skeletonStyle.Colours(role, nearest);
+        Color[] a = skeletonStyle.Colours(role, f0);
+        if (a == null) return null;
+        if (!blendedColours.TryGetValue(role, out Color[] mix) || mix.Length != a.Length) blendedColours[role] = mix = new Color[a.Length];
+        Array.Copy(a, mix, a.Length);
+        Color[] b = skeletonStyle.Colours(role, f1); // the same cached array, now holding frame f1
+        for (int j = 0; j < mix.Length && j < b.Length; j++) mix[j] = Color.Lerp(mix[j], b[j], k);
+        return mix;
+    }
+
     /// <summary>pose the externally driven time: joints lerp / bone rotations slerp between the two neighbouring frames;
     /// everything keyed by frame (colours, contacts, footprints, overlays, hair) uses the nearer frame</summary>
     void ShowExternalTime()
@@ -980,18 +1136,19 @@ public class HeadMovement : MonoBehaviour
         }
 
         int nearest = k < 0.5f ? f0 : f1;
-        if (f0 == externalF0 && f1 == externalF1 && Mathf.Abs(k - externalK) < 1e-6f && currentFrame == nearest) return;
+        bool hiddenChanged = SyncRoleHidden(t); // the exact (sub-frame) time decides: the cut is at the span's end to the film frame
+        if (!hiddenChanged && f0 == externalF0 && f1 == externalF1 && Mathf.Abs(k - externalK) < 1e-6f && currentFrame == nearest) return;
         externalF0 = f0;
         externalF1 = f1;
         externalK = k;
         currentFrame = nearest;
 
         float beat = beatIntensityByFrame != null ? beatIntensityByFrame.GetValueOrDefault(nearest, 0) : 0f;
-        Lead.SetPoseToFrameBlend(f0, f1, k, beat, skeletonStyle?.Colours(Role.Lead, nearest));
-        Follow.SetPoseToFrameBlend(f0, f1, k, beat, skeletonStyle?.Colours(Role.Follow, nearest));
+        Lead.SetPoseToFrameBlend(f0, f1, k, beat, BlendedColours(Role.Lead, f0, f1, k, nearest));
+        Follow.SetPoseToFrameBlend(f0, f1, k, beat, BlendedColours(Role.Follow, f0, f1, k, nearest));
         contactDetection.DetectContact(nearest);
         floorPatterns.SetFrame(nearest);
-        partnerConnection.SetFrame(nearest);
+        partnerConnection.SetFrameBlend(f0, f1, k);
         splatCloud.SetFrame(nearest, Fps);
         foreach (SmplxAvatar avatar in avatars.Values) avatar.SetFrameBlend(f0, f1, k);
         float frameTime = timeline.AudioTimeOf(nearest);

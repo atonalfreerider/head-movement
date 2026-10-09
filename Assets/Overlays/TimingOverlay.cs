@@ -167,6 +167,16 @@ public class TimingOverlay : MonoBehaviour
         }
     }
 
+    /// <summary>roleHidden (RoleHiddenSpans) changed: re-evaluate the rings at the last time</summary>
+    public void RoleHiddenChanged()
+    {
+        float t = lastAudioTime;
+        lastAudioTime = float.NaN;
+        if (!float.IsNaN(t)) SetTime(t);
+    }
+
+    static RoleHiddenSpans HiddenSpans => HeadMovement.Instance != null ? HeadMovement.Instance.RoleHidden : null;
+
     /// <summary>update ring visibility/brightness for an audio time</summary>
     public void SetTime(float audioTime)
     {
@@ -175,10 +185,14 @@ public class TimingOverlay : MonoBehaviour
         if (!visible) return;
 
         int shown = 0;
+        RoleHiddenSpans hiddenSpans = HiddenSpans;
         foreach ((Role role, TimingData.Touchdown td, Vector3 pos, LineRenderer ring) in rings)
         {
             float age = audioTime - (float)timeline.ToAudio(td.T);
             bool on = age >= -0.02f && age <= RecentSeconds;
+            // roleHidden: a touchdown that landed inside the role's hidden span is never shown
+            float landedAlpha = on && hiddenSpans != null ? hiddenSpans.AlphaAtAudio(role, timeline.ToAudio(td.T)) : 1f;
+            if (landedAlpha <= RoleHiddenSpans.HiddenBelow) on = false;
             ring.gameObject.SetActive(on);
             if (!on) continue;
             shown++;
@@ -186,7 +200,7 @@ public class TimingOverlay : MonoBehaviour
             float baseR = role == Role.Lead ? 0.11f : 0.085f;
             float r = baseR * (age < 0.15f ? Mathf.Lerp(0.5f, 1.15f, Mathf.Clamp01(age / 0.15f)) : Mathf.Lerp(1.15f, 1f, k));
             OverlayDraw.Ring(ring, pos, r);
-            Color c = OverlayDraw.AsyncColor(td.AsyncMs) * Mathf.Lerp(2.2f, 0.25f, k);
+            Color c = OverlayDraw.AsyncColor(td.AsyncMs) * (Mathf.Lerp(2.2f, 0.25f, k) * landedAlpha);
             c.a = 1;
             OverlayDraw.SetColor(ring, c);
         }
@@ -265,6 +279,7 @@ public class TimingOverlay : MonoBehaviour
             {
                 double a = timeline.ToAudio(td.T);
                 if (Math.Abs(a - audioTime) > TickerSeconds) continue;
+                if (HiddenSpans != null && HiddenSpans.HiddenAtAudio(role, a)) continue; // roleHidden
                 float x = PxOf(a);
                 OverlayDraw.Rect(new Rect(x - 4, y - 4, 8, 8), OverlayDraw.AsyncColor(td.AsyncMs));
             }

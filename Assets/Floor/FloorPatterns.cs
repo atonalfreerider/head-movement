@@ -273,11 +273,24 @@ public class FloorPatterns : MonoBehaviour
         go.SetActive(Mode == FootprintMode.All);
     }
 
+    /// <summary>roleHidden (RoleHiddenSpans) changed: re-evaluate the shown frame</summary>
+    public void RoleHiddenChanged()
+    {
+        int f = lastFrame;
+        lastFrame = -2;
+        if (f >= 0) SetFrame(f);
+    }
+
     public void SetFrame(int frame)
     {
         if (frame == lastFrame) return;
         lastFrame = frame;
 
+        // roleHidden: a step of a hidden role is never shown when it landed inside the role's hidden span (the print would float
+        // with nothing to attach to, and it was derived from a pose that is not shown)
+        RoleHiddenSpans hiddenSpans = HeadMovement.Instance != null ? HeadMovement.Instance.RoleHidden : null;
+        CaptureTimeline timeline = HeadMovement.Instance != null ? HeadMovement.Instance.Timeline : null;
+        if (hiddenSpans != null && !hiddenSpans.Any) hiddenSpans = null;
         int shown = 0;
         foreach ((Role role, (Mesh mesh, Color[] colors, List<int> indices)) in meshes)
         {
@@ -294,6 +307,12 @@ public class FloorPatterns : MonoBehaviour
                     FootprintMode.Recent => age < 0 || age > RecentSeconds ? 0f : 1f - Mathf.SmoothStep(0f, 1f, age / RecentSeconds),
                     _ => 0f
                 };
+                if (hiddenSpans != null && brightness > 0f)
+                {
+                    double landed = timeline != null && s.Frame < timeline.Count ? timeline.AudioTimeOf(s.Frame) : s.AudioTime;
+                    brightness *= hiddenSpans.AlphaAtAudio(role, landed); // roleHidden: the role's alpha when the foot landed
+                }
+
                 bool on = brightness > 0.01f;
                 if (on) shown++;
                 Color c = TimingColor(s.ErrorMs) * brightness;

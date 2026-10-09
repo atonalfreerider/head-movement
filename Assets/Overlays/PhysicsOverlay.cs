@@ -84,8 +84,27 @@ public class PhysicsOverlay : MonoBehaviour
     }
 
     readonly Dictionary<Role, Visual> visuals = new();
+    /// <summary>support polygon line width (m) at full alpha (a LineRenderer's widthMultiplier is its width in metres)</summary>
+    public const float SupportWidth = 0.006f;
+
+    bool leadHidden, followHidden;
+    float leadAlpha = 1f, followAlpha = 1f;
 
     public int Frame => frame;
+
+    /// <summary>roleHidden (RoleHiddenSpans): a role's COM / XCoM / support markers grow in with its alpha 0..1 (they are solid
+    /// primitives: a size fade) and are not drawn at ~0</summary>
+    public void SetRoleAlpha(float lead, float follow)
+    {
+        lead = Mathf.Clamp01(float.IsFinite(lead) ? lead : 1f);
+        follow = Mathf.Clamp01(float.IsFinite(follow) ? follow : 1f);
+        if (Mathf.Abs(leadAlpha - lead) < 1e-4f && Mathf.Abs(followAlpha - follow) < 1e-4f) return;
+        leadAlpha = lead;
+        followAlpha = follow;
+        leadHidden = lead <= RoleHiddenSpans.HiddenBelow;
+        followHidden = follow <= RoleHiddenSpans.HiddenBelow;
+        if (visible && frame >= 0) Apply(frame, blendOther, blendK);
+    }
 
     public void Init(PhysicsData physics, CaptureTimeline frames, Material glow)
     {
@@ -99,7 +118,7 @@ public class PhysicsOverlay : MonoBehaviour
             {
                 Com = OverlayDraw.Marker(transform, $"{role} COM", PrimitiveType.Sphere, 0.07f, c),
                 Xcom = OverlayDraw.Marker(transform, $"{role} XCoM", PrimitiveType.Cylinder, 1f, Color.green),
-                Support = OverlayDraw.Line(transform, $"{role} support polygon", glow, 0.006f, 2, true)
+                Support = OverlayDraw.Line(transform, $"{role} support polygon", glow, SupportWidth, 2, true)
             };
             v.Xcom.transform.localScale = new Vector3(0.06f, 0.002f, 0.06f);
             OverlayDraw.SetColor(v.Support, c * 0.9f);
@@ -188,6 +207,14 @@ public class PhysicsOverlay : MonoBehaviour
         blendK = k;
         foreach ((Role role, Visual v) in visuals)
         {
+            if (role == Role.Lead ? leadHidden : followHidden)
+            {
+                v.Com.SetActive(false);
+                v.Xcom.SetActive(false);
+                v.Support.gameObject.SetActive(false);
+                continue;
+            }
+
             PhysicsData.DancerTrack d = data.Dancers[role];
             // physics.py writes non-finite values (flight, gaps, repaired frames) as null -> NaN here. Every visual
             // of a dancer is shown only when its inputs are finite this frame: nothing keeps a stale position and
@@ -209,6 +236,10 @@ public class PhysicsOverlay : MonoBehaviour
             v.Xcom.SetActive(xcomOk);
             v.Support.gameObject.SetActive(supportOk);
 
+            float fade = role == Role.Lead ? leadAlpha : followAlpha; // roleHidden fade-in: the solid markers grow in
+            v.Com.transform.localScale = Vector3.one * (0.07f * Mathf.Max(fade, 0.001f));
+            v.Xcom.transform.localScale = new Vector3(0.06f * Mathf.Max(fade, 0.001f), 0.002f, 0.06f * Mathf.Max(fade, 0.001f));
+            v.Support.widthMultiplier = SupportWidth * fade; // a FRACTION of the line's own width: the fade must never become the width (1 = a 1 m wide band)
             if (comOk) v.Com.transform.position = com;
 
             if (xcomOk)
@@ -299,7 +330,12 @@ public class PhysicsOverlay : MonoBehaviour
         {
             ["com"] = new[] { com.x, com.y, com.z }, ["fNetN"] = d.FNet[frame].magnitude,
             ["balanceMargin"] = d.BalanceMargin[frame], ["comMarkerActive"] = visuals[role].Com.activeInHierarchy,
-            ["activeVisuals"] = ActiveVisuals(role), ["axisLines"] = AxisLines(role)
+            ["activeVisuals"] = ActiveVisuals(role), ["axisLines"] = AxisLines(role),
+            // sizes of what is drawn (m): the playtest asserts they stay foot-sized or smaller (a 1 m wide support line once
+            // painted discs under the dancers when the roleHidden fade replaced its width)
+            ["supportWidthM"] = visuals[role].Support.widthMultiplier,
+            ["comDiameterM"] = visuals[role].Com.transform.localScale.x,
+            ["xcomDiameterM"] = visuals[role].Xcom.transform.localScale.x
         };
     }
 }

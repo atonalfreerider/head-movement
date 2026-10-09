@@ -30,6 +30,12 @@ public class PartnerConnection : MonoBehaviour
     public float MaxWidth = 0.035f;
     public bool DrawLines;
 
+    /// <summary>roleHidden (RoleHiddenSpans): a dancer of the pair is hidden in a span - no connector line is drawn (the lines are a debug
+    /// option; the Active / Signal analysis that colours the physics skeleton is unchanged)</summary>
+    public float SpanAlpha = 1f;
+
+    bool SpanHidden => SpanAlpha <= RoleHiddenSpans.HiddenBelow;
+
     static readonly Color TensionColor = new(1f, 0.35f, 0.05f);
     static readonly Color CompressionColor = new(0.1f, 0.55f, 1f);
     static readonly Color NeutralColor = new(0.35f, 0.35f, 0.4f);
@@ -153,7 +159,7 @@ public class PartnerConnection : MonoBehaviour
         {
             if (c.Line == null || c.Active == null || frame >= c.Active.Length) continue;
 
-            bool active = c.Active[frame];
+            bool active = c.Active[frame] && !SpanHidden;
             c.Line.enabled = active;
             if (!active) continue;
 
@@ -169,7 +175,25 @@ public class PartnerConnection : MonoBehaviour
             c.Line.SetPosition(1, Vector3.Lerp(c.LeadPoint(frame), c.FollowContact[frame], 0.5f));
             c.Line.SetPosition(2, follow.CenterOfMass(frame));
             c.Line.startColor = c.Line.endColor = color;
-            c.Line.widthMultiplier = width;
+            c.Line.widthMultiplier = width * SpanAlpha;
+        }
+    }
+
+    /// <summary>the film director's sub-frame time: the lines glide between frame f0 and f1 (k = 0..1); active / colour / width
+    /// are the nearer frame's</summary>
+    public void SetFrameBlend(int f0, int f1, float k)
+    {
+        int nearest = k < 0.5f ? f0 : f1;
+        SetFrame(nearest);
+        if (f0 == f1 || !(k > 1e-4f) || k >= 1f - 1e-4f) return;
+        foreach (Connection c in Connections)
+        {
+            if (c.Line == null || c.Active == null || f0 >= c.Active.Length || f1 >= c.Active.Length) continue;
+            if (SpanHidden || !c.Active[nearest] || c.Line.positionCount != 3) continue;
+            c.Line.SetPosition(0, Vector3.Lerp(c.LeadAnchor(f0), c.LeadAnchor(f1), k));
+            c.Line.SetPosition(1, Vector3.Lerp(Vector3.Lerp(c.LeadPoint(f0), c.FollowContact[f0], 0.5f),
+                Vector3.Lerp(c.LeadPoint(f1), c.FollowContact[f1], 0.5f), k));
+            c.Line.SetPosition(2, Vector3.Lerp(follow.CenterOfMass(f0), follow.CenterOfMass(f1), k));
         }
     }
 

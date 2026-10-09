@@ -47,11 +47,18 @@ public static class DanceCliCommands
         }
     }
 
-    [CliCommand("hm_graph", "Dance graph (VIEWER_SPEC 3.10/3.11): path (miniature couple + chase camera) | fingerprint (dwell heat map) | static (graph in the room) | off")]
-    public static string Graph([CliArg("mode", "path|fingerprint|static|off")] string mode)
+    [CliCommand("hm_graph", "Dance graph (VIEWER_SPEC 3.10/3.11): path (miniature couple + chase camera) | fingerprint (dwell heat map) | static (graph in the room) | off; --focus sets graphFocusDistanceScale (0.5 default: the camera of the graph states, and of the film's graph_wide shot, sits that fraction of its earlier distance from the graph)")]
+    public static string Graph([CliArg("mode", "path|fingerprint|static|off")] string mode = null,
+        [CliArg("focus", "graph focus distance scale 0.2..2 (0.5 = 50 % closer)")] float focus = float.NaN)
     {
         DanceLayers layers = Require();
         DanceTour tour = layers.Tour;
+        if (!float.IsNaN(focus)) tour.GraphFocusDistanceScale = System.Math.Clamp(focus, 0.2f, 2f);
+        if (string.IsNullOrEmpty(mode) && !float.IsNaN(focus))
+        {
+            return JsonConvert.SerializeObject(new Dictionary<string, object> { ["graph"] = layers.Graph?.State(), ["tour"] = tour.State() });
+        }
+
         switch ((mode ?? "").ToLowerInvariant())
         {
             case "path":

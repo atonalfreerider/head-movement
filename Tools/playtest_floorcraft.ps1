@@ -147,6 +147,9 @@ foreach ($cap in $Capture) {
     $n = $script:frameTimes.Count
     $t0 = $script:frameTimes[0]; $tEnd = $script:frameTimes[$n - 1]
     $take = if ($capJson.provenance) { $capJson.provenance.take } else { $null }
+    # a capture that mutes the leader at its start (capture.json role_hidden; hm_hide) is checked unmuted here: these checks look at his T axis and
+    # floor record from the first frame on (Tools/playtest_dance_layers.ps1 tests the muted spans)
+    if ($null -ne $capJson.role_hidden) { Invoke-Unity hm_hide --role lead --clear true | Out-Null }
     function Hud([double]$t) { return $t - $t0 }
 
     Write-Host "== floor crosses (VIEWER_SPEC 3.1: smaller and fainter)"
@@ -154,6 +157,21 @@ foreach ($cap in $Capture) {
     Assert ($s.layers.grid -and $s.grid.crosses -gt 20) "floor crosses on: $($s.grid.crosses) at 1 m"
     Assert ([double]$s.grid.crossArmM -le 0.045 -and [double]$s.grid.crossWidthM -le 0.006 -and [double]$s.grid.crossBrightness -le 0.5) `
         ("crosses small and faint: {0:0} cm across, {1:0.0} mm lines, brightness {2:0.00}" -f (200 * [double]$s.grid.crossArmM), (1000 * [double]$s.grid.crossWidthM), [double]$s.grid.crossBrightness)
+    Write-Host "== floor yaw (floorYawDeg: crosses + plane turned counter-clockwise as seen from above; user 2026-10-08)"
+    $capYaw = if ($null -ne $capJson.floor_yaw_deg) { [double]$capJson.floor_yaw_deg } else { 0.0 }
+    Assert ([math]::Abs([double]$s.grid.yawDeg - $capYaw) -lt 0.001) ("floor yaw = the capture's floor_yaw_deg ($capYaw deg)")
+    $axisOrigin0 = ConvertTo-Json $s.floorCraft.axisOrigin -Compress
+    $pelvis0 = ConvertTo-Json $s.avatars.lead.pelvis -Compress
+    Invoke-Unity hm_floor --yaw 30 | Out-Null
+    $g30 = (Get-State).grid
+    # on the floor map (x east, z north, as in the overhead view) a counter-clockwise turn from above takes the x axis towards +z: (cos, +sin)
+    $ccwOk = [math]::Abs([double]$g30.axisU[0] - [math]::Cos(30 * [math]::PI / 180)) -lt 0.001 -and [math]::Abs([double]$g30.axisU[1] - [math]::Sin(30 * [math]::PI / 180)) -lt 0.001
+    Assert ($ccwOk -and [math]::Abs([double]$g30.yawDeg - 30) -lt 0.001) "hm_floor --yaw 30: the lattice's first axis points at (cos 30, +sin 30) on the map = counter-clockwise from above"
+    Assert ([int]$g30.crosses -ge 30 -and [double]$g30.crossArmM -le 0.045) "rotated lattice rebuilt over the dance area: $($g30.crosses) crosses, arms $([double]$g30.crossArmM * 200) cm across"
+    $s30 = Get-State
+    Assert ((ConvertTo-Json $s30.floorCraft.axisOrigin -Compress) -eq $axisOrigin0 -and (ConvertTo-Json $s30.avatars.lead.pelvis -Compress) -eq $pelvis0) "only the floor visuals turned: the leader's floor axis and the dancers did not move"
+    Invoke-Unity hm_floor --yaw $capYaw | Out-Null
+    Assert ([math]::Abs([double](Get-State).grid.yawDeg - $capYaw) -lt 0.001) "floor yaw back to the capture's value"
     if ($cap -eq $Capture[0]) {
         # the same camera and frame (mid-take) as the review's "before" stills
         Invoke-Unity hm_orbit --azimuth 60 --elevation 25 --radius 3.4 | Out-Null

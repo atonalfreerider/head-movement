@@ -58,6 +58,29 @@ public class BalanceAxisOverlay : MonoBehaviour
     }
 
     public readonly Shown LeadAxis = new(), FollowAxis = new(), CoupleAxis = new();
+    bool leadHidden, followHidden;
+    float leadAlpha = 1f, followAlpha = 1f;
+
+    /// <summary>roleHidden (RoleHiddenSpans): a role's axis fades with the role's alpha 0..1 and is not drawn at ~0; the couple's (derived
+    /// from both) follows the lower of the two</summary>
+    public void SetRoleAlpha(float lead, float follow)
+    {
+        lead = Mathf.Clamp01(float.IsFinite(lead) ? lead : 1f);
+        follow = Mathf.Clamp01(float.IsFinite(follow) ? follow : 1f);
+        if (Mathf.Abs(leadAlpha - lead) < 1e-4f && Mathf.Abs(followAlpha - follow) < 1e-4f) return;
+        leadAlpha = lead;
+        followAlpha = follow;
+        leadHidden = lead <= RoleHiddenSpans.HiddenBelow;
+        followHidden = follow <= RoleHiddenSpans.HiddenBelow;
+        dirty = true;
+    }
+
+    static void Fade(Shown s, float alpha)
+    {
+        if (alpha >= 0.9999f) return;
+        s.Colour = new Color(s.Colour.r * alpha, s.Colour.g * alpha, s.Colour.b * alpha, s.Colour.a);
+    }
+
     public bool Loaded => data != null;
     public bool Visible => visible;
     public FloorCraftData.BalanceData Data => data;
@@ -123,6 +146,12 @@ public class BalanceAxisOverlay : MonoBehaviour
         Measure(LeadAxis, data.Lead, lead, i, frame, false, j, w);
         Measure(FollowAxis, data.Follow, follow, i, frame, false, j, w);
         Measure(CoupleAxis, data.Couple, null, i, frame, true, j, w);
+        if (leadHidden) LeadAxis.On = false;
+        if (followHidden) FollowAxis.On = false;
+        if (leadHidden || followHidden) CoupleAxis.On = false;
+        Fade(LeadAxis, leadAlpha);
+        Fade(FollowAxis, followAlpha);
+        Fade(CoupleAxis, Mathf.Min(leadAlpha, followAlpha));
         glow.Begin();
         glow.Viewer = eye;
         if (visible)
@@ -221,7 +250,7 @@ public class BalanceAxisOverlay : MonoBehaviour
 
     public Dictionary<string, object> State() => new()
     {
-        ["loaded"] = Loaded, ["visible"] = visible, ["vertices"] = glow != null && visible ? glow.VertexCount : 0,
+        ["loaded"] = Loaded, ["visible"] = visible, ["roleHidden"] = new[] { leadHidden, followHidden }, ["vertices"] = glow != null && visible ? glow.VertexCount : 0,
         ["minBrightness"] = MinBrightness, ["frames"] = data?.T?.Length ?? 0,
         ["params"] = data == null ? null : new[] { data.GoodOffsetM, data.BadOffsetM, data.GoodTiltDeg, data.BadTiltDeg },
         ["lead"] = StateOf(LeadAxis), ["follow"] = StateOf(FollowAxis), ["couple"] = StateOf(CoupleAxis),

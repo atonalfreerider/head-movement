@@ -235,6 +235,24 @@ public class CounterbalanceOverlay : MonoBehaviour
     int lastFrame = -1;
     Vector3 lastViewer;
     bool dirty = true;
+    bool roleHidden;
+    float roleAlpha = 1f;
+
+    /// <summary>roleHidden (RoleHiddenSpans): the lower of the couple's alphas 0..1 - the couple's COM dot and axis (derived from both) and the
+    /// pivot call-outs are scaled by it and not drawn at ~0; the active interval is still tracked (her traces use it)</summary>
+    public void SetRoleAlpha(float alpha)
+    {
+        alpha = Mathf.Clamp01(float.IsFinite(alpha) ? alpha : 1f);
+        bool hidden = alpha <= RoleHiddenSpans.HiddenBelow;
+        if (Mathf.Abs(alpha - roleAlpha) < 1e-4f && hidden == roleHidden) return;
+        roleAlpha = alpha;
+        roleHidden = hidden;
+        if (glow != null) glow.SetOpacity(alpha);
+        dirty = true;
+    }
+
+    public bool RoleHidden => roleHidden;
+    public float RoleAlpha => roleAlpha;
 
     // state for hm_state / playtests
     public bool Loaded => data != null;
@@ -342,6 +360,16 @@ public class CounterbalanceOverlay : MonoBehaviour
         AxisOnLeaderSuppressed = false;
         VerticalAxisDrawn = false;
         AxisToLeaderM = float.NaN;
+        if (roleHidden)
+        {
+            PivotsShown = 0;
+            CurrentPivot = -1;
+            CurrentSweptDeg = 0;
+            foreach (TextMesh l in labels) l.gameObject.SetActive(false);
+            glow.End();
+            return;
+        }
+
         if (active != null)
         {
             Vector3 com = CounterbalanceData.Sample(active.ComT, active.Com, time);
@@ -453,7 +481,7 @@ public class CounterbalanceOverlay : MonoBehaviour
             label.gameObject.SetActive(true);
             label.transform.position = new Vector3(anchor.x, 0.05f, anchor.z);
             DanceText.Billboard(label.transform);
-            DanceText.SetAlpha(label, a);
+            DanceText.SetAlpha(label, a * roleAlpha);
         }
     }
 
@@ -514,7 +542,7 @@ public class CounterbalanceOverlay : MonoBehaviour
             ["loaded"] = Loaded, ["visible"] = visible, ["intervals"] = IntervalCount,
             ["pivots"] = allPivots.Count, ["active"] = ActiveInterval >= 0, ["axisVisible"] = AxisVisible,
             // axisVisible = the couple's COM floor marker (dot + ring) is up; axisRendered = a VERTICAL axis was drawn
-            ["axisRendered"] = glow != null && glow.Visible && glow.VertexCount > 0 && ActiveInterval >= 0 && VerticalAxisDrawn,
+            ["roleHidden"] = roleHidden, ["axisRendered"] = glow != null && glow.Visible && glow.VertexCount > 0 && ActiveInterval >= 0 && VerticalAxisDrawn,
             ["drawCoupleAxis"] = DrawCoupleAxis, ["comMarkerRendered"] = glow != null && glow.Visible && glow.VertexCount > 0 && ActiveInterval >= 0,
             ["axisOnLeaderSuppressed"] = AxisOnLeaderSuppressed, ["axisToLeaderM"] = AxisToLeaderM,
             ["leaderClearanceM"] = LeaderClearance,

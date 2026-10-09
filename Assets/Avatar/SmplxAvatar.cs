@@ -112,7 +112,7 @@ public class SmplxAvatar : MonoBehaviour
     DisplayTransparency display; // displayed opacity -> this body's blend alpha (VIEWER_SPEC 3.2)
     int frame = -1;
     float opacity = 1f;
-    bool layerVisible = true, feetHidden;
+    bool layerVisible = true, feetHidden, spanHidden;
     float footCut = -0.01f;
     readonly List<Attachment> attachments = new();
 
@@ -147,6 +147,19 @@ public class SmplxAvatar : MonoBehaviour
     public bool Visible => skinned != null && skinned.enabled;
     /// <summary>the avatars layer flag (hm_layer avatars), independent of opacity</summary>
     public bool LayerVisible => layerVisible;
+
+    /// <summary>roleHidden (RoleHiddenSpans): this body is not drawn inside a hidden span - hair and shoes follow (Visible is false) -
+    /// whatever the avatars layer and the view state's opacity say; the pose keeps being set</summary>
+    public bool SpanHidden
+    {
+        get => spanHidden;
+        set
+        {
+            if (spanHidden == value) return;
+            spanHidden = value;
+            ApplyAppearance();
+        }
+    }
     public Bounds WorldBounds => skinned.bounds;
     public bool Textured => albedo != null;
     public int TextureSize => albedo != null ? albedo.width : 0;
@@ -368,7 +381,7 @@ public class SmplxAvatar : MonoBehaviour
     void ApplyAppearance()
     {
         if (skinned == null) return;
-        bool draw = layerVisible && opacity > 0.005f;
+        bool draw = layerVisible && !spanHidden && opacity > 0.005f;
         // translucent bodies cast no shadow (a solid shadow under a ghost reads wrong, and it saves a pass on Quest)
         ShadowCastingMode shadows = opacity > 0.99f ? ShadowCastingMode.On : ShadowCastingMode.Off;
         SetPair(depthMaterial, colourMaterial, feetHidden);

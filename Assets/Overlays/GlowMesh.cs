@@ -60,6 +60,17 @@ public class GlowMesh : MonoBehaviour
 
     public void SetVisible(bool on) => meshRenderer.enabled = on;
 
+    /// <summary>whole-mesh opacity 0..1 (the shader multiplies rgb by _Tint.a): a fade of everything this mesh draws, e.g. a role's
+    /// roleHidden fade-in (RoleHiddenSpans). 1 = as drawn.</summary>
+    public void SetOpacity(float k)
+    {
+        if (meshRenderer == null) return;
+        Material m = meshRenderer.sharedMaterial;
+        if (m == null) return;
+        k = Mathf.Clamp01(float.IsFinite(k) ? k : 1f);
+        if (Mathf.Abs(m.GetColor("_Tint").a - k) > 1e-4f) m.SetColor("_Tint", new Color(1f, 1f, 1f, k));
+    }
+
     public bool Visible => meshRenderer != null && meshRenderer.enabled;
 
     public void Begin()

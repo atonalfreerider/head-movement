@@ -717,6 +717,18 @@ public class DanceGraphLayer : MonoBehaviour
         target = Vector3.Lerp(p, ahead, 0.6f) + Vector3.up * 0.1f;
     }
 
+    /// <summary>centre of the bounds of the nodes the dance path visits (the film's graph focus keeps the whole path in frame
+    /// around it); false when the capture has no path</summary>
+    public bool PathBounds(out Vector3 centre)
+    {
+        centre = Vector3.zero;
+        if (!HasPath) return false;
+        Bounds b = new(data.Nodes[steps[0].NodeIndex].World, Vector3.zero);
+        foreach (DanceGraphData.Step s in steps) b.Encapsulate(data.Nodes[s.NodeIndex].World);
+        centre = b.center;
+        return true;
+    }
+
     /// <summary>graph centre and radius for the fingerprint orbit</summary>
     public void Bounds(out Vector3 centre, out float radius)
     {

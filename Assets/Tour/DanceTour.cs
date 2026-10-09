@@ -75,6 +75,11 @@ public class DanceTour : MonoBehaviour, ICameraDirector
     string skippedNote;
     readonly List<Dictionary<string, object>> history = new(); // running tour: state switches (dance time, measure)
     public float OverheadFov = 24f;
+    /// <summary>graphFocusDistanceScale (user 2026-10-08: "we need to be 50% closer to the state machine graph when it is the point
+    /// of focus"): the camera of the graph states (the Dance graph chase and the Fingerprint orbit) sits this fraction of its
+    /// earlier distance from what it looks at, along the same view direction. The film's graph_wide shot reads the same value
+    /// (FilmCamera.GraphWide) unless its direction carries its own graph_focus_distance_scale. hm_graph --focus sets it.</summary>
+    public float GraphFocusDistanceScale = 0.5f;
 
     public View Current => current;
     public bool Running => running;
@@ -193,6 +198,7 @@ public class DanceTour : MonoBehaviour, ICameraDirector
         avatarAlphaNow = -1;
         opacityBase = -1;
         skeletonNow = 1;
+        if (hm != null) hm.GetComponent<ContactDetection>()?.SetOrbFade(1f); // the hand-contact lights are back
         if (Layers != null)
         {
             Layers.CounterbalanceOverride = null;
@@ -389,6 +395,8 @@ public class DanceTour : MonoBehaviour, ICameraDirector
         skeletonNow = k;
         WidthOf(hm.LeadDancer, k);
         WidthOf(hm.FollowDancer, k);
+        // the hand-contact lights belong to the full-size dance too: they shrink away with it (hidden in the graph states)
+        hm.GetComponent<ContactDetection>()?.SetOrbFade(k);
         // ContactDetection's contact lines belong to the full-size dance too (root objects, so not found above)
         if (contactLines == null)
         {
@@ -590,6 +598,7 @@ public class DanceTour : MonoBehaviour, ICameraDirector
             case View.DanceGraph when layers.Graph != null && layers.Graph.HasPath:
             {
                 layers.Graph.Chase(t, out Vector3 e, out Vector3 l);
+                e = l + (e - l) * GraphFocusDistanceScale; // closer to the graph along the same view direction
                 HeadMovement hm = Hm;
                 bool exact = !chaseValid || f.Cut || hm == null || !hm.IsPlaying || dt <= 0f;
                 if (exact)
@@ -612,10 +621,10 @@ public class DanceTour : MonoBehaviour, ICameraDirector
             case View.Fingerprint when layers.Graph != null:
             {
                 layers.Graph.Bounds(out Vector3 centre, out float radius);
-                eye = Spherical(centre, -60f + since * 6f, 22f, Mathf.Clamp(radius * 1.3f, 3f, 9.5f));
-                // pan so the graph sits left of the side panel
+                eye = Spherical(centre, -60f + since * 6f, 22f, Mathf.Clamp(radius * 1.3f, 3f, 9.5f) * GraphFocusDistanceScale);
+                // pan so the graph sits left of the side panel (the same share of the frame at the closer distance)
                 Vector3 right = Vector3.Cross(Vector3.up, centre - eye).normalized;
-                Vector3 pan = right * (radius * 0.28f);
+                Vector3 pan = right * (radius * 0.28f * GraphFocusDistanceScale);
                 look = centre + pan;
                 eye += pan;
                 return;
@@ -653,7 +662,8 @@ public class DanceTour : MonoBehaviour, ICameraDirector
             ["cameraDriven"] = current != View.None && Hm != null && Hm.OrbitCamera != null &&
                                 Hm.OrbitCamera.enabled && Hm.OrbitCamera.Mode == CameraControl.Owner.Director,
             ["avatarOpacityBase"] = opacityBase, ["note"] = skippedNote,
-            ["cameraTourAvailable"] = HasCameraVideos(), ["history"] = history.ToList()
+            ["cameraTourAvailable"] = HasCameraVideos(), ["history"] = history.ToList(),
+            ["graphFocusDistanceScale"] = GraphFocusDistanceScale
         };
     }
 

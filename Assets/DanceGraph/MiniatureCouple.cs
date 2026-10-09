@@ -31,6 +31,7 @@ public class MiniatureCouple : MonoBehaviour
     Transform avatarRoot;
     readonly List<SmplxAvatar> avatars = new();
     readonly List<Material> avatarMaterials = new();
+    readonly List<Role> avatarMaterialRoles = new(); // the role each avatarMaterials entry belongs to (the roleHidden fade is per role)
     int frames;
     CaptureManifest manifest;
     bool avatarsTried;
@@ -77,6 +78,7 @@ public class MiniatureCouple : MonoBehaviour
                     c.a = AvatarAlpha;
                     m.SetColor("_BaseColor", c);
                     avatarMaterials.Add(m);
+                    avatarMaterialRoles.Add(role);
                 }
             }
             catch (System.Exception e)
@@ -125,8 +127,11 @@ public class MiniatureCouple : MonoBehaviour
         Vector3 c = travel[frame];
         skeleton.Begin();
         skeleton.Viewer = DanceText.ViewCamera != null ? DanceText.ViewCamera.transform.position : (Vector3?)null;
-        Bonesfor(lead, frame, c, basePoint, LeadColor * fade);
-        Bonesfor(follow, frame, c, basePoint, FollowColor * fade);
+        // roleHidden (RoleHiddenSpans): a hidden dancer is missing from the miniature couple too
+        HeadMovement hm = HeadMovement.Instance;
+        float leadAlpha = hm != null ? hm.RoleAlpha(Role.Lead) : 1f, followAlpha = hm != null ? hm.RoleAlpha(Role.Follow) : 1f;
+        if (leadAlpha > RoleHiddenSpans.HiddenBelow) Bonesfor(lead, frame, c, basePoint, LeadColor * (fade * leadAlpha));
+        if (followAlpha > RoleHiddenSpans.HiddenBelow) Bonesfor(follow, frame, c, basePoint, FollowColor * (fade * followAlpha));
         skeleton.End();
         Vector3 pm = (lead.Joint(frame, SmplJoint.Pelvis) + follow.Joint(frame, SmplJoint.Pelvis)) * 0.5f;
         PelvisMid = basePoint + (pm - c) * Scale;
@@ -134,11 +139,17 @@ public class MiniatureCouple : MonoBehaviour
         if (avatars.Count == 0) return;
         // avatar local coordinates are capture coordinates: world joint = capture + origin offset
         avatarRoot.position = basePoint + (DanceOrigin.Offset - c) * Scale;
-        foreach (SmplxAvatar avatar in avatars) avatar.SetFrame(frame);
-        foreach (Material m in avatarMaterials)
+        foreach (SmplxAvatar avatar in avatars)
         {
+            avatar.SpanHidden = hm != null && hm.IsRoleHidden(avatar.DancerRole);
+            avatar.SetFrame(frame);
+        }
+
+        for (int mi = 0; mi < avatarMaterials.Count; mi++)
+        {
+            Material m = avatarMaterials[mi];
             Color col = m.GetColor("_BaseColor");
-            float a = AvatarAlpha * fade;
+            float a = AvatarAlpha * fade * (hm != null ? hm.RoleAlpha(avatarMaterialRoles[mi]) : 1f);
             if (Mathf.Abs(col.a - a) < 0.01f) continue;
             col.a = a;
             m.SetColor("_BaseColor", col);

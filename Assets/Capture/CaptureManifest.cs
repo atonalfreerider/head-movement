@@ -55,6 +55,17 @@ public class CaptureManifest
     public string contacts;
     public string world;
 
+    /// <summary>floorYawDeg: the floor visuals (grid crosses + plane) are turned this many degrees counter-clockwise as seen from
+    /// above, about the vertical axis through the dance origin, so they line up with the room in the source videos (0 = world axes).
+    /// Written by dancecap export_unity from takes/&lt;take&gt;.toml [export] floor_yaw_deg.</summary>
+    public float floor_yaw_deg;
+
+    /// <summary>roleHidden: per-role hidden spans with a fade, in CAPTURE seconds (from the first frame = the viewer HUD's clock):
+    /// { "lead": [ { "from": 0.0, "to": 4.0, "fade_in": 1.0 } ] } hides the lead's avatar, skeleton and the overlays derived from his pose
+    /// from the first frame up to 4.0 s, then fades them in over 1.0 s. Entries may also be [from, to, fade_in, fade_out] arrays. Written by
+    /// dancecap export_unity from takes/&lt;take&gt;.toml [export.role_hidden]; see RoleHiddenSpans.</summary>
+    public Newtonsoft.Json.Linq.JObject role_hidden;
+
     [JsonIgnore] public string Folder;
 
     public string DisplayName => Path.GetFileName(Folder);

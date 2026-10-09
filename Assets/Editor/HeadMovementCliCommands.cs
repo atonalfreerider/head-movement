@@ -27,7 +27,8 @@ using VRTKLite.Controllers;
 ///   unity command hm_opacity --probe both --opacities 0.35 --hair true   # measured transparency as displayed
 ///   unity command hm_neckaxis [--threshold 15 --full 35 --length 0.5 --reference neutral|torso|vertical]
 ///   unity command hm_skeleton [--mode rhythm|physics]        # skeleton colours: beat pulse / estimated load
-///   unity command hm_floor [--footprints off|recent|all] [--plane 0.6]   # floor grid, footprints, floor craft
+///   unity command hm_floor [--footprints off|recent|all] [--plane 0.6] [--yaw 30]   # floor grid, footprints, floor craft
+///   unity command hm_hide [--role lead --until 4 --fade 1 | --from a --to b | --spans "a:b:fadeIn;c:d" | --clear true]   # role hidden spans + fade (capture s)
 ///   unity command hm_camtrace --action start      (then hm_camtrace --action stop --path trace.csv)
 ///   unity command hm_state
 /// </summary>
@@ -93,13 +94,43 @@ public static class HeadMovementCliCommands
         return JsonConvert.SerializeObject(hm.State());
     }
 
-    [CliCommand("hm_layer", "Show or hide a visual layer: floor | tension | splats | room | cameras | hud | avatars | timing | physics | counterbalance | traces | neck | graph")]
+    [CliCommand("hm_layer", "Show or hide a visual layer: floor | tension | splats | room | cameras | hud | avatars | timing | physics | counterbalance | traces | neck | graph | contacts (the hand-contact lights)")]
     public static string Layer(
-        [CliArg("layer", "floor|tension|splats|room|cameras|hud|avatars|timing|physics|counterbalance|traces|neck|graph")] string layer,
+        [CliArg("layer", "floor|tension|splats|room|cameras|hud|avatars|timing|physics|counterbalance|traces|neck|graph|contacts")] string layer,
         [CliArg("visible", "true to show, false to hide")] bool visible = true)
     {
         Require().SetLayerVisible(layer, visible);
         return $"{layer}={visible}";
+    }
+
+    [CliCommand("hm_hide", "Role hidden spans with a fade (capture.json role_hidden; CAPTURE seconds = seconds from the first frame, the viewer HUD clock): inside [from, to) the role's avatar, skeleton and every overlay derived from its pose are not drawn; from `to` they fade IN over --fade seconds (smooth, alpha 0 -> 1), and --fadeout seconds before `from` they fade out; nothing else changes. No arguments: report. --role lead|follow with --until s (from the first frame to s) | --from a --to b | --spans \"a:b[:fadeIn[:fadeOut]];c:d\" sets the role's spans; --clear true removes them. Reports the spans, the alpha now, and what is drawn.")]
+    public static string Hide(
+        [CliArg("role", "lead | follow")] string role = null,
+        [CliArg("until", "hide from the first frame until this capture second")] float until = float.NaN,
+        [CliArg("from", "span start, capture seconds (with --to)")] float from = float.NaN,
+        [CliArg("to", "span end, capture seconds (with --from)")] float to = float.NaN,
+        [CliArg("spans", "a:b[:fadeIn[:fadeOut]];c:d in capture seconds")] string spans = null,
+        [CliArg("fade", "fade-in seconds after the span's end (with --until / --from --to)")] float fade = 0f,
+        [CliArg("fadeout", "fade-out seconds before the span's start (with --from --to)")] float fadeout = 0f,
+        [CliArg("clear", "true removes the role's spans")] bool clear = false)
+    {
+        HeadMovement hm = Require();
+        if (!string.IsNullOrEmpty(role))
+        {
+            if (!RoleHiddenSpans.TryRole(role, out Role r)) throw new ArgumentException($"unknown role '{role}' (lead | follow)");
+            List<RoleHiddenSpans.Span> list = new();
+            if (!clear)
+            {
+                if (!float.IsNaN(until)) list.Add(new RoleHiddenSpans.Span { From = -1f, To = until, FadeIn = fade });
+                if (!float.IsNaN(from) && !float.IsNaN(to)) list.Add(new RoleHiddenSpans.Span { From = from, To = to, FadeIn = fade, FadeOut = fadeout });
+                if (!string.IsNullOrEmpty(spans)) list.AddRange(RoleHiddenSpans.Parse(spans));
+                if (list.Count == 0) throw new ArgumentException("give --until s, --from a --to b, --spans \"a:b\" or --clear true");
+            }
+
+            hm.SetRoleHiddenSpans(r, list);
+        }
+
+        return JsonConvert.SerializeObject(hm.RoleHiddenState());
     }
 
     [CliCommand("hm_orbit", "Place the desktop camera (free-fly, VIEWER_SPEC 5.2): azimuth/elevation (deg) and radius (m) around the look point at the look height; or --height (eye y, m), --look (look y, m), --distance (horizontal, m); --mode director hands it to the view-state director (a cut), --mode toggle is the O key (blends). Omitted values keep the current camera; the follow snaps (deterministic stills).")]
@@ -305,10 +336,11 @@ public static class HeadMovementCliCommands
         return JsonConvert.SerializeObject(s);
     }
 
-    [CliCommand("hm_floor", "Floor (VIEWER_SPEC 3.1 / 3.5 / 3.6): --footprints off | recent (default: each print fades out ~1.2 s after its touchdown) | all; --plane sets the floor plane alpha (0.6 default, 0.25 passthrough). Reports the grid (teal 1 m crosses), the footprints, the leader's live floor axis and the floor-craft record (plants / moves / rotations / pivots shown now).")]
+    [CliCommand("hm_floor", "Floor (VIEWER_SPEC 3.1 / 3.5 / 3.6): --footprints off | recent (default: each print fades out ~1.2 s after its touchdown) | all; --plane sets the floor plane alpha (0.6 default, 0.25 passthrough); --yaw turns the floor visuals (crosses + plane) by that many degrees counter-clockwise as seen from above (the capture's floor_yaw_deg by default; dancers, cameras and floor-craft overlays stay). Reports the grid (teal 1 m crosses), the footprints, the leader's live floor axis and the floor-craft record (plants / moves / rotations / pivots shown now).")]
     public static string Floor(
         [CliArg("footprints", "off | recent | all")] string footprints = null,
-        [CliArg("plane", "floor plane alpha 0..1")] float plane = float.NaN)
+        [CliArg("plane", "floor plane alpha 0..1")] float plane = float.NaN,
+        [CliArg("yaw", "floor yaw in degrees, counter-clockwise as seen from above")] float yaw = float.NaN)
     {
         HeadMovement hm = Require();
         if (!string.IsNullOrEmpty(footprints))
@@ -323,6 +355,7 @@ public static class HeadMovementCliCommands
         }
 
         if (!float.IsNaN(plane)) hm.Grid.SetPlaneAlpha(plane);
+        if (!float.IsNaN(yaw)) hm.SetFloorYaw(yaw);
         DanceLayers layers = DanceLayers.Ensure();
         if (layers != null)
         {

@@ -252,6 +252,12 @@ public class NeckAxisOverlay : MonoBehaviour
         dirty = true;
     }
 
+    /// <summary>roleHidden (RoleHiddenSpans): her alpha 0..1 scales the axis (the leader never gets one)</summary>
+    public void SetRoleAlpha(float alpha)
+    {
+        if (glow != null) glow.SetOpacity(alpha);
+    }
+
     /// <summary>threshold / full angle / max length / reference changed (CLI)</summary>
     public void MarkDirty() => dirty = true;
 

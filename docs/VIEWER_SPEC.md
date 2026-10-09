@@ -111,6 +111,14 @@ optional layer exists.
   one static additive glow mesh; still readable from the default orbit and the overhead state. The black plane
   (Resources/HM_FloorPlane, alpha 0.6, `hm_floor --plane`) is drawn before every other floor item. hm_state `grid`
   reports `crossArmM`, `crossWidthM`, `crossBrightness`.
+- **Floor yaw** (`floorYawDeg`, 2026-10-08, user: "rotate the floor only ... so that it lines up with the room in the
+  videos"): the crosses and the plane can be turned by an angle **counter-clockwise as seen from above** (north +Z up,
+  east +X right: a counter-clockwise turn takes the x axis towards +z; in Unity's left-handed frame that is a NEGATIVE
+  rotation about +Y) about the vertical axis through the origin. Per capture: `capture.json` `floor_yaw_deg` (written by the
+  exporter from the take's config); `hm_floor --yaw <deg>` sets it for a session; `FloorGrid.YawDeg`; hm_state `grid`
+  reports `yawDeg` and `axisU` (the lattice's first axis on the map: (cos, sin)). Only these floor visuals turn: the
+  dancers, the camera, the room and every overlay tied to the dancers (T axes, pivots, dials, footprints, balance axes)
+  keep the world axes. A film direction may override it with a top-level `floor_yaw_deg`.
 
 ### 3.2 Avatars
 - **Default: 65 % transparent as displayed** (user, 2026-10-07), photoreal-textured when the texture layer exists,
@@ -471,6 +479,11 @@ floor and walks a full circle around her, pivoting her in place.
   no other interval in a 38 s take).
 
 ### 3.10 Dance graph — the zouk state machine
+- **Hand-contact lights** (layer `contacts`, on by default; the glowing orbs where the partners' hands meet) belong to the
+  full-size dance: in the graph view states they fade out with it (`ContactDetection.SetOrbFade`, driven by the view state
+  like the skeleton lines), so the state machine is shown alone (2026-10-08, user: the yellow hand-contact light showed in
+  the graph). A film segment's layer `hand_contacts` (default false in a graph view state, true elsewhere) does the same
+  per shot. `hm_layer contacts` switches the lights everywhere; hm_state `contacts` reports `layer`, `fade`, `orbsShown`.
 - The **dance graph** is a static 3D state machine of zouk moves, scaffolded from the user's
   move-graph file and grown as dances are labelled (§10). It keeps the
   original 3D layout:
@@ -545,6 +558,41 @@ floor and walks a full circle around her, pivoting her in place.
 - **Opening title card** of the directed tour shows the left-hand side with an empty product slot; the
   **closing fingerprint shot** completes the equation with the fingerprint as the product. The same label
   titles the library card and the rendered video file names.
+
+### 3.14 Muted role - hidden spans with a fade-in (`roleHidden`)
+- A role can be **hidden for a span of the capture, then faded in** (2026-10-08, user: "mute the lead's avatar and skeleton in the
+  first 4 seconds ... they are posed incorrectly"; "I did not say to change the timing"; "time should start at T zero. We should fade
+  in on his avatar and skeleton starting at four seconds"). Per capture: `capture.json` `role_hidden` =
+  `{ "lead": [ { "from": 0.0, "to": 4.0, "fade_in": 1.0 } ] }` (entries may also be `[from, to, fade_in, fade_out]`) - the clock is
+  **capture seconds = seconds from the capture's first frame = the viewer HUD's clock** (HUD 0.00 s = the first frame; audio time =
+  capture + `audio_offset`; reference seconds = capture - 3.115 there - the reference clock is deliberately NOT used). A role key is
+  `lead` or `follow`. The role's **alpha** is 0 for `from <= t < to`, rises 0 -> 1 over `fade_in` seconds starting exactly at `to`
+  (smoothstep: no pop) and falls 1 -> 0 over `fade_out` seconds ending at `from` (both default 0 = hard cut); several spans: the lowest
+  alpha wins. `RoleHiddenSpans` / `HeadMovement.RoleAlpha(role)` / `IsRoleHidden(role)` (alpha ~ 0) / `CoupleAlpha`.
+- It is a **pure visibility switch**: poses, the clock (the film starts at T zero = the first frame), the camera follow, the narration
+  and every other layer keep running exactly as they are. The free viewer decides on the song clock, the film director on its exact
+  sub-frame dance time (a pure function of it: stills are deterministic). The film's camera centre (`FilmTargets.CoupleCentre`)
+  weights each dancer by his / her alpha, so a hidden dancer does not pull the orbit and the centre glides to the midpoint as he fades in.
+- The alpha scales the role's **avatar** on top of the viewer's avatar opacity (0.35 stays 0.35 once faded in; hair and shoes follow),
+  its **skeleton lines** (colour fade) and the follower's spine beads, and the overlays derived from its pose: the **hand-contact lights**
+  (they belong to the pair: the lower of the two alphas; they grow in) and **partner connection lines**, the role's **footprints and
+  touchdown rings** (scaled by the alpha at the moment the foot landed), its **physics markers** (a size fade) and its entry in the
+  **miniature couple** (bones and avatar). Overlays derived from the *leader's* pose fade with him: the **floor-craft T axis and record**
+  (glow + labels), the **balance axes** (his and the couple's: the lower alpha) and the **couple counterbalance dot / axis / call-outs**;
+  the follower's neck axis fades with *her* (her traces, line renderers, switch at half alpha). A floor-craft record entry that lies
+  wholly inside the fully hidden part of a span is never shown, also after it. The move caption, the graph inset, the other dancer and
+  her own overlays are not affected.
+- Implementation: `Dancer.RoleAlpha` (skeleton colours scaled; the lines hold no points at ~0, so the view-state fades keep owning
+  `enabled` / width), `HeadMovement.ApplyAvatarOpacity` (avatar opacity x alpha), `SpineBeads.RoleAlpha`, `ContactDetection.SetSpanAlpha`,
+  `PartnerConnection.SpanAlpha`, `FloorPatterns` / `TimingOverlay` landing-time scaling, `PhysicsOverlay.SetRoleAlpha`,
+  `GlowMesh.SetOpacity` behind `BalanceAxisOverlay` / `CounterbalanceOverlay` / `FloorCraftOverlay` / `NeckAxisOverlay.SetRoleAlpha`,
+  handed down by `DanceLayers.SyncRoleHidden`.
+- CLI: `hm_hide` reports the spans, the alpha now and what is drawn; `hm_hide --role lead --until 4 --fade 1` (from the first frame),
+  `--from a --to b [--fade s --fadeout s]`, `--spans "a:b:fadeIn:fadeOut;c:d"`, `--clear true` edit them for a session (capture seconds).
+  hm_state `roleHidden` carries `spans`, `spansAudio`, `alphaNow`, `hiddenNow`, `captureTime`, `skeletonLinesDrawn`, `skeletonAlpha`,
+  `avatarDrawn`, `avatarOpacity`, `contactLightsAlpha`; the overlay blocks carry `roleHidden`.
+- Exporter: `takes/<take>.toml` `[export] role_hidden = { lead = [ { from = 0.0, to = 4.0, fade_in = 1.0 } ] }`
+  (`export_unity.resolve_role_hidden`, checked by `demo_export.validate`), so a re-export keeps it. Playtest: `Tools/playtest_role_hidden.ps1`.
 
 ---
 
@@ -630,6 +678,13 @@ Follows the miniature couple through the dance graph (§3.10) **zoomed far out**
 1.1–1.5 m above the couple, so a whole neighbourhood of the graph is in frame), looking ahead to the next
 node; the camera may sit a little **inside the graph** among the nodes; it pulls back further while the
 couple dwells.
+
+**Graph focus** (`graphFocusDistanceScale`, default 0.5; 2026-10-08, user: "we need to be 50% closer to the state
+machine graph when it is the point of focus"): in the graph states (the Dance graph chase and the Fingerprint orbit) the
+camera sits this fraction of its earlier distance from what it looks at, along the same view direction (the chase eye
+1.4-1.9 m from the miniature couple instead of 2.8-3.7 m). `hm_graph --focus <scale>` sets it; the film's `graph_wide`
+shot reads it too (a direction may carry its own `graph_focus_distance_scale`) and, when closer than the whole-graph fit,
+looks at the centre of the nodes the path visits so the path stays in frame.
 
 ---
 
@@ -790,6 +845,8 @@ v4 extends v3 (times, SMPL-X motion + skins, timing, physics) with:
 | `dance` | `{leader, follower, song: {title, artist}, level: professional\|intermediate\|novice, category: demo\|lesson\|jack_and_jill, date, venue}`; `title` = "Leader + Follower × Song" |
 | `layers` | flags for every layer of §2.1 + QA numbers (reprojection px, sync residual ms) |
 | `origin` | the dance offset of §3.0 (computed by the exporter from the first frame, applied by the viewer) |
+| `floor_yaw_deg` | optional: degrees the floor visuals (§3.1) are turned counter-clockwise as seen from above (0 = world axes) |
+| `role_hidden` | optional: `{ "lead": [ { "from", "to", "fade_in", "fade_out" } ], "follow": [...] }` spans in capture seconds (from the first frame = the HUD clock) in which a role's avatar, skeleton and the overlays derived from its pose are hidden, then faded in over `fade_in` seconds from `to` (§3.14) |
 | `cameras/` | per source phone: `video.mp4` (rotation baked, trimmed to the take, re-encoded at a **constant** 30 fps from the phone's variable-rate PTS, full resolution for desktop/recording; not packaged for Quest builds), `track.json` (per frame: reference time, Unity-space position + rotation, vertical FOV, principal point, k1), `clock` (reference → video time mapping) |
 | `textures/`, `hair_groom.json` | avatar albedo per dancer, hair parameters |
 | `physics.json` v2 | per frame: COM, GRF per foot (+ bands), **per-segment axial load estimates** (tension/compression, + band, identifiable flag), contact forces per contact (type, points, force or interval, identifiable flag) |

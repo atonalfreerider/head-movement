@@ -51,6 +51,13 @@ if ($capJson.times -and (Test-Path (Join-Path $capDir $capJson.times))) {
 }
 $take = $null
 if ($capJson.provenance) { $take = $capJson.provenance.take }
+# HM_PLAYTEST_STRIDE_SCALE (default 1): a multiplier of the per-frame sampling strides below, for takes far longer than a 38 s demo (a whole dance of
+# 5600 frames at 1 CLI call per sampled frame takes the better part of an hour); 1 samples every 15th / 3rd frame as before
+$strideScale = 1
+if ($env:HM_PLAYTEST_STRIDE_SCALE) { $strideScale = [math]::Max(1, [int]$env:HM_PLAYTEST_STRIDE_SCALE) }
+# the legacy checks below look at the leader's overlays from the first frame on: a capture that mutes him at its start (role_hidden) is
+# tested unmuted here; the "role hidden spans" section restores its own spans
+if ($null -ne $capJson.role_hidden) { Invoke-Unity hm_hide --role lead --clear true | Out-Null }
 
 Write-Host "== dance layers: origin (VIEWER_SPEC 3.0)"
 $s = Invoke-Transport restart
@@ -66,7 +73,7 @@ if ($null -ne $s.origin) {
 }
 
 Write-Host "== dance layers: layer switches"
-foreach ($layer in "counterbalance", "traces", "neck", "graph", "axis", "floorcraft", "balance", "grid", "moves") {
+foreach ($layer in "counterbalance", "traces", "neck", "graph", "axis", "floorcraft", "balance", "grid", "moves", "contacts") {
     $before = [bool](Get-State).layers.$layer
     $flip = (-not $before).ToString().ToLower(); $back = $before.ToString().ToLower()
     Invoke-Unity hm_layer --layer $layer --visible $flip | Out-Null
@@ -115,6 +122,14 @@ if ($null -ne $sk) {
     Assert ($hueBad -eq 0) "load colours stay orange / blue (green <= 0.3 red on tension, <= 0.45 blue on compression, LDR): $tensionN tension joints this frame, $hueBad off-hue"
     $lf = @($ph.follow.load)
     Assert ($ph.follow.stance -eq "" -or ([double]$lf[1] -lt 0) -or ([double]$lf[2] -lt 0)) ("a stance leg is in compression (follow stance {2}, hips {0:0.00} / {1:0.00})" -f $lf[1], $lf[2], $ph.follow.stance)
+    # the physics overlay's markers are small: no support line wider than 2 cm, COM sphere <= 15 cm, XCoM disc <= 12 cm
+    # (regression: the roleHidden fade replaced the support line's 6 mm width by 1.0 = a 1 m band, drawn as big discs under the dancers)
+    $phs = (Get-State).physics
+    foreach ($who in "lead", "follow") {
+        $pw = $phs.$who
+        if ($null -eq $pw -or $null -eq $pw.supportWidthM) { continue }
+        Assert (([double]$pw.supportWidthM -le 0.02) -and ([double]$pw.comDiameterM -le 0.15) -and ([double]$pw.xcomDiameterM -le 0.12)) ("physics markers are small ($who): support line {0:0.0} mm, COM {1:0.0} cm, XCoM {2:0.0} cm" -f ([double]$pw.supportWidthM * 1000), ([double]$pw.comDiameterM * 100), ([double]$pw.xcomDiameterM * 100))
+    }
     Invoke-Json @("hm_skeleton", "--mode", "rhythm") | Out-Null
     Assert ((Get-State).skeletonMode -eq "rhythm") "back to rhythm mode"
 }
@@ -139,7 +154,7 @@ $tr = (Get-State).traces
 if ($null -ne $tr) {
     Assert ($tr.visible -and $tr.windowSeconds -le 0.4) "follower traces on, brief window $($tr.windowSeconds) s ($($tr.windowFrames) frames)"
     $bad = 0
-    for ($k = 0; $k -lt $script:frameTimes.Count; $k += 15) {
+    for ($k = 0; $k -lt $script:frameTimes.Count; $k += (15 * $strideScale)) {
         $st = Seek-Frame $k
         foreach ($p in $st.traces.extremities.PSObject.Properties) {
             # a trace on an attached extremity may only be the fading tail of a free run (<= window frames old)
@@ -157,7 +172,7 @@ if ($null -ne $tr) {
             if ([double]$r[2] -lt 0.12 -and [double]$r[3] -lt 0.6) { $stepRuns++; Write-Host ("  step-like {0} run {1}-{2}: peak {3:0.0} cm, {4:0.00} s" -f $foot, $r[0], $r[1], ([double]$r[2] * 100), [double]$r[3]) }
         }
     }
-    for ($k = 0; $k -lt $script:frameTimes.Count; $k += 15) {
+    for ($k = 0; $k -lt $script:frameTimes.Count; $k += (15 * $strideScale)) {
         $st = Seek-Frame $k
         foreach ($foot in "LeftAnkle", "RightAnkle") {
             $e = $st.traces.extremities.$foot
@@ -192,7 +207,7 @@ if ($null -ne $na -and $script:frameTimes.Count -gt 0) {
     function Ramp([double]$a) { $t = [math]::Min(1.0, [math]::Max(0.0, ($a - $na.thresholdDeg) / ($na.fullDeg - $na.thresholdDeg))); return $t * $t * (3 - 2 * $t) }
     # every 3rd frame: no axis at or below the threshold, alpha / length = the ramp of the angle above it
     $bad = 0; $shownN = 0; $leadAxis = 0; $nf = $script:frameTimes.Count
-    for ($k = 0; $k -lt $nf; $k += 3) {
+    for ($k = 0; $k -lt $nf; $k += (3 * $strideScale)) {
         $st = Seek-Frame $k
         $n = $st.neckAxis
         $want = Ramp ([double]$n.angleDeg)
@@ -360,10 +375,13 @@ if ($null -ne $g -and $g.nodes -gt 0) {
 # the move caption, unlabelled gaps, provenance and the graph inset (VIEWER_SPEC 3.12, 10; Tools/playtest_move_caption.ps1)
 if (Test-Path "$PSScriptRoot/playtest_move_caption.ps1") { . "$PSScriptRoot/playtest_move_caption.ps1" }
 
+
 Write-Host "== hm_tour (VIEWER_SPEC 6)"
 $layersBefore = (Get-State).layers
 $s0 = Get-State
 $expected = @("orbit", "overhead", "geometry", "physics")
+# the camera tour slot is skipped until source videos are exported for the capture (DanceTour.HasCameraVideos)
+if ($s0.tour.cameraTourAvailable) { $expected = @("orbit", "camera_tour", "overhead", "geometry", "physics") }
 if ($s0.graph.nodes -gt 0) { $expected += @("dance_graph", "fingerprint") }
 $r = Invoke-Json @("hm_tour", "--action", "start", "--measures", "1")
 Assert ($r.running -and $r.state -eq "orbit") "tour starts in Orbit"
@@ -397,7 +415,7 @@ $shotTime = if ($null -ne $firstPivot) { ([double]$firstPivot[2] + [double]$firs
 # per-state avatar opacity = the user default (hm_opacity, ~0.3) x the state factor (VIEWER_SPEC 4)
 $opBase = [double](Get-State).avatarOpacity
 if ($opBase -le 0) { $opBase = 0.3 }
-$opacity = @{ orbit = $opBase; overhead = $opBase * 2 / 3; geometry = $opBase * 0.5; physics = $opBase / 3; dance_graph = 0.0; fingerprint = 0.0 }
+$opacity = @{ orbit = $opBase; camera_tour = $opBase; overhead = $opBase * 2 / 3; geometry = $opBase * 0.5; physics = $opBase / 3; dance_graph = 0.0; fingerprint = 0.0 }
 $k = 0
 foreach ($state in $expected) {
     $k++
@@ -407,6 +425,23 @@ foreach ($state in $expected) {
     $t = Invoke-Json @("hm_tour", "--action", "status")
     if ($s0.avatars.lead) { Assert ([math]::Abs($t.avatarAlpha - $opacity[$state]) -lt 0.02) ("{0}: avatar opacity {1:0.000} (spec {2:0.000})" -f $state, $t.avatarAlpha, $opacity[$state]) }
     if ($state -in "dance_graph", "fingerprint") { Assert ($t.skeleton -lt 0.01 -and $t.graphFade -gt 0.99) "${state}: full-size dance faded out, graph in" }
+    # the hand-contact lights (the glowing orbs where the partners' hands meet) belong to the full-size dance: hidden in the graph states
+    # (user 2026-10-08), shown (allowed) in every other state
+    $cs = (Get-State).contacts
+    if ($null -ne $cs) {
+        if ($state -in "dance_graph", "fingerprint") { Assert ([int]$cs.orbsShown -eq 0 -and -not $cs.allowed -and [double]$cs.fade -lt 0.01) "${state}: hand-contact lights hidden (fade $($cs.fade), $($cs.orbsShown) orbs drawn)" }
+        else { Assert ($cs.allowed -and [double]$cs.fade -gt 0.99) "${state}: hand-contact lights allowed (fade $($cs.fade))" }
+    }
+    # the graph states' camera is graphFocusDistanceScale (0.5) of its earlier distance: the chase eye sat 2.8-3.7 m from the miniature couple
+    if ($state -eq "dance_graph") {
+        $gs = Get-State
+        Assert ([double]$t.graphFocusDistanceScale -le 0.5) "graph focus distance scale $($t.graphFocusDistanceScale) (50 % closer)"
+        if ($null -ne $gs.camera -and $null -ne $gs.graph.mini) {
+            $dx = $gs.camera.eye[0] - $gs.graph.mini[0]; $dy = $gs.camera.eye[1] - $gs.graph.mini[1]; $dz = $gs.camera.eye[2] - $gs.graph.mini[2]
+            $dm = [math]::Sqrt($dx * $dx + $dy * $dy + $dz * $dz)
+            Assert ($dm -lt 2.6) ("dance graph camera {0:0.00} m from the miniature couple (closer than the earlier 2.8 m minimum)" -f $dm)
+        }
+    }
     ReviewShot ("{0}_tour_{1}_{2}" -f $cap, $k, $state)
 }
 Invoke-Json @("hm_tour", "--action", "stop") | Out-Null

@@ -78,6 +78,12 @@ public class SpineBeads : MonoBehaviour
     /// <summary>off: no beads drawn (playtests: A/B draw-call counts); the skeleton visibility still applies when on</summary>
     public bool Enabled = true;
 
+    /// <summary>roleHidden (RoleHiddenSpans): her skeleton is hidden in a span, so the bead chain is too (Dancer.SpanHidden sets it)</summary>
+    public bool SpanHidden;
+
+    /// <summary>roleHidden fade 0..1: the bead colours are scaled by it, like the skeleton lines' (Dancer.RoleAlpha; the chain is re-set when it changes)</summary>
+    public float RoleAlpha = 1f;
+
     public Role DancerRole { get; private set; } = Role.Follow;
     public int Count => count;
     public float Radius => radius;
@@ -213,6 +219,7 @@ public class SpineBeads : MonoBehaviour
             float u = beadParam[b] * (Joints - 1);
             int i0 = Mathf.Clamp(Mathf.FloorToInt(u), 0, Joints - 2);
             Color c = Color.LerpUnclamped(jointColours[i0], jointColours[i0 + 1], u - i0);
+            if (RoleAlpha < 0.9999f) c = new Color(c.r * RoleAlpha, c.g * RoleAlpha, c.b * RoleAlpha, c.a);
             colours[b] = LineColour(c);
         }
 
@@ -254,6 +261,7 @@ public class SpineBeads : MonoBehaviour
 
     float SkeletonScale()
     {
+        if (SpanHidden) return 0f;
         if (VisibilitySource == null) return 1f;
         if (!VisibilitySource.enabled || !VisibilitySource.gameObject.activeInHierarchy) return 0f;
         return VisibilitySource is LineRenderer line ? Mathf.Max(0f, line.widthMultiplier) : 1f;

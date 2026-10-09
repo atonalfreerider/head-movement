@@ -806,6 +806,33 @@ public class FloorCraftOverlay : MonoBehaviour
         dirty = true;
     }
 
+    bool roleHidden;
+    float roleAlpha = 1f;
+
+    /// <summary>roleHidden (RoleHiddenSpans): the leader's alpha 0..1 - his current T, the record being laid down (old Ts, the T-to-T path,
+    /// axis pivots, dials: all derived from his pose) are scaled by it (the glow mesh and the labels fade together) and not drawn at ~0.
+    /// Afterwards a record entry that lies wholly inside the fully hidden part of the span stays out.</summary>
+    public void SetRoleAlpha(float alpha)
+    {
+        alpha = Mathf.Clamp01(float.IsFinite(alpha) ? alpha : 1f);
+        bool hidden = alpha <= RoleHiddenSpans.HiddenBelow;
+        if (Mathf.Abs(alpha - roleAlpha) < 1e-4f && hidden == roleHidden) return;
+        roleAlpha = alpha;
+        roleHidden = hidden;
+        if (glow != null) glow.SetOpacity(alpha);
+        dirty = true;
+    }
+
+    public bool RoleHidden => roleHidden;
+    public float RoleAlpha => roleAlpha;
+
+    /// <summary>the entry [t0, t1] (audio seconds) was derived from the leader's pose inside a hidden span: it is never shown</summary>
+    bool Muted(float t0, float t1)
+    {
+        RoleHiddenSpans spans = HeadMovement.Instance != null ? HeadMovement.Instance.RoleHidden : null;
+        return spans != null && spans.Any && spans.WhollyInsideAudio(Role.Lead, t0, t1);
+    }
+
     /// <summary>physics mode adds the balance verdicts to the dials and axis pivots</summary>
     public void SetPhysicsMode(bool on)
     {
@@ -856,7 +883,16 @@ public class FloorCraftOverlay : MonoBehaviour
 
         glow.Begin();
         glow.Viewer = eye;
-        if (HasTAxes)
+        if (roleHidden)
+        {
+            // the leader is hidden: nothing derived from his pose is drawn (the live axis keeps tracking for hm_state)
+            if (!HasTAxes)
+            {
+                AxisOrigin = axisOrigin[frame];
+                AxisForward = axisForward[frame];
+            }
+        }
+        else if (HasTAxes)
         {
             int current = TIndexAt(time);
             if (showRecord)
@@ -953,7 +989,7 @@ public class FloorCraftOverlay : MonoBehaviour
         for (int i = 0; i < data.TAxes.Count; i++)
         {
             FloorCraftData.TAxis a = data.TAxes[i];
-            if (i == current || time < a.T0) continue; // the current T (also while forming) is drawn by CurrentTAxis
+            if (i == current || time < a.T0 || Muted(a.T0, a.T1)) continue; // the current T (also while forming) is drawn by CurrentTAxis
             float k = Smooth01((time - a.T1) / Mathf.Max(0.05f, OldFadeSeconds));
             float level = Mathf.Lerp(TBrightness, OldTLevel, k);
             Color c = Scale(Color.Lerp(LeadColour, Teal, k), level);
@@ -968,7 +1004,7 @@ public class FloorCraftOverlay : MonoBehaviour
         Color baseColour = Color.Lerp(Teal, Color.white, 0.3f);
         foreach (FloorCraftData.Transition tr in data.Transitions)
         {
-            if (time < tr.T0 || tr.SamePlace || float.IsNaN(tr.From.x) || float.IsNaN(tr.To.x)) continue;
+            if (time < tr.T0 || tr.SamePlace || float.IsNaN(tr.From.x) || float.IsNaN(tr.To.x) || Muted(tr.T0, tr.T1)) continue;
             float p = tr.T1 > tr.T0 + 0.02f ? Mathf.Clamp01((time - tr.T0) / (tr.T1 - tr.T0)) : 1f;
             Vector3 end = Vector3.Lerp(tr.From, tr.To, p);
             float age = time - tr.T1;
@@ -1000,7 +1036,7 @@ public class FloorCraftOverlay : MonoBehaviour
     {
         foreach (FloorCraftData.AxisPivot pv in data.AxisPivots)
         {
-            if (time < pv.T0 || pv.Dial >= 0 || float.IsNaN(pv.At.x) || float.IsNaN(pv.SignedDeg) || float.IsNaN(pv.FromYawDeg)) continue;
+            if (time < pv.T0 || pv.Dial >= 0 || float.IsNaN(pv.At.x) || float.IsNaN(pv.SignedDeg) || float.IsNaN(pv.FromYawDeg) || Muted(pv.T0, pv.T1)) continue;
             float k = pv.T1 > pv.T0 + 1e-3f ? Mathf.Clamp01((time - pv.T0) / (pv.T1 - pv.T0)) : 1f;
             float age = time - pv.T1;
             float level = SettleLevel(age, PivotLevel, out float settle, out float record);
@@ -1080,7 +1116,7 @@ public class FloorCraftOverlay : MonoBehaviour
     {
         foreach (FloorCraftData.Dial d in dials)
         {
-            if (time < d.T0) continue;
+            if (time < d.T0 || Muted(d.T0, d.T1)) continue;
             bool running = time <= d.T1;
             float run = running ? RunAt(d, time) : d.Degrees;
             float age = time - d.T1;
@@ -1256,7 +1292,7 @@ public class FloorCraftOverlay : MonoBehaviour
         if (!l.gameObject.activeSelf) l.gameObject.SetActive(true);
         l.transform.position = new Vector3(at.x, 0.04f, at.z);
         DanceText.Billboard(l.transform);
-        DanceText.SetAlpha(l, Mathf.Clamp01(alpha));
+        DanceText.SetAlpha(l, Mathf.Clamp01(alpha) * roleAlpha);
     }
 
     // ------------------------------------------------------------------ checks / hm_state
@@ -1290,7 +1326,7 @@ public class FloorCraftOverlay : MonoBehaviour
         {
             ["axisVisible"] = showAxis, ["recordVisible"] = showRecord, ["axisSource"] = AxisSource, ["dialSource"] = DialSource,
             ["mode"] = HasTAxes ? "t_axes" : "live_axis", ["hasFloorcraftJson"] = data != null, ["version"] = data?.Version ?? 0,
-            ["physicsMode"] = physicsMode,
+            ["physicsMode"] = physicsMode, ["roleHidden"] = roleHidden,
             // v2 records: still in floorcraft.json, no longer drawn (the stable T replaced them)
             ["plants"] = data?.Plants.Count ?? 0, ["moves"] = data?.Moves.Count ?? 0, ["rotations"] = data?.Rotations.Count ?? 0,
             ["pivots"] = data?.Pivots.Count ?? 0,

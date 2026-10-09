@@ -267,7 +267,12 @@ public class DanceHud : MonoBehaviour
             layout = true;
         }
 
-        if (Changed(ref nameText, name)) moveName.text = name ?? "";
+        if (Changed(ref nameText, name))
+        {
+            moveName.text = name ?? "";
+            if (filmMode) layout = true; // the film's box hugs the name: re-measure
+        }
+
         if (moveName.color != nameColor) moveName.color = nameColor;
         if (Changed(ref aliasText, alias))
         {
@@ -358,7 +363,17 @@ public class DanceHud : MonoBehaviour
             y -= 28;
         }
 
-        moveBack.sizeDelta = new Vector2(CaptionWidth, -y + 8);
+        float width = CaptionWidth;
+        if (filmMode)
+        {
+            // in a film the box hugs its text: an 800 px plate would show as an orphan dark rectangle over the video at a
+            // phone's point of view (16:9, the video is narrower than the box)
+            float tw = moveName.preferredWidth;
+            if (hasAlias) tw = Mathf.Max(tw, moveAlias.preferredWidth);
+            width = Mathf.Clamp(tw + 44f, 140f, CaptionWidth);
+        }
+
+        moveBack.sizeDelta = new Vector2(width, -y + 8);
     }
 
     /// <summary>cross-fade at a segment boundary (alpha in dance time, so paused frames and renders are deterministic)</summary>

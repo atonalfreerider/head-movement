@@ -8,6 +8,9 @@ to Assets/Screenshots (git-ignored).
     pwsh Tools/playtest.ps1 -Capture <capture folder>  # any StreamingAssets folder
     pwsh Tools/playtest.ps1 -Capture 00_SyntheticDemo,01_SyntheticSMPLX -Recompile
     pwsh Tools/playtest.ps1 -Capture <capture folder> -Only dance_layers   # base checks + one sub-suite
+    pwsh Tools/playtest.ps1 -Only role_hidden                              # the hidden / fading-in role spans (VIEWER_SPEC 3.14), on the capture that declares role_hidden
+    pwsh Tools/playtest.ps1 -Capture <capture folder> -Only role_hidden    # the same on a given capture
+    $env:HM_PLAYTEST_STRIDE_SCALE = 8   # dance_layers on a whole-dance take: sample every 8th as many frames (default 1)
 
 Captures with capture.json version >= 3 (dancecap export) also get the v3 checks: playback driven by times.json
 (binary search by audio time), skinned SMPL-X avatars (55 bones, FK agrees with the exported joints, plausible
@@ -30,6 +33,13 @@ param(
 
 $Capture = @($Capture | ForEach-Object { $_ -split "," } | Where-Object { $_ })  # powershell -File passes "a,b" as one string
 $Only = @($Only | ForEach-Object { $_ -split "," } | Where-Object { $_ })
+# the role_hidden sub-suite alone, without -Capture: the newest StreamingAssets capture that declares role_hidden (never a retired capture)
+if (-not $PSBoundParameters.ContainsKey("Capture") -and $Only.Count -eq 1 -and $Only[0] -eq "role_hidden") {
+    $declares = Get-ChildItem (Join-Path (Split-Path $PSScriptRoot -Parent) "Assets\StreamingAssets") -Directory -ErrorAction SilentlyContinue |
+        Where-Object { (Test-Path "$($_.FullName)\capture.json") -and ((Get-Content "$($_.FullName)\capture.json" -Raw) -match '"role_hidden"') } |
+        Sort-Object Name -Descending
+    if ($declares) { $Capture = @($declares[0].Name) }
+}
 function Want([string]$suite) { return $Only.Count -eq 0 -or $Only -contains $suite }
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot -Parent)
@@ -129,6 +139,9 @@ foreach ($cap in $Capture) {
     Invoke-Unity hm_transport --action restart | Out-Null
     Write-Host "  measures in the capture: $firstMeasure..$lastMeasure"
     $capJsonPt = Get-Content (Join-Path (Get-Location) "Assets\StreamingAssets\$cap\capture.json") -Raw | ConvertFrom-Json
+    # a capture that mutes its leader at the start (capture.json role_hidden; hm_hide) is checked unmuted here: the checks below look at his avatar,
+    # touchdown rings and physics markers a few seconds in (the "role_hidden" sub-suite, Tools/playtest_role_hidden.ps1, tests the muted spans)
+    if ($null -ne $capJsonPt.role_hidden) { Invoke-Unity hm_hide --role lead --clear true | Out-Null }
     Assert ($s.steps -gt 0) "floor steps detected: $($s.steps) ($($s.stepsOnBeat) on beat)"
     $v3 = $s.version -ge 3
     $s0 = Get-State
@@ -300,6 +313,9 @@ foreach ($cap in $Capture) {
 
     # VIEWER_SPEC v3 dance layers: origin, counterbalance, follower traces, dance graph, hm_tour (+ review shots)
     if ((Want "dance_layers") -and (Test-Path "$PSScriptRoot/playtest_dance_layers.ps1")) { . "$PSScriptRoot/playtest_dance_layers.ps1" }
+
+    # role hidden spans (capture.json role_hidden, hm_hide; VIEWER_SPEC 3.14): the muted role's avatar, skeleton and derived overlays, the hard cut
+    if ((Want "role_hidden") -and (Test-Path "$PSScriptRoot/playtest_role_hidden.ps1")) { . "$PSScriptRoot/playtest_role_hidden.ps1" }
 
     # the follow's groomed hair (Assets/Hair) on captures with hair_groom.json: stability, budget, CPU, review shots
     if ((Want "hair") -and (Test-Path "$PSScriptRoot/playtest_hair.ps1")) { . "$PSScriptRoot/playtest_hair.ps1" }

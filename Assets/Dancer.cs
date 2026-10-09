@@ -321,6 +321,79 @@ public class Dancer : MonoBehaviour
         }
     }
 
+    bool spanHidden;
+    float roleAlpha = 1f;
+
+    /// <summary>roleHidden (RoleHiddenSpans): this dancer's visibility 0..1 (0 inside a hidden span, fading to 1 around it). The skeleton
+    /// lines' and the spine beads' colours are scaled by it (the lines are additive-looking HDR on a dark floor: a colour fade is an alpha
+    /// fade); at ~0 the lines hold no points and the beads are off. Done with the point count / colours, not LineRenderer.enabled /
+    /// widthMultiplier, which the view-state fades (DanceTour, FilmDirector) own. The pose is re-set by HeadMovement when it changes.</summary>
+    public float RoleAlpha
+    {
+        get => roleAlpha;
+        set
+        {
+            roleAlpha = Mathf.Clamp01(float.IsFinite(value) ? value : 1f);
+            spanHidden = roleAlpha <= RoleHiddenSpans.HiddenBelow;
+            if (followSpineBeads != null)
+            {
+                followSpineBeads.SpanHidden = spanHidden;
+                followSpineBeads.RoleAlpha = roleAlpha;
+            }
+
+            if (spanHidden) ClearLines();
+        }
+    }
+
+    /// <summary>fully hidden by a span (RoleAlpha ~ 0): no skeleton line is drawn</summary>
+    public bool SpanHidden => spanHidden;
+
+    /// <summary>a skeleton line's gradient: the joint colours scaled by the role's alpha (RoleAlpha), alpha keys untouched</summary>
+    Gradient LineGradient(GradientColorKey[] colorKeys, GradientAlphaKey[] alphaKeys)
+    {
+        if (roleAlpha < 0.9999f)
+        {
+            colorKeys = (GradientColorKey[])colorKeys.Clone();
+            for (int i = 0; i < colorKeys.Length; i++)
+            {
+                Color c = colorKeys[i].color;
+                colorKeys[i].color = new Color(c.r * roleAlpha, c.g * roleAlpha, c.b * roleAlpha, c.a);
+            }
+        }
+
+        return new Gradient { colorKeys = colorKeys, alphaKeys = alphaKeys };
+    }
+
+    LineRenderer[] SkeletonLines() => new[]
+    {
+        followLegsRenderer, followShouldersRenderer, followLeftArmRenderer, followRightArmRenderer,
+        leadArmsRenderer, leadLeftLegRenderer, leadRightLegRenderer
+    };
+
+    void ClearLines()
+    {
+        foreach (LineRenderer line in SkeletonLines())
+        {
+            if (line != null && line.positionCount != 0) line.positionCount = 0;
+        }
+    }
+
+    /// <summary>skeleton lines (and bead chain) drawn now: enabled, with points and width (hm_state roleHidden)</summary>
+    public int LinesDrawn
+    {
+        get
+        {
+            int n = 0;
+            foreach (LineRenderer line in SkeletonLines())
+            {
+                if (line != null && line.enabled && line.positionCount > 1 && line.widthMultiplier > 0.001f) n++;
+            }
+
+            if (followSpineBeads != null && followSpineBeads.Visible) n++;
+            return n;
+        }
+    }
+
     List<Vector3> blendScratch;
 
     /// <summary>sub-frame pose (Assets/Film slow motion via HeadMovement.DriveExternally): the joints lerp between frames
@@ -364,6 +437,11 @@ public class Dancer : MonoBehaviour
     {
         List<Vector3> pose = PosesByFrame[frameNumber];
         currentColours = jointColours;
+        if (spanHidden)
+        {
+            ClearLines(); // roleHidden: the skeleton is not drawn (the lines hold no points); the pose is still computed for everything else
+            return;
+        }
 
         switch (Role)
         {
@@ -419,11 +497,7 @@ public class Dancer : MonoBehaviour
                     frameNumber, beatIntensity, smplFollowLegs,
                     new[] {0, -1, (int)SmplJoint.L_Ankle, (int)SmplJoint.R_Ankle});
 
-                followLegsRenderer.colorGradient = new Gradient
-                {
-                    colorKeys = followLegsColorKeys,
-                    alphaKeys = followLegsAlphaKeys
-                };
+                followLegsRenderer.colorGradient = LineGradient(followLegsColorKeys, followLegsAlphaKeys);
 
                 Vector3[] shoulderArray = new Vector3[smplFollowShoulders.Length];
                 for (int i = 0; i < smplFollowShoulders.Length; i++)
@@ -438,11 +512,7 @@ public class Dancer : MonoBehaviour
                 (GradientColorKey[] followShouldersColorKeys, GradientAlphaKey[] followShouldersAlphaKeys) = IntensityGradient(
                     frameNumber, beatIntensity, smplFollowShoulders, Array.Empty<int>() );
 
-                followShouldersRenderer.colorGradient = new Gradient
-                {
-                    colorKeys = followShouldersColorKeys,
-                    alphaKeys = followShouldersAlphaKeys
-                };
+                followShouldersRenderer.colorGradient = LineGradient(followShouldersColorKeys, followShouldersAlphaKeys);
 
                 Vector3[] leftArmArray = new Vector3[smplFollowLeftArm.Length];
                 for (int i = 0; i < smplFollowLeftArm.Length; i++)
@@ -457,11 +527,7 @@ public class Dancer : MonoBehaviour
                 (GradientColorKey[] followLeftArmColorKeys, GradientAlphaKey[] followLeftArmAlphaKeys) = IntensityGradient(
                     frameNumber, beatIntensity, smplFollowLeftArm, Array.Empty<int>() );
 
-                followLeftArmRenderer.colorGradient = new Gradient
-                {
-                    colorKeys = followLeftArmColorKeys,
-                    alphaKeys = followLeftArmAlphaKeys
-                };
+                followLeftArmRenderer.colorGradient = LineGradient(followLeftArmColorKeys, followLeftArmAlphaKeys);
 
                 Vector3[] rightArmArray = new Vector3[smplFollowRightArm.Length];
                 for (int i = 0; i < smplFollowRightArm.Length; i++)
@@ -476,11 +542,7 @@ public class Dancer : MonoBehaviour
                 (GradientColorKey[] followRightArmColorKeys, GradientAlphaKey[] followRightArmAlphaKeys) = IntensityGradient(
                     frameNumber, beatIntensity, smplFollowRightArm, Array.Empty<int>() );
 
-                followRightArmRenderer.colorGradient = new Gradient
-                {
-                    colorKeys = followRightArmColorKeys,
-                    alphaKeys = followRightArmAlphaKeys
-                };
+                followRightArmRenderer.colorGradient = LineGradient(followRightArmColorKeys, followRightArmAlphaKeys);
                 
                 break;
             }
@@ -528,11 +590,7 @@ public class Dancer : MonoBehaviour
                     smplLeadLeftLeg,
                     new[] {0});
 
-                leadLeftLegRenderer.colorGradient = new Gradient
-                {
-                    colorKeys = leadLeftLegColorKeys,
-                    alphaKeys = leadLeftLegAlphaKeys
-                };
+                leadLeftLegRenderer.colorGradient = LineGradient(leadLeftLegColorKeys, leadLeftLegAlphaKeys);
 
                 // RIGHT LEG
                 Vector3[] rightLegArray = new Vector3[smplLeadRightLeg.Length];
@@ -559,11 +617,7 @@ public class Dancer : MonoBehaviour
                     smplLeadRightLeg,
                     new[] {0});
 
-                leadRightLegRenderer.colorGradient = new Gradient
-                {
-                    colorKeys = leadRightLegColorKeys,
-                    alphaKeys = leadRightLegAlphaKeys
-                };
+                leadRightLegRenderer.colorGradient = LineGradient(leadRightLegColorKeys, leadRightLegAlphaKeys);
 
                 (GradientColorKey[] leadArmsColorKeys, GradientAlphaKey[] leadArmsAlphaKeys) = IntensityGradient(
                     frameNumber,
@@ -571,11 +625,7 @@ public class Dancer : MonoBehaviour
                     smplLeadArms,
                     new[] {-1});
 
-                leadArmsRenderer.colorGradient = new Gradient
-                {
-                    colorKeys = leadArmsColorKeys,
-                    alphaKeys = leadArmsAlphaKeys
-                };
+                leadArmsRenderer.colorGradient = LineGradient(leadArmsColorKeys, leadArmsAlphaKeys);
 
                 break;
             default:

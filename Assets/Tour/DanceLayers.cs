@@ -25,7 +25,7 @@ public class DanceLayers : MonoBehaviour
     public static DanceLayers Instance { get; private set; }
 
     // user layer flags (hm_layer); view states override them while active
-    static bool counterbalanceOn = true, tracesOn = true, graphOn, neckOn = true, axisOn = true, floorcraftOn = true, balanceOn = true, movesOn = true;
+    static bool counterbalanceOn = true, tracesOn = true, graphOn, neckOn = true, axisOn = true, floorcraftOn = true, balanceOn = true, movesOn = true, contactsOn = true;
     public bool? CounterbalanceOverride, TracesOverride, NeckOverride, AxisOverride, FloorcraftOverride;
     public DanceGraphLayer.Mode? GraphOverride;
     public bool? MovesOverride, InsetOverride; // the tour: move caption throughout, graph inset outside the graph states
@@ -99,7 +99,7 @@ public class DanceLayers : MonoBehaviour
 
     // ---------------------------------------------------------------- layer switches (hm_layer)
 
-    public static bool Handles(string layer) => layer is "counterbalance" or "traces" or "graph" or "neck" or "axis" or "floorcraft" or "balance" or "moves";
+    public static bool Handles(string layer) => layer is "counterbalance" or "traces" or "graph" or "neck" or "axis" or "floorcraft" or "balance" or "moves" or "contacts";
 
     /// <summary>hm_layer counterbalance | traces | neck | graph | axis | floorcraft | balance (balance: physics mode only)</summary>
     public static void SetLayer(string layer, bool visible)
@@ -114,6 +114,7 @@ public class DanceLayers : MonoBehaviour
             case "floorcraft": floorcraftOn = visible; break;
             case "balance": balanceOn = visible; break;
             case "moves": movesOn = visible; break;
+            case "contacts": contactsOn = visible; break; // the hand-contact lights (ContactDetection orbs)
             default: throw new ArgumentException($"unknown dance layer '{layer}'");
         }
 
@@ -131,19 +132,26 @@ public class DanceLayers : MonoBehaviour
         "floorcraft" => floorcraftOn,
         "balance" => balanceOn,
         "moves" => movesOn,
+        "contacts" => contactsOn,
         _ => false
     };
 
     public void ApplyVisibility()
     {
+        // the hand-contact lights: the layer flag here, the view state's fade (the full-size dance's) in DanceTour / FilmDirector
+        ContactDetection contacts = hm != null ? hm.GetComponent<ContactDetection>() : null;
+        if (contacts != null) contacts.SetOrbsVisible(contactsOn);
         if (counterbalance != null)
         {
             counterbalance.SetVisible(CounterbalanceOverride ?? counterbalanceOn);
             counterbalance.SetShowAllPivots(ShowAllPivots);
         }
 
-        if (traces != null) traces.SetVisible(TracesOverride ?? tracesOn);
-        if (neckAxis != null) neckAxis.SetVisible(NeckOverride ?? neckOn);
+        // roleHidden (RoleHiddenSpans): her traces and neck axis belong to her; the others are handed her / his alpha in SyncRoleHidden.
+        // The neck axis fades with her alpha; her traces (line renderers) switch at half alpha.
+        float followAlpha = hm != null ? hm.RoleAlpha(Role.Follow) : 1f;
+        if (traces != null) traces.SetVisible((TracesOverride ?? tracesOn) && followAlpha >= 0.5f);
+        if (neckAxis != null) neckAxis.SetVisible((NeckOverride ?? neckOn) && followAlpha > RoleHiddenSpans.HiddenBelow);
         if (floorCraft != null) floorCraft.SetVisible(AxisOverride ?? axisOn, FloorcraftOverride ?? floorcraftOn);
         if (balance != null) balance.SetVisible(balanceOn && hm != null && hm.SkeletonMode == SkeletonStyle.Mode.Physics);
         if (graph != null)
@@ -182,6 +190,7 @@ public class DanceLayers : MonoBehaviour
         if (!ReferenceEquals(hm.Manifest, loaded) || !ReferenceEquals(hm.LeadDancer, loadedLead)) Rebuild();
         int frame = hm.CurrentFrame;
         if (frame < 0) return;
+        SyncRoleHidden();
         Frame = frame;
         FrameTime = hm.Timeline.AudioTimeOf(frame);
         // directed playback (the film's slow motion): the poses blend between frames, so the overlays that sample their
@@ -236,8 +245,32 @@ public class DanceLayers : MonoBehaviour
         }
     }
 
+    int hiddenKey = -1, followGoneKey = -1;
+
+    /// <summary>roleHidden (RoleHiddenSpans): hand the roles' alphas (0 hidden .. 1 there) to the overlays derived from their poses - the
+    /// leader's floor-craft T and record, the couple's counterbalance dot (the lower of the two), the balance axes (his, hers and the
+    /// couple's) and the follower's traces and neck axis. Only when an alpha or the spans changed.</summary>
+    void SyncRoleHidden()
+    {
+        if (hm.RoleHiddenVersion == hiddenKey) return;
+        hiddenKey = hm.RoleHiddenVersion;
+        float lead = hm.RoleAlpha(Role.Lead), follow = hm.RoleAlpha(Role.Follow);
+        if (counterbalance != null) counterbalance.SetRoleAlpha(Mathf.Min(lead, follow));
+        if (floorCraft != null) floorCraft.SetRoleAlpha(lead);
+        if (balance != null) balance.SetRoleAlpha(lead, follow);
+        if (neckAxis != null) neckAxis.SetRoleAlpha(follow);
+        int key = (follow >= 0.5f ? 1 : 0) | (follow > RoleHiddenSpans.HiddenBelow ? 2 : 0);
+        if (key != followGoneKey)
+        {
+            followGoneKey = key;
+            ApplyVisibility(); // her traces / neck axis come and go
+        }
+    }
+
     void Rebuild()
     {
+        hiddenKey = -1;
+        followGoneKey = -1;
         loaded = hm.Manifest;
         loadedLead = hm.LeadDancer;
         warnings.Clear();
@@ -433,10 +466,21 @@ public class DanceLayers : MonoBehaviour
             flags["floorcraft"] = floorcraftOn;
             flags["balance"] = balanceOn;
             flags["moves"] = movesOn;
+            flags["contacts"] = contactsOn;
         }
 
         HeadMovement head = HeadMovement.Instance;
         state["origin"] = DanceOrigin.State(head?.LeadDancer, head?.FollowDancer, head != null ? head.CurrentFrame : -1);
+        ContactDetection contactLights = head != null ? head.GetComponent<ContactDetection>() : null;
+        if (contactLights != null)
+        {
+            state["contacts"] = new Dictionary<string, object>
+            {
+                ["layer"] = contactLights.OrbsOn, ["fade"] = contactLights.OrbFade, ["allowed"] = contactLights.OrbsAllowed,
+                ["orbsShown"] = contactLights.OrbsShown
+            };
+        }
+
         if (layers == null) return;
         layers.Refresh();
         state["counterbalance"] = layers.counterbalance != null
