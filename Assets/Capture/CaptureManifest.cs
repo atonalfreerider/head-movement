@@ -66,6 +66,11 @@ public class CaptureManifest
     /// dancecap export_unity from takes/&lt;take&gt;.toml [export.role_hidden]; see RoleHiddenSpans.</summary>
     public Newtonsoft.Json.Linq.JObject role_hidden;
 
+    /// <summary>props: head-worn props per ROLE, [ { "role": "follow", "kind": "headset", "side": "left", ...parameters } ] (HeadPropSpec): built
+    /// on the avatar's head when the capture loads (Avatar/HeadProps.cs, VIEWER_SPEC 3.2b). Written by dancecap export_unity from
+    /// takes/&lt;take&gt;.toml [dancers.&lt;role&gt;.props.&lt;kind&gt;]; absent = no props.</summary>
+    public Newtonsoft.Json.Linq.JArray props;
+
     [JsonIgnore] public string Folder;
 
     public string DisplayName => Path.GetFileName(Folder);
