@@ -43,7 +43,7 @@ namespace HmVr
             root = gameObject;
             DontDestroyOnLoad(root);
             Input = root.AddComponent<VrInput>();
-            Input.Source = xr ? new XrInputSource(rig.transform, rig.Head) : rig.Sim;
+            Input.Source = xr ? new XrInputSource(rig.TrackingSpace, rig.Head) : rig.Sim;
             Pointers = root.AddComponent<VrPointers>();
             Locomotion = root.AddComponent<VrLocomotion>();
             Hands = root.AddComponent<VrHandVisuals>();

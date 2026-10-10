@@ -18,6 +18,7 @@ namespace HmVr
         public static VrRig Instance { get; private set; }
 
         public Camera Cam { get; private set; }
+        public Transform TrackingSpace { get; private set; }
         public Transform Head => Cam.transform;
         public bool Xr { get; private set; }
         public SimInputSource Sim { get; private set; }
@@ -27,12 +28,14 @@ namespace HmVr
         public float TotalTurnDeg { get; private set; }
         public bool Blinking { get; private set; }
         public string HeadStatus { get; private set; } = "";
+        public bool FloorTracked => floorTracked;
 
         Material fadeMat;
         MeshRenderer fadeRenderer;
         Coroutine blink;
         readonly System.Collections.Generic.List<XRInputSubsystem> inputSubsystems = new();
         bool originModeSet;
+        bool floorTracked;
         float nextOriginTry;
         // the head in tracking space, the last good reading
         Vector3 lastLocalPos = new(0f, 1.6f, 0f);
@@ -50,8 +53,11 @@ namespace HmVr
         {
             Instance = this;
             Xr = xr;
+            // the tracked space (head and hands live in it): at the rig's floor origin, raised by the eye height when the runtime tracks from the eyes (no floor)
+            TrackingSpace = new GameObject("VR Tracking Space").transform;
+            TrackingSpace.SetParent(transform, false);
             GameObject head = new("VR Head");
-            head.transform.SetParent(transform, false);
+            head.transform.SetParent(TrackingSpace, false);
             head.transform.localPosition = new Vector3(0f, 1.6f, 0f);
             head.tag = "MainCamera";
             Cam = head.AddComponent<Camera>();
@@ -124,10 +130,16 @@ namespace HmVr
             nextOriginTry = Time.unscaledTime + 1f;
             inputSubsystems.Clear();
             SubsystemManager.GetSubsystems(inputSubsystems);
+            bool floor = false;
             foreach (XRInputSubsystem s in inputSubsystems)
             {
                 if (s.TrySetTrackingOriginMode(TrackingOriginModeFlags.Floor)) originModeSet = true;
+                floor |= (s.GetTrackingOriginMode() & TrackingOriginModeFlags.Floor) != 0;
             }
+
+            // no floor from the runtime: the origin is the eyes' start pose, so the user stands 1.6 m above the rig's floor
+            if (originModeSet || inputSubsystems.Count > 0) TrackingSpace.localPosition = floor ? Vector3.zero : new Vector3(0f, ViewpointMath.EyeHeight, 0f);
+            floorTracked = floor;
         }
 
         void ReadHead()
