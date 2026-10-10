@@ -42,7 +42,7 @@ public class LibraryEntry
         WhyNot = null;
         if (!AvailableFlag) WhyNot = "not released yet";
         else if (string.IsNullOrEmpty(Capture)) WhyNot = "no capture named";
-        else if (!File.Exists(Path.Combine(Application.streamingAssetsPath, Capture, "capture.json"))) WhyNot = $"capture {Capture} is not exported yet";
+        else if (!File.Exists(Path.Combine(HmData.Root, Capture, "capture.json"))) WhyNot = $"capture {Capture} is not exported yet";
         else if (DirectionPath == null || !File.Exists(DirectionPath)) WhyNot = "the film is not built yet";
         else if (!HasMix(DirectionPath)) WhyNot = "the film's soundtrack is not mixed yet";
         Ready = WhyNot == null;
@@ -102,7 +102,7 @@ public class LibraryData
     public int Version { get; private set; }
     public readonly List<LibraryEntry> Films = new();
 
-    public static string Dir => System.IO.Path.Combine(Application.streamingAssetsPath, FolderName);
+    public static string Dir => System.IO.Path.Combine(HmData.Root, FolderName);
     public static string FilePath => System.IO.Path.Combine(Dir, "library.json");
     public static string ProjectRoot => Directory.GetParent(Application.dataPath)!.FullName;
     public static string WorkspaceRoot => Directory.GetParent(ProjectRoot)!.FullName;
@@ -228,7 +228,7 @@ public class LibraryData
         if (!Exists) return null;
         DateTime stamp = StampOf();
         if (pickerCache == null || pickerCache.Stamp != stamp) pickerCache = Load();
-        return pickerCache.Films.Where(f => !string.IsNullOrEmpty(f.Capture) && Directory.Exists(System.IO.Path.Combine(Application.streamingAssetsPath, f.Capture)))
+        return pickerCache.Films.Where(f => !string.IsNullOrEmpty(f.Capture) && Directory.Exists(System.IO.Path.Combine(HmData.Root, f.Capture)))
             .Select(f => f.Capture).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 }

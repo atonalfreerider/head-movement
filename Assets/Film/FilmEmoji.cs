@@ -46,7 +46,7 @@ public static class FilmEmoji
 
     static Sprite FromFile(string key, string filmDir)
     {
-        foreach (string dir in new[] { string.IsNullOrEmpty(filmDir) ? null : Path.Combine(filmDir, "emoji"), Path.Combine(Application.streamingAssetsPath, "emoji") })
+        foreach (string dir in new[] { string.IsNullOrEmpty(filmDir) ? null : Path.Combine(filmDir, "emoji"), Path.Combine(HmData.Root, "emoji") })
         {
             if (dir == null) continue;
             string path = Path.Combine(dir, key + ".png");

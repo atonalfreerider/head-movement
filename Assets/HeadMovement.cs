@@ -12,7 +12,7 @@ using VRTKLite.Controllers;
 [RequireComponent(typeof(ContactDetection))]
 public class HeadMovement : MonoBehaviour
 {
-    static readonly string assetPath = Application.streamingAssetsPath;
+    static readonly string assetPath = HmData.Root;
 
     public static HeadMovement Instance;
 
