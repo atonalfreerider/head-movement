@@ -136,8 +136,10 @@ moves it to the new time at once (held while paused or scrubbing), and the playe
 `Tools/playtest_library.ps1` checks all of it.
 
 All actions are plain public methods (`FilmLibrary.Play / Back`, `FilmPlaybackBar.SeekTo / TogglePlay / NextChapter / PreviousChapter /
-CycleRate`, `FilmDirector.Seek / SetPaused / BeginScrub / EndScrub / Rate`); a later VR panel drives the same calls. Nothing in the
-screens is XR specific yet: they are desktop and touch screens, drawn in screen space.
+CycleRate`, `FilmDirector.Seek / SetPaused / BeginScrub / EndScrub / Rate`); the VR menu and hand panel (Assets/VR, VIEWER_SPEC 9.5, QUEST.md) drive the
+same calls and read the same `library.json`. The screens described here are the desktop and touch screens, drawn in screen space; in VR
+mode they are kept out of the picture and the world-space menu takes their place (one card per entry, Processing disabled, Back to library
+stops the film cleanly).
 
 ## 4. Developer interface
 

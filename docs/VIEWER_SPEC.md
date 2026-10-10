@@ -823,8 +823,9 @@ The data contract and the screens are specified in FILM_LIBRARY.md; this is the 
   the text) so nothing is cramped; a portrait window stacks the cards in rows.
 - **Never in a recording.** The film recorder starts a film without the bar and the library screen; both also stay out of the picture
   whenever the Unity Recorder is frame-locking the game.
-- **Desktop only for now.** The screens are screen-space overlays driven by the mouse, a touch screen and the keyboard; every action is
-  a public method for a later VR panel (section 9.3), which does not exist yet.
+- **Desktop and VR.** The flat screens are screen-space overlays driven by the mouse, a touch screen and the keyboard. The VR mode
+  (section 9.5) has its own world-space menu and hand panel over the same library, the same film director and the same exact-seek
+  machinery (`FilmPlaybackBar`); a small **VR** / **Desktop mode** button (F9) in the top-right corner of the flat screen switches between them.
 
 ---
 
@@ -892,6 +893,58 @@ perfectly smooth, and frames render at full quality regardless of real-time spee
 - Wrist/hand menu (palm-up) or controller panel: library, view states, speed, transport, layer toggles,
   re-anchor.
 - Voice/natural-language commands through the existing TypeSafe router where available.
+
+### 9.5 Immersive lesson VR: menu, hand panel, POV only (implemented 2026-10-10)
+
+Asked for on 2026-10-10 (a Quest 2 was attached): "a VR friendly UI menu inside of the app to experience each of the lessons. there will
+never be directed camera motion in VR, only POV, however the user should be able to seek chapters and run slow motion with hand input
+only". This is the fully immersive mode (the lesson plays life-size in the capture's metric room, nothing of the user's own room shows);
+the passthrough placement of 9.1 stays a later option. The code is `Assets/VR` (assembly `HmVr.Core` for the pure input logic, the rest
+in the viewer assembly), the setup and the commands are in docs/QUEST.md.
+
+**Mode.** VR mode starts in desktop mode and enters VR when an OpenXR runtime is registered (a Quest through Link / Air Link / Virtual
+Desktop on a PC, always on Android), unless told otherwise (`-hmvr off | on | sim | auto`, environment `HM_VR`); XR is started by the
+viewer, on demand (XR Plug-in Management does not initialise at start on Windows; on Android the headset app is VR from its first frame), so a PC without a headset gets no XR error in the Unity console (the OpenXR loader itself writes a few "no runtime" lines to the Player log at start). F9 and the
+button in the flat screen's corner switch modes at any time; leaving VR stops a running lesson and shows the flat library. A recording
+(Unity Recorder, `hm_film record`) never enters VR and never contains a VR object.
+
+**POV only.** In VR the user's head is the only camera. The film's directed camera (orbit, tour, fly-to, close-ups, the phones' POV
+shots) never moves, re-lenses or parks any camera (`FilmDirector.HeadIsCamera`), the phones' full-frame video is not drawn, and no
+screen overlay reaches the headset or its mirror. World objects of the film stay: the floor craft, the T axis, footprints, physics and
+counterbalance overlays, the dance graph, the beat layer, the room mesh when the capture has one, the phones' frustum glyphs. The
+soundtrack plays normally. Captions of a lesson that has a transcript are a world-space panel that glides to the user's gaze when they
+look away from it (never head-locked), with the spoken word in yellow and a speaker tag; **CC** cycles low / high / off.
+
+**Input is hands only** (XR Hands over OpenXR hand tracking; controllers are ignored). The recognisers are the same on a headset and in
+the simulator: a *pinch* (thumb tip and index tip, hysteresis 2.4 / 4.0 cm scaled by hand size, 30 / 50 ms debounce), a *poke* (the index
+fingertip reaching a panel from the front, only when the finger points into it), a *ray* (shoulder through the index knuckle, One Euro
+filtered; it does not swing when the fingers close), a *palm-up* (palm toward the sky or the face, raised, in view; shown after 0.18 s,
+kept 0.45 s). Widgets are hit-tested analytically on their panels (no colliders): poke OR far ray plus pinch, a hover highlight, a click
+sound; a click is one press per widget per quarter second.
+
+**Menu.** One card per entry of `library.json` on an arc 0.78 m from the user (card 32 x 52 cm: poster, title, subtitle, length, chapter
+count; Play button 29 x 5.8 cm; 3 cm between cards), a footer (Resume and Back to library while a lesson is open, Pointing: left /
+right hand, Exit VR) and a loading panel. A film whose files are missing shows **Processing** with a disabled Play. Until a lesson
+plays, the headset sees only the menu in an empty dark space. The menu follows the gaze when the user turns away from it by more than 62
+degrees.
+
+**Hand panel** (non-dominant hand, raised palm-up; never head-locked; a **Pin** button leaves it hanging in the air): the chapter's name
+and the time, a pinch-drag **scrubber** with chapter ticks that the drag sticks to, previous / next chapter, -5 s / +5 s, play / pause,
+**slow motion 1x, 0.5x, 0.25x, 0.1x**, **Chapters** (a paged list to poke), **Views** (the viewpoint presets and two 45-degree turns), CC,
+Library. It drives `FilmPlaybackBar` and the director like the flat bar, so a seek re-syncs the soundtrack, captions and layers exactly,
+and slow motion is the film clock's rate: captions, 3D layers and the soundtrack (pitched with the rate, as the flat speed button)
+stay together. A small **menu button on the back of the non-dominant wrist** opens the menu over the lesson (it pauses behind it).
+
+**Locomotion** (no smooth motion): *teleport* = pinch with the dominant hand where no panel is, hold to see the arc and the landing disc,
+open to go (a blink hides the jump; at most 9 m from the user, inside a 14 m disc around the dance); *snap turn* = pinch with the other
+hand and move it sideways, 45 degrees per flick. **Viewpoints:** `start` (a comfort vantage about 3 m from the dancers at the floor
+edge, facing them: the lesson's own data when it has some - library.json entry `"vr": {"start": {"x", "z", "yawDeg"}}` or capture.json
+`"vr_start"` - else where the class stood (a filming phone 2-6 m from the dancers), else 3 m on the floor's front), `front`, `side`,
+`overhead` (an elevated platform), and **each filming phone's real position, height and heading** from the camera tracks.
+
+**Rendering.** No post effects on the head camera (no bloom, no depth of field), no V-sync fight with the runtime, fixed foveation where
+the display supports it, single-pass instanced stereo (every viewer shader is stereo-safe); the VR panels, hands and rays sort over the
+translucent avatars. A Quest standalone quality tier is specified in docs/QUEST.md.
 
 ### 9.4 Quest 3 budgets (performance tier "Quest")
 - 72 Hz minimum (90 Hz target), single-pass instanced stereo.
@@ -1084,6 +1137,13 @@ pipeline (MOVES.md).
   it; Space, Left / Right, `[` / `]`, Home / End act on the film; Back and Esc return to the library with no film overlay left; a film
   recording contains neither the bar nor the library screen; no console errors. Cards never overlap and each Play button lies inside its
   card (three cards: landscape and portrait); for a film without narration the beat counter is on exactly where the direction's layers say.
+- VR mode (Tools/playtest_vr.ps1, section 9.5; simulated hands, no headset): a card per library film with 5.8 cm Play buttons and at least
+  3 cm between cards, Processing disabled; a lesson picked by pointing and pinching; the head camera is the only camera and the film moves
+  it by 0 m / 0 degrees over 1.5 s of film, with no flat overlay in the picture; the start vantage lies 2 to 5.5 m from the dancers, facing
+  them; palm-up shows the hand panel; play / pause, +5 s / -5 s, chapters, slow motion 0.25x and 0.1x (clock rate, soundtrack pitch and sync),
+  the pinch-drag scrubber (holds the film, audio re-synced on release), the chapter list, every viewpoint (a phone lands at its real position),
+  teleport, the 45 degree snap turn, the wrist menu button, Back to library (film, bar and soundtrack gone), Exit VR (the desktop camera and the
+  flat library are back); the EditMode tests of HmVr.Core.Tests pass; the recorder path is unchanged (a recorded excerpt contains no VR object).
 
 ---
 
@@ -1107,6 +1167,11 @@ Decided by the user (2026-10-06):
 - Graph chase camera zoomed far out, may be slightly inside the graph (§5.5).
 - Data siloed by level (Professional / Intermediate / Novice; only Professional so far); categories Demo,
   Lesson, Jack and Jill (§2.2).
+
+Decided by the user (2026-10-10):
+- VR lessons: "there will never be directed camera motion in VR, only POV"; the user seeks chapters and runs slow motion "with hand input
+  only" (no controllers, no keyboard, no mouse); a VR menu inside the app to experience each lesson (section 9.5). First as PC VR through
+  the Quest's OpenXR runtime (Link / Air Link), then a Quest 2 standalone build (docs/QUEST.md); the Quest 2 is attached for testing.
 
 Defaults (change any of these):
 - Avatar opacity 0.35 (hm_opacity; Overhead ×2/3, Geometry ×1/2, Physics ×1/3); floor alpha 0.6 (0.25 in
