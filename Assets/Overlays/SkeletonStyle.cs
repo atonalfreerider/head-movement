@@ -627,8 +627,12 @@ public class SkeletonLegend : MonoBehaviour
     /// HUD row); negative = the viewer's own place</summary>
     public static float TopOverride = -1f;
 
+    /// <summary>size factor of the legend box (1 = the viewer's 300 x 74 px; the film director enlarges it in 9:16, where the 11 px text of
+    /// a 1080-wide frame cannot be read on a phone). The box grows to the left and down from its top-right corner.</summary>
+    public static float Scale = 1f;
+
     /// <summary>legend rectangle (playtests: no overlap with the tour label)</summary>
-    public static Rect Area => new(Screen.width - 314, TopOffset(), 300, 74);
+    public static Rect Area => new(Screen.width - 14 - 300 * Scale, TopOffset(), 300 * Scale, 74 * Scale);
 
     void OnGUI()
     {
@@ -648,6 +652,13 @@ public class SkeletonLegend : MonoBehaviour
         // below the tour title (DanceHud: top right, 26 px at 1080 p from 20 px down) so it never covers "from motion"
         float w = 300, h = 74;
         Rect r = new(Screen.width - w - 14, TopOffset(), w, h);
+        Matrix4x4 oldMatrix = GUI.matrix;
+        if (Scale > 1.001f)
+        {
+            Vector3 pivot = new(r.xMax, r.y, 0f);
+            GUI.matrix = Matrix4x4.TRS(pivot, Quaternion.identity, new Vector3(Scale, Scale, 1f)) * Matrix4x4.TRS(-pivot, Quaternion.identity, Vector3.one);
+        }
+
         GUI.Box(r, GUIContent.none);
         GUI.Label(new Rect(r.x + 8, r.y + 4, w - 16, 20), "Skeleton load - ESTIMATED from motion");
         GUI.DrawTexture(new Rect(r.x + 8, r.y + 26, w - 16, 12), bar);
@@ -655,5 +666,6 @@ public class SkeletonLegend : MonoBehaviour
         GUI.Label(new Rect(r.x + w * 0.5f - 24, r.y + 40, 70, 20), "neutral");
         GUI.Label(new Rect(r.x + w - 98, r.y + 40, 90, 20), "compression");
         GUI.Label(new Rect(r.x + 8, r.y + 55, w - 16, 20), "legs: stance weight share  arms: partner hold");
+        GUI.matrix = oldMatrix;
     }
 }

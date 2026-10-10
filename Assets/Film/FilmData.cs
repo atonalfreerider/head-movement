@@ -232,7 +232,7 @@ public class FilmSegment
     public string Id, Mode, ViewState, Audio, Status, Notes;
     public float F0, F1, D0, D1, S0 = 1f, S1 = 1f, HoldS;
     public bool Replay;
-    public JObject Json, Camera, Layers, TitleJson;
+    public JObject Json, Camera, Layers, TitleJson, Card;      // Card: "chapter_card" (ChapterCards)
     public readonly List<string> Narration = new();
 
     public float Duration => F1 - F0;
@@ -246,7 +246,8 @@ public class FilmSegment
             Index = index, Json = j, Id = j.Value<string>("id") ?? $"seg{index}", Camera = j["camera"] as JObject ?? new JObject(),
             Layers = j["layers"] as JObject ?? new JObject(), ViewState = j.Value<string>("view_state") ?? "orbit",
             Audio = j.Value<string>("audio") ?? "locked", Status = j.Value<string>("status"), Notes = j.Value<string>("notes"),
-            Replay = j.Value<bool?>("replay") ?? false, HoldS = FilmDirection.F(j["hold_s"], 0f), TitleJson = j["title"] as JObject
+            Replay = j.Value<bool?>("replay") ?? false, HoldS = FilmDirection.F(j["hold_s"], 0f), TitleJson = j["title"] as JObject,
+            Card = j["chapter_card"] as JObject
         };
         s.Mode = s.Camera.Value<string>("mode") ?? "orbit";
         if (j["film"] is JArray f && f.Count == 2)
@@ -412,11 +413,16 @@ public class FilmNarration
         public string Text;
         public float Start, End;
         public int Line;
+        public string Kind, Emoji;      // Kind "emoji": drawn from an image (FilmEmoji), Emoji = the code point in hex
+        public Color? Tint;             // the word's colour (the speaker's key colour); null = the caption style's
+        public bool IsEmoji => string.Equals(Kind, "emoji", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(Emoji);
     }
 
     public class Chunk
     {
         public string LineId;
+        public string Speaker;          // a caption's speaker (name tag above the block), "" = none
+        public Color? Tint;             // the speaker's key colour
         public float Show, Hide;
         public string[] Lines;
         public Word[] Words;
@@ -482,6 +488,7 @@ public class FilmNarration
                 foreach (JToken c in arr)
                 {
                     string[] ls = c["lines"] is JArray la ? la.Select(x => x.ToString()).ToArray() : Array.Empty<string>();
+                    Color? chunkTint = Tint(c.Value<string>("color"));
                     List<Word> words = new();
                     if (c["words"] is JArray wa)
                     {
@@ -489,7 +496,8 @@ public class FilmNarration
                         {
                             words.Add(new Word
                             {
-                                Text = w.Value<string>("text") ?? "", Start = FilmDirection.F(w["start"], 0f), End = FilmDirection.F(w["end"], 0f)
+                                Text = w.Value<string>("text") ?? "", Start = FilmDirection.F(w["start"], 0f), End = FilmDirection.F(w["end"], 0f),
+                                Kind = w.Value<string>("kind"), Emoji = w.Value<string>("emoji"), Tint = Tint(w.Value<string>("color")) ?? chunkTint
                             });
                         }
                     }
@@ -498,7 +506,7 @@ public class FilmNarration
                     list.Add(new Chunk
                     {
                         LineId = c.Value<string>("line"), Show = FilmDirection.F(c["show"], 0f), Hide = FilmDirection.F(c["hide"], 0f),
-                        Lines = ls, Words = words.ToArray()
+                        Lines = ls, Words = words.ToArray(), Speaker = c.Value<string>("speaker") ?? "", Tint = chunkTint
                     });
                 }
 
@@ -522,6 +530,14 @@ public class FilmNarration
 
         int last = Mathf.Max(0, lines.Length - 1);
         for (; w < words.Count; w++) words[w].Line = last;
+    }
+
+    /// <summary>a "#RRGGBB" / "#RRGGBBAA" colour string, null when absent or unreadable</summary>
+    static Color? Tint(string hex)
+    {
+        if (string.IsNullOrEmpty(hex)) return null;
+        if (!hex.StartsWith("#")) hex = "#" + hex;
+        return ColorUtility.TryParseHtmlString(hex, out Color c) ? c : null;
     }
 
     public static string Fmt(float v) => v.ToString("0.###", CultureInfo.InvariantCulture);

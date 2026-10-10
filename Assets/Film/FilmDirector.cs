@@ -88,6 +88,7 @@ public class FilmDirector : MonoBehaviour
     /// <summary>layer values of one segment (view-state defaults + the segment's "layers")</summary>
     public class SegLayers
     {
+        public bool AvatarsFadeWithVideo; // layer "avatars_fade_with_video": the 3D dancers fade out as the phone's video fades in (the class recap's POV shots)
         public float Avatar = 0.35f, Skeleton = 1f, Graph, Glyphs, Contacts = 1f; // Contacts: the hand-contact lights (layer "hand_contacts")
         public bool Physics, Floor, Timing, Tension, Counterbalance, Traces, Neck, Axis, Record, AllPivots, Moves = true, Inset, BeatCounter;
         public bool Grid = true;                                        // the floor's cross grid + plane (layer "grid")
@@ -135,6 +136,14 @@ public class FilmDirector : MonoBehaviour
     public string DirectionPath => directionPath;
     public string MixPath => direction != null ? Path.Combine(direction.Dir, "audio", direction.Name + "_mix.wav") : null;
     public readonly List<string> Warnings = new();
+
+    /// <summary>playback rate of the film clock (the viewer's playback bar, speed button); 1 = real time. The recorder never changes it.</summary>
+    public float Rate { get; set; } = 1f;
+
+    /// <summary>true between BeginScrub and EndScrub: the playback bar's scrubber is being dragged, time and audio are held</summary>
+    public bool Scrubbing { get; private set; }
+
+    bool scrubWasPaused;
 
     bool Loaded => hm != null && hm.AudioLoaded && hm.Timeline != null && hm.LeadDancer != null && hm.FollowDancer != null && CaptureMatches();
 
@@ -195,6 +204,7 @@ public class FilmDirector : MonoBehaviour
         if (fd == null) return null;
         fd.playSoundtrack = true;
         fd.soundtrackStarted = false;
+        FilmPlaybackBar.Attach(fd); // the viewer's playback bar: desktop sessions only (the recorder starts films through Prepare / Begin)
         return fd;
     }
 
@@ -274,13 +284,15 @@ public class FilmDirector : MonoBehaviour
 
     // ------------------------------------------------------------------ transport (CLI / preview)
 
-    /// <summary>show film time t (keeps running or paused as it was)</summary>
+    /// <summary>show film time t (keeps running or paused as it was). Everything on screen is a pure function of the film time
+    /// (the segment, the dance time, camera, layers, role fades, captions, call-outs, the phones' frames), so only the pre-mixed
+    /// soundtrack needs telling: it is moved to t at once (held, when the film is paused).</summary>
     public void Seek(float t)
     {
-        filmTime = Mathf.Clamp(t, 0f, FilmDuration);
+        filmTime = Mathf.Clamp(float.IsFinite(t) ? t : 0f, 0f, FilmDuration);
         finished = false;
         justBegan = true; // the next frame shows exactly t
-        if (playSoundtrack && FilmSoundtrack.Current != null && !Paused) soundtrackStarted = false;
+        if (playSoundtrack && FilmSoundtrack.Current != null) FilmSoundtrack.Current.SeekTo(filmTime);
     }
 
     public void SetPaused(bool paused)
@@ -288,8 +300,38 @@ public class FilmDirector : MonoBehaviour
         if (Paused == paused) return;
         Paused = paused;
         if (!playSoundtrack) return;
-        if (paused) FilmSoundtrack.StopAll();
-        soundtrackStarted = false;
+        FilmSoundtrack st = FilmSoundtrack.Current;
+        if (st == null)
+        {
+            soundtrackStarted = false; // not started yet (still loading): Update starts it at the clock's time
+            return;
+        }
+
+        if (paused)
+        {
+            st.SetHold(true);
+        }
+        else
+        {
+            st.SeekTo(filmTime);
+            st.SetHold(false);
+        }
+    }
+
+    /// <summary>the scrubber is grabbed: the film holds (audio too) and follows Seek calls; EndScrub gives it back as it was</summary>
+    public void BeginScrub()
+    {
+        if (Scrubbing) return;
+        Scrubbing = true;
+        scrubWasPaused = Paused;
+        SetPaused(true);
+    }
+
+    public void EndScrub()
+    {
+        if (!Scrubbing) return;
+        Scrubbing = false;
+        if (!scrubWasPaused) SetPaused(false);
     }
 
     // ------------------------------------------------------------------ per frame
@@ -324,7 +366,7 @@ public class FilmDirector : MonoBehaviour
         if (running && !Paused)
         {
             if (justBegan) justBegan = false;
-            else filmTime += Time.deltaTime;
+            else filmTime += Time.deltaTime * Rate;
         }
         else if (justBegan)
         {
@@ -335,12 +377,14 @@ public class FilmDirector : MonoBehaviour
         Apply(filmTime);
         if (running && filmTime >= FilmDuration) finished = true;
 
+        if (playSoundtrack && FilmSoundtrack.Current != null && !Mathf.Approximately(FilmSoundtrack.Current.Pitch, Rate)) FilmSoundtrack.Current.Pitch = Rate;
         if (playSoundtrack && running && !Paused && !soundtrackStarted)
         {
             string mix = MixPath;
             if (mix != null && File.Exists(mix))
             {
-                FilmSoundtrack.Play(mix, () => FilmTime);
+                // 25 fps frames and 20 ms audio buffers make the player's position jitter by about 40 ms: re-sync at 80 ms
+                FilmSoundtrack.Play(mix, () => FilmTime).ResyncThreshold = 0.08f;
             }
             else
             {
@@ -411,6 +455,19 @@ public class FilmDirector : MonoBehaviour
             videoShown = false;
         }
 
+        // a phone shot whose layers say so: the 3D dancers are there while the camera flies to the phone and fade out as its video fades in (a cut
+        // to the phone has them gone at once); without the video (an outage) they stay, so the shot is never empty
+        if (segLayers[si].AvatarsFadeWithVideo)
+        {
+            float fade = pov != null && sources.VideoShowing ? Mathf.Clamp01(filmCamera.PovVideoOpacity) : 0f;
+            float a = LayerValue(film, si, x => x.Avatar) * Mathf.Clamp01(LayerValue(film, si, x => x.Skeleton)) * (1f - fade);
+            if (Mathf.Abs(a - avatarNow) > 1e-3f)
+            {
+                avatarNow = a;
+                hm.SetDirectorAvatarOpacity(a);
+            }
+        }
+
         appliedFrames++;
     }
 
@@ -430,6 +487,7 @@ public class FilmDirector : MonoBehaviour
             _ => 0f
         };
         l.Avatar = s.LayerFloat("avatars", HeadMovement.DefaultAvatarOpacity * factor);
+        l.AvatarsFadeWithVideo = s.LayerBool("avatars_fade_with_video", false);
         l.Skeleton = Mathf.Clamp01(s.LayerFloat("dance_full_size", graphView ? 0f : 1f));
         l.Physics = s.LayerString("skeleton_mode", "") == "physics" || s.LayerBool("physics", view == "physics");
         string footprints = s.LayerString("footprints", null);
@@ -654,7 +712,7 @@ public class FilmDirector : MonoBehaviour
         float graph = LayerValue(film, si, x => x.Graph);
         // the full-size dance fades with the graph view: avatar opacity scales with the dance's size factor
         avatar *= Mathf.Clamp01(skeleton * 1.0f);
-        if (Mathf.Abs(avatar - avatarNow) > 1e-3f)
+        if (!segLayers[si].AvatarsFadeWithVideo && Mathf.Abs(avatar - avatarNow) > 1e-3f)
         {
             avatarNow = avatar;
             hm.SetDirectorAvatarOpacity(avatar);
@@ -782,6 +840,7 @@ public class FilmDirector : MonoBehaviour
             ["avatar"] = Math.Round(avatarNow, 3), ["skeleton"] = Math.Round(skeletonNow, 3), ["graphFade"] = Math.Round(graphNow, 3),
             ["contacts"] = Math.Round(contactsNow, 3), ["floorYawDeg"] = hm != null ? Math.Round(hm.FloorYawDeg, 3) : 0.0,
             ["externallyDriven"] = hm != null && hm.ExternallyDriven, ["frame"] = hm != null ? hm.CurrentFrame : -1,
+            ["rate"] = Rate, ["scrubbing"] = Scrubbing, ["audio"] = AudioState(),
             ["error"] = lastError, ["warnings"] = Warnings.Distinct().ToList(),
             ["skippedAnnotations"] = direction != null ? direction.SkippedAnnotations.ToList() : null
         };
@@ -796,6 +855,18 @@ public class FilmDirector : MonoBehaviour
         }
 
         return s;
+    }
+
+    /// <summary>the desktop soundtrack's player (null when the film is recorded or has no soundtrack): where it is against the film clock</summary>
+    Dictionary<string, object> AudioState()
+    {
+        FilmSoundtrack st = playSoundtrack ? FilmSoundtrack.Current : null;
+        if (st == null) return null;
+        return new Dictionary<string, object>
+        {
+            ["loaded"] = st.IsLoaded, ["playing"] = st.IsPlaying, ["held"] = st.Held, ["time"] = Math.Round(st.AudioTime, 3), ["resyncs"] = st.Resyncs,
+            ["pitch"] = Math.Round(st.Pitch, 3), ["driftS"] = st.IsPlaying ? Math.Round(st.AudioTime - filmTime, 3) : (double?)null
+        };
     }
 
     static float[] V(Vector3 v) => new[] { (float)Math.Round(v.x, 3), (float)Math.Round(v.y, 3), (float)Math.Round(v.z, 3) };

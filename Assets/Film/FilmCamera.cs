@@ -227,7 +227,22 @@ public class FilmCamera
 
     // ------------------------------------------------------------------ shots
 
+    /// <summary>the pose of a shot at a film time. A NESTED evaluation (the blend from the previous shot, SideAzimuth asking where the previous
+    /// shot's eye was) must not leak the phone-POV outputs: before this wrapper a 3D shot that followed a phone shot inherited its PovCamera and
+    /// video opacity (the "phone 05 - its point of view" pill over a 3D shot, and the phone's video behind it while the clip had frames)</summary>
     FilmPose Pose(FilmShot s, float film, int depth)
+    {
+        if (depth == 0) return PoseCore(s, film, depth);
+        string cam = PovCamera, comp = PovComposite;
+        float op = PovVideoOpacity;
+        FilmPose p = PoseCore(s, film, depth);
+        PovCamera = cam;
+        PovVideoOpacity = op;
+        PovComposite = comp;
+        return p;
+    }
+
+    FilmPose PoseCore(FilmShot s, float film, int depth)
     {
         if (depth > 3) return Default(film);
         float dance = clock.Dance(Mathf.Clamp(film, 0f, direction.FilmDuration));
@@ -249,6 +264,8 @@ public class FilmCamera
                 return CameraTour(s, film, dance, depth);
             case "feet_closeup":
                 return FeetCloseup(s, film, dance);
+            case "feature_zoom":
+                return FeatureZoom(s, film, dance);
             case "overhead_floorcraft":
                 return Overhead(s, film, dance);
             case "graph_wide":
@@ -288,6 +305,14 @@ public class FilmCamera
     /// average of past samples back to the start of the shot's mode run, never across a cut)</summary>
     Vector3 Follow(FilmShot s, float film, float tau, Func<float, Vector3> target)
     {
+        Vector3 r = Follow3(s, film, tau, target);
+        r.y = 0f;
+        return r;
+    }
+
+    /// <summary>Follow, keeping the height (a feature zoom frames a joint, not the floor under it)</summary>
+    Vector3 Follow3(FilmShot s, float film, float tau, Func<float, Vector3> target)
+    {
         float runStart = Shots[s.RunStart].F0;
         const int n = 10;
         float dt = tau / 3f;
@@ -305,9 +330,7 @@ public class FilmCamera
         }
 
         if (wsum <= 0f) return targets.CoupleCentre(clock.Dance(film));
-        Vector3 r = sum / wsum;
-        r.y = 0f;
-        return r;
+        return sum / wsum;
     }
 
     Vector3 CoupleFollow(FilmShot s, float film, float tau = 0.6f) => Follow(s, film, tau, targets.CoupleCentre);
@@ -346,10 +369,87 @@ public class FilmCamera
     {
         Vector3 c = CoupleFollow(s, film);
         if (Vertical) radius *= 1.25f;
+        // opt-in camera keys of the class recap's talking shots (a direction without them gets exactly the orbit it always got):
+        // focus = lead | follow with focus_weight 0..1 - the orbit centre leans toward that dancer (a talk shot follows the speaker);
+        // fit_span = true - the lens widens (then the eye backs off) until both dancers stay inside the frame however far apart they stand
+        string focus = s.S("focus", "couple");
+        float fw = Mathf.Clamp01(s.P("focus_weight", 0f));
+        if (fw > 0.001f && (focus == "lead" || focus == "follow"))
+        {
+            Vector3 dp = Follow(s, film, 0.6f, d => targets.Joint(targets.DancerOf(focus), SmplJoint.Pelvis, d));
+            if (!float.IsNaN(dp.x))
+            {
+                Vector3 delta = dp - c;
+                delta.y = 0f;
+                c += delta * fw;
+                radius *= Mathf.Lerp(1f, 0.88f, fw);
+            }
+        }
+
         float phi = SideAzimuth(s, 1) + RunAngle(s, film, r => OrbitRate(r));
+        if (s.B("avoid_inline")) height += InlineLift(s, film, phi);
         Vector3 eye = c + new Vector3(Mathf.Cos(phi) * radius, height, Mathf.Sin(phi) * radius);
         Vector3 look = c + Vector3.up * lookH;
-        return new FilmPose { Eye = eye, Look = look, Up = Vector3.up, Fov = CoupleFov(Vector3.Distance(eye, look)), ScreenY = ScreenYFor() };
+        FilmPose p = new() { Eye = eye, Look = look, Up = Vector3.up, Fov = CoupleFov(Vector3.Distance(eye, look)), ScreenY = ScreenYFor() };
+        if (s.B("fit_span")) FitSpan(s, film, ref p);
+        return p;
+    }
+
+    /// <summary>extra eye height (m) while the view runs along the line from one dancer to the other (the first render's closing orbit hid the leader
+    /// behind the follower for four seconds): up to 1.9 m within 45 deg of that line, so the dancer behind shows above the one in front.
+    /// A smooth function of the azimuth and the dancers' damped positions (a clamp of the azimuth cannot be continuous for a full orbit)</summary>
+    float InlineLift(FilmShot s, float film, float phi)
+    {
+        Vector3 pl = Follow(s, film, 0.6f, d => targets.Joint(targets.DancerOf("lead"), SmplJoint.Pelvis, d));
+        Vector3 pf = Follow(s, film, 0.6f, d => targets.Joint(targets.DancerOf("follow"), SmplJoint.Pelvis, d));
+        if (float.IsNaN(pl.x) || float.IsNaN(pf.x)) return 0f;
+        Vector2 l = new(pf.x - pl.x, pf.z - pl.z);
+        if (l.sqrMagnitude < 0.04f) return 0f; // standing together: no line to speak of
+        float line = Mathf.Atan2(l.y, l.x);
+        float r = Mathf.Repeat(CylindricalBlend.WrapPi(phi - line) + Mathf.PI * 0.5f, Mathf.PI) - Mathf.PI * 0.5f; // 0 = along the line (either side)
+        float k = 1f - Mathf.SmoothStep(0f, 1f, Mathf.Abs(r) / (Mathf.PI * 0.25f));
+        float apart = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.2f, 0.7f, l.magnitude));
+        return 1.9f * k * apart;
+    }
+
+    /// <summary>widen the lens (up to the shot's maximum), then back the eye off along its line to the look point, until both dancers' pelvises
+    /// (damped like the orbit's own follow) with an arm's margin fit inside 90 % of the frame width. Never narrows: a couple that stands close
+    /// keeps the orbit's own framing. Pure geometry of the pose and the dancers' damped positions.</summary>
+    void FitSpan(FilmShot s, float film, ref FilmPose p)
+    {
+        Vector3 pl = Follow(s, film, 0.6f, d => targets.Joint(targets.DancerOf("lead"), SmplJoint.Pelvis, d));
+        Vector3 pf = Follow(s, film, 0.6f, d => targets.Joint(targets.DancerOf("follow"), SmplJoint.Pelvis, d));
+        if (float.IsNaN(pl.x) || float.IsNaN(pf.x)) return;
+        float aspect = Vertical ? 9f / 16f : 16f / 9f;
+        float maxFov = Vertical ? 66f : 55f;
+        for (int it = 0; it < 3; it++)
+        {
+            Vector3 f = p.Look - p.Eye;
+            if (f.sqrMagnitude < 1e-6f) return;
+            Quaternion q = Quaternion.LookRotation(f, Vector3.up);
+            Vector3 fwd = q * Vector3.forward, right = q * Vector3.right;
+            float need = 0f;
+            foreach (Vector3 pos in new[] { pl, pf })
+            {
+                Vector3 v = pos + Vector3.up - p.Eye;
+                float z = Vector3.Dot(v, fwd);
+                if (z < 0.5f) continue;
+                need = Mathf.Max(need, (Mathf.Abs(Vector3.Dot(v, right)) + 0.45f) / (z * 0.9f));
+            }
+
+            float tx = Mathf.Tan(p.Fov * 0.5f * Mathf.Deg2Rad) * aspect;
+            if (need <= tx + 1e-4f) return;
+            float fovNeed = 2f * Mathf.Atan(need / aspect) * Mathf.Rad2Deg;
+            if (fovNeed <= maxFov)
+            {
+                p.Fov = fovNeed;
+                return;
+            }
+
+            p.Fov = maxFov;
+            float ratio = need / (Mathf.Tan(maxFov * 0.5f * Mathf.Deg2Rad) * aspect);
+            p.Eye = p.Look + (p.Eye - p.Look) * Mathf.Min(ratio, 2.5f);
+        }
     }
 
     /// <summary>the rhythm finale's orbit (eye 1.1 m, period 30 s): far enough and with the look point low enough that the
@@ -391,10 +491,13 @@ public class FilmCamera
         Vector3 l = targets.Joint(targets.DancerOf("follow"), SmplJoint.Pelvis, d0) - targets.Joint(targets.DancerOf("lead"), SmplJoint.Pelvis, d0);
         float line = float.IsNaN(l.x) ? 0f : Mathf.Atan2(l.z, l.x);
         float phi = line + Mathf.PI * 0.5f + azimuth + RunAngle(s, film, r => r.P("drift_deg_s", 4f) * Mathf.Deg2Rad);
-        float dist = Vertical ? 4.3f : 3.3f, el = 18f * Mathf.Deg2Rad;
+        float dist = s.P("distance_m", Vertical ? 4.3f : 3.3f), el = 18f * Mathf.Deg2Rad;
         Vector3 look = c + Vector3.up * 0.9f;
         Vector3 eye = look + new Vector3(Mathf.Cos(el) * Mathf.Cos(phi), Mathf.Sin(el), Mathf.Cos(el) * Mathf.Sin(phi)) * dist;
-        return new FilmPose { Eye = eye, Look = look, Up = Vector3.up, Fov = CoupleFov(dist), ScreenY = ScreenYFor() };
+        FilmPose p = new() { Eye = eye, Look = look, Up = Vector3.up, Fov = CoupleFov(dist), ScreenY = ScreenYFor() };
+        // opt-in (the class recap): the whole couple inside the band between the captions and the physics legend, as close as that allows
+        if (s.B("fit_band")) FitBand(ref p, new Vector3(c.x, 0f, c.z), s.P("top_m", 2.2f), s.P("band_lo", Vertical ? 0.36f : 0.2f), s.P("band_hi", Vertical ? 0.72f : 0.9f), 24f, Vertical ? 66f : 55f);
+        return p;
     }
 
     FilmPose CamerasOverview(FilmShot s, float film, float dance)
@@ -460,6 +563,39 @@ public class FilmCamera
         return best;
     }
 
+    /// <summary>a phone's pose for a POV shot: its own pose and zoom, or - with the shot's `crop` block (the class recap: the video framed on the two
+    /// teachers) - the SAME position with the view turned and narrowed onto the part of the phone's frame the plan chose. The video quad lies on the
+    /// phone's image plane in the world, so any rotation and any narrower lens at the phone's own position still maps the picture 1:1 and the 3D
+    /// overlay stays registered on it. crop = {t0, dt, cx[], cy[], zoom[]} (centre in -1..1 of the frame, y up; the zoom >= 1) in dance seconds.</summary>
+    FilmPose PovPose(FilmShot s, string cam, float dance, Vector3 pos, Quaternion rot, float vfov, Vector2 shift)
+    {
+        FilmPose pov = FilmPose.FromRotation(pos, rot, vfov, Vector3.Distance(pos, targets.CoupleCentre(dance) + Vector3.up));
+        pov.LensShift = shift;
+        if (s.Camera["crop"] is JObject crop) CropPov(ref pov, crop, cam, dance);
+        return pov;
+    }
+
+    void CropPov(ref FilmPose pov, JObject crop, string cam, float dance)
+    {
+        if (crop["cx"] is not JArray ax || crop["cy"] is not JArray ay || crop["zoom"] is not JArray az || ax.Count < 1 || ay.Count != ax.Count || az.Count != ax.Count) return;
+        float t0 = FilmDirection.F(crop["t0"], 0f), dt = Mathf.Max(1e-3f, FilmDirection.F(crop["dt"], 0.1f));
+        float u = Mathf.Clamp((dance - t0) / dt, 0f, ax.Count - 1);
+        int i0 = Mathf.FloorToInt(u), i1 = Mathf.Min(ax.Count - 1, i0 + 1);
+        float k = u - i0;
+        float cx = Mathf.Lerp(ax[i0].Value<float>(), ax[i1].Value<float>(), k), cy = Mathf.Lerp(ay[i0].Value<float>(), ay[i1].Value<float>(), k);
+        float z = Mathf.Max(1f, Mathf.Lerp(az[i0].Value<float>(), az[i1].Value<float>(), k));
+        if (z < 1.001f && Mathf.Abs(cx) < 1e-3f && Mathf.Abs(cy) < 1e-3f) return;
+        sources.TryGetAspect(cam, out float aspect);
+        float tanV = Mathf.Tan(pov.Fov * 0.5f * Mathf.Deg2Rad), tanH = tanV * aspect;
+        Vector3 d = new Vector3(cx * tanH, cy * tanV, 1f).normalized;
+        Vector3 fwd = pov.Rot * d, up = pov.Rot * Vector3.up;
+        float dist = Vector3.Distance(pov.Eye, pov.Look);
+        pov.Rot = Quaternion.LookRotation(fwd, up);
+        pov.Fov = 2f * Mathf.Atan(tanV / z) * Mathf.Rad2Deg;
+        pov.Look = pov.Eye + fwd * dist;
+        pov.Up = pov.Rot * Vector3.up;
+    }
+
     FilmPose FlyToCamera(FilmShot s, float film, float dance, int depth)
     {
         string cam = s.S("camera", "06");
@@ -471,8 +607,7 @@ public class FilmCamera
             return Orbit(s, film, dance, 3.4f, 1.5f, 0.95f, 30f);
         }
 
-        FilmPose pov = FilmPose.FromRotation(pos, rot, vfov, Vector3.Distance(pos, targets.CoupleCentre(dance) + Vector3.up));
-        pov.LensShift = shift;
+        FilmPose pov = PovPose(s, cam, dance, pos, rot, vfov, shift);
         if (tau < fly)
         {
             FilmPose from = s.Prev != null ? Pose(s.Prev, film, depth + 1) : Default(film);
@@ -535,9 +670,7 @@ public class FilmCamera
                 PovCamera = cam;
                 PovVideoOpacity = 1f;
                 PovComposite = s.S("composite", "3d_over_video");
-                FilmPose p = FilmPose.FromRotation(pos, rot, vfov);
-                p.LensShift = shift;
-                return p;
+                return PovPose(s, cam, dance, pos, rot, vfov, shift);
             }
         }
 
@@ -608,6 +741,111 @@ public class FilmCamera
         return new FilmPose { Eye = eye, Look = look, Up = Vector3.up, Fov = fov, ScreenY = Vertical ? 0.55f : 0.45f };
     }
 
+    // ------------------------------------------------------------------ feature zoom (the class recap: a tight 3D shot of the body part the teachers name)
+
+    static List<SmplJoint> JointList(JToken arr)
+    {
+        List<SmplJoint> l = new();
+        if (arr is JArray a)
+        {
+            foreach (JToken t in a)
+            {
+                if (FilmTargets.TryJoint(t.Value<string>(), out SmplJoint j)) l.Add(j);
+            }
+        }
+
+        return l;
+    }
+
+    /// <summary>camera {feature, dancer lead|follow|both, joints[], partner_joints[], pad_m, min_distance_m, azimuth_offset_deg, elevation_deg, fov_deg}:
+    /// the eye side-on to the couple's line at the feature's height, the look point on the named joints (damped), the distance the smallest that
+    /// keeps those joints of the named dancer(s) - and the partner's matching joints, so both dancers stay readable - inside the key band of the
+    /// frame (9:16: between the captions and the top band). No hand close-ups: the joint lists name shoulders, elbows, torso, hips, knees.</summary>
+    FilmPose FeatureZoom(FilmShot s, float film, float dance)
+    {
+        string who = s.S("dancer", "both");
+        List<SmplJoint> main = JointList(s.Camera["joints"]), partner = JointList(s.Camera["partner_joints"]);
+        if (main.Count == 0) main.Add(SmplJoint.Spine3);
+        Dancer lead = targets.DancerOf("lead"), follow = targets.DancerOf("follow");
+        bool both = who != "lead" && who != "follow";
+        Dancer primary = both ? null : targets.DancerOf(who), other = both ? null : (who == "lead" ? follow : lead);
+        List<Vector3> Main(float d)
+        {
+            List<Vector3> pts = new();
+            foreach (Dancer dn in both ? new[] { lead, follow } : new[] { primary })
+            {
+                foreach (SmplJoint j in main)
+                {
+                    Vector3 p = targets.Joint(dn, j, d);
+                    if (!float.IsNaN(p.x)) pts.Add(p);
+                }
+            }
+
+            return pts;
+        }
+
+        List<Vector3> Context(float d)
+        {
+            List<Vector3> pts = new();
+            if (!both)
+            {
+                foreach (SmplJoint j in partner.Count > 0 ? partner : main)
+                {
+                    Vector3 p = targets.Joint(other, j, d);
+                    if (!float.IsNaN(p.x)) pts.Add(p);
+                }
+            }
+
+            return pts;
+        }
+
+        Vector3 Centroid(float d)
+        {
+            List<Vector3> m = Main(d);
+            if (m.Count == 0) return new Vector3(float.NaN, float.NaN, float.NaN);
+            Vector3 c = Vector3.zero;
+            foreach (Vector3 p in m) c += p;
+            return c / m.Count;
+        }
+
+        Vector3 centre = Follow3(s, film, 0.45f, Centroid);
+        if (float.IsNaN(centre.x)) centre = targets.CoupleCentre(dance) + Vector3.up * 1.1f;
+        float phi = SideAzimuth(s, 1) + s.P("azimuth_offset_deg", 25f) * Mathf.Deg2Rad;
+        float el = s.P("elevation_deg", 5f) * Mathf.Deg2Rad;
+        Vector3 toEye = new(Mathf.Cos(el) * Mathf.Cos(phi), Mathf.Sin(el), Mathf.Cos(el) * Mathf.Sin(phi));
+        Vector3 f = -toEye;
+        Vector3 r = Vector3.Cross(Vector3.up, f).normalized, u = Vector3.Cross(f, r);
+        float fov = s.P("fov_deg", 36f);
+        float aspect = Vertical ? 9f / 16f : 16f / 9f;
+        float ty = Mathf.Tan(fov * 0.5f * Mathf.Deg2Rad), tx = ty * aspect;
+        float screenY = Vertical ? 0.6f : 0.55f;
+        float xLim = (Vertical ? 0.86f : 0.9f), yLim = (Vertical ? 0.46f : 0.6f);   // fractions of the half frame the points may reach
+        float pad = s.P("pad_m", 0.4f);
+        Vector3 cf = centre;
+        // the distance the points of one instant ask for, smoothed over the past half second (a pure function of the film clock)
+        float Need(float d)
+        {
+            float need = 0f;
+            foreach (List<Vector3> pts in new[] { Main(d), Context(d) })
+            {
+                foreach (Vector3 p in pts)
+                {
+                    Vector3 v = p - cf;
+                    float z0 = Vector3.Dot(v, f), x = Mathf.Abs(Vector3.Dot(v, r)) + pad, y = Mathf.Abs(Vector3.Dot(v, u)) + pad;
+                    need = Mathf.Max(need, x / (tx * xLim) - z0, y / (ty * yLim) - z0);
+                }
+            }
+
+            return need;
+        }
+
+        float dreq = Follow3(s, film, 0.5f, d => new Vector3(Need(d), 0f, 0f)).x;
+        float now = Need(dance);
+        float dist = Mathf.Clamp(Mathf.Max(dreq, now, s.P("min_distance_m", 1.6f)), 1.2f, 6f);
+        Vector3 eye = centre + toEye * dist;
+        return new FilmPose { Eye = eye, Look = centre, Up = Vector3.up, Fov = fov, ScreenY = screenY };
+    }
+
     FilmPose Overhead(FilmShot s, float film, float dance)
     {
         string framing = s.S("framing", "couple");
@@ -627,8 +865,26 @@ public class FilmCamera
         else
         {
             look = Follow(s, film, 0.8f, targets.CoupleCentre);
-            const float across = 1.9f; // the couple's footprint seen from above (his feet to her hand): tighter than the old 2.4 m
+            // the couple's footprint seen from above (his feet to her hand): tighter than the old 2.4 m. A shot may ask for more (`across_m`: the
+            // recap film's wide pivots), and it is widened whenever the four feet are apart (a spin throws the arms and legs wide)
+            float across = s.P("across_m", 1.9f);
+            float feetSpread = 0f;
+            Vector3[] fs =
+            {
+                targets.Foot(targets.DancerOf("lead"), true, clock.Dance(film), 0f), targets.Foot(targets.DancerOf("lead"), false, clock.Dance(film), 0f),
+                targets.Foot(targets.DancerOf("follow"), true, clock.Dance(film), 0f), targets.Foot(targets.DancerOf("follow"), false, clock.Dance(film), 0f)
+            };
+            for (int i = 0; i < fs.Length; i++)
+            {
+                for (int j = i + 1; j < fs.Length; j++)
+                {
+                    if (!float.IsNaN(fs[i].x) && !float.IsNaN(fs[j].x)) feetSpread = Mathf.Max(feetSpread, Vector3.Distance(fs[i], fs[j]));
+                }
+            }
+
+            if (s.P("across_m", 0f) > 0f) across = Mathf.Max(across, feetSpread + 1.3f);
             dist = Mathf.Max(across * 0.5f / (ty * bandY), across * 0.5f / (tx * 0.92f));
+            if (s.P("fill", 0f) > 0.01f) dist = OverheadFillDistance(s, film, ref look, tx, ty, bandY);
         }
 
         dist = Mathf.Clamp(dist, 3f, 30f);
@@ -649,6 +905,75 @@ public class FilmCamera
         }
 
         return p;
+    }
+
+    static readonly SmplJoint[] ExtentJoints =
+    {
+        SmplJoint.Head, SmplJoint.L_Shoulder, SmplJoint.R_Shoulder, SmplJoint.L_Elbow, SmplJoint.R_Elbow, SmplJoint.L_Wrist, SmplJoint.R_Wrist,
+        SmplJoint.Pelvis, SmplJoint.L_Knee, SmplJoint.R_Knee, SmplJoint.L_Ankle, SmplJoint.R_Ankle, SmplJoint.L_Foot, SmplJoint.R_Foot
+    };
+
+    /// <summary>the floor-plan box of both dancers' joints at a dance time (false = none tracked)</summary>
+    bool ExtentBox(float dance, out Vector2 lo, out Vector2 hi)
+    {
+        lo = new Vector2(float.MaxValue, float.MaxValue);
+        hi = new Vector2(float.MinValue, float.MinValue);
+        bool any = false;
+        foreach (string role in new[] { "lead", "follow" })
+        {
+            Dancer dn = targets.DancerOf(role);
+            foreach (SmplJoint j in ExtentJoints)
+            {
+                Vector3 p = targets.Joint(dn, j, dance);
+                if (float.IsNaN(p.x)) continue;
+                lo = Vector2.Min(lo, new Vector2(p.x, p.z));
+                hi = Vector2.Max(hi, new Vector2(p.x, p.z));
+                any = true;
+            }
+        }
+
+        return any;
+    }
+
+    /// <summary>The class recap's overhead (owner 2026-10-10: "get closer with the camera"; the first render's couple filled a quarter of the frame):
+    /// the camera height follows the dancers' own spread. `fill` = the share of the frame width the box of both dancers' joints (plus 0.22 m round
+    /// it) fills at the tightest; the height is a weighted mean over -0.8 .. +0.8 s of what that asks (a smooth envelope that grows ahead of a pivot),
+    /// and never less than what the instant (now, and 0.3 s ahead) needs to keep the box inside 90 % of the frame: a pivot or an exit is never cropped.
+    /// The look point is the box centre (damped). Pure geometry of the film clock.</summary>
+    float OverheadFillDistance(FilmShot s, float film, ref Vector3 look, float tx, float ty, float bandY)
+    {
+        float fill = Mathf.Clamp(s.P("fill", 0.62f), 0.3f, 0.9f);
+        float minFill = Mathf.Clamp(s.P("min_fill", 0.46f), 0.2f, fill);
+        const float never = 0.9f, margin = 0.22f; // margin: a body beyond its joints (hands, hair, a thick arm)
+        float NeedAt(float f, float frac, float hfrac)
+        {
+            float dn = clock.Dance(Mathf.Clamp(f, 0f, direction.FilmDuration));
+            if (!ExtentBox(dn, out Vector2 lo, out Vector2 hi)) return float.NaN;
+            return Mathf.Max((hi.x - lo.x + 2f * margin) / (2f * tx * frac), (hi.y - lo.y + 2f * margin) / (2f * ty * bandY * hfrac));
+        }
+
+        float sum = 0f, wsum = 0f;
+        for (int i = -4; i <= 4; i++)
+        {
+            float w = 1f - Mathf.Abs(i) / 5f;
+            float need = NeedAt(film + i * 0.2f, fill, never);
+            if (float.IsNaN(need)) continue;
+            sum += need * w;
+            wsum += w;
+        }
+
+        float env = wsum > 0f ? sum / wsum : 8f;
+        float inst = Mathf.Max(0f, NeedAt(film, never, never));
+        float ahead = Mathf.Max(0f, NeedAt(film + 0.3f, never, never));
+        float far = NeedAt(film, minFill, minFill); // never further than the least fill allows (a pivot's own need still wins below)
+        if (!float.IsNaN(far)) env = Mathf.Min(env, far);
+        Vector3 c = Follow(s, film, 0.8f, d =>
+        {
+            if (!ExtentBox(d, out Vector2 lo, out Vector2 hi)) return targets.CoupleCentre(d);
+            return new Vector3((lo.x + hi.x) * 0.5f, 0f, (lo.y + hi.y) * 0.5f);
+        });
+        if (!float.IsNaN(c.x)) look = c;
+        return Mathf.Max(env, inst, ahead);
     }
 
     static float DefaultGraphFocus() =>

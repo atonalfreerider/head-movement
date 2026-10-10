@@ -22,7 +22,7 @@ public class FilmCameraSource
 
     // reflection: the camera-video feature
     readonly Type ext;
-    readonly MethodInfo mPrepare, mTryGetPose, mSetGlyphs, mSetVideo, mRelease, mHasVideoFor;
+    readonly MethodInfo mPrepare, mTryGetPose, mSetGlyphs, mSetVideo, mRelease, mHasVideoFor, mTryGetSize;
     readonly PropertyInfo pReady, pCameras, pShowing, pWhyNot;
     bool prepared;
     float prepareStart = -1f;
@@ -134,6 +134,37 @@ public class FilmCameraSource
         pShowing = ext.GetProperty("VideoShowing", S);
         pWhyNot = ext.GetProperty("VideoWhyNot", S);
         mHasVideoFor = ext.GetMethod("HasVideoFor", S, null, new[] { typeof(string) }, null);
+        mTryGetSize = ext.GetMethods(S).FirstOrDefault(m => m.Name == "TryGetSize" && m.GetParameters().Length == 2);
+    }
+
+    /// <summary>width / height of a phone's frame (the director's POV crop maps the crop centre to a direction with it); false = unknown</summary>
+    public bool TryGetAspect(string camera, out float aspect)
+    {
+        aspect = 9f / 16f;
+        if (ext != null && mTryGetSize != null)
+        {
+            try
+            {
+                object[] args = { camera, null };
+                if ((bool)mTryGetSize.Invoke(null, args) && args[1] is Vector2 sz && sz.y > 1f)
+                {
+                    aspect = sz.x / sz.y;
+                    return true;
+                }
+            }
+            catch
+            {
+                // falls through to the fallback tracks
+            }
+        }
+
+        if (tracks.TryGetValue(camera ?? "", out Track t) && t.Size.y > 1f)
+        {
+            aspect = t.Size.x / t.Size.y;
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>start loading: the feature's Prepare, and the fallback tracks</summary>

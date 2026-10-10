@@ -25,9 +25,10 @@ public class FilmOverlay : MonoBehaviour
 {
     FilmDirector director;
     Canvas canvas;
-    RectTransform root, captionRoot, titleRoot, beatRoot;
+    RectTransform root, captionRoot, titleRoot, beatRoot, cardRoot;
     CaptionsOverlay captions;
     TitleCard title;
+    ChapterCards cards;
     BeatCounter beat;
     Image flash, fade;
     readonly HudPlacement hud = new();
@@ -46,6 +47,10 @@ public class FilmOverlay : MonoBehaviour
     public CaptionsOverlay Captions => captions;
     public float TitleAlpha { get; private set; }
 
+    /// <summary>the viewer's playback bar (FilmPlaybackBar): its height in px from the bottom and how much of it is shown (0..1). The
+    /// captions, the move caption and the call-out labels make room above it while it is up. Both stay 0 in a recording (no bar there).</summary>
+    public float BarHeight, BarShown;
+
     public void Init(FilmDirector d)
     {
         director = d;
@@ -61,9 +66,11 @@ public class FilmOverlay : MonoBehaviour
         captionRoot = Stretch("Captions");
         titleRoot = Stretch("Title card");
         beatRoot = Stretch("Beat counter");
+        cardRoot = Stretch("Chapter cards");
         captions = captionRoot.gameObject.AddComponent<CaptionsOverlay>();
-        captions.Init(captionRoot, d.Direction.Narration?.ChunksFor(d.Aspect), d.Direction.CaptionStyle, d.AspectInfo);
+        captions.Init(captionRoot, d.Direction.Narration?.ChunksFor(d.Aspect), d.Direction.CaptionStyle, d.AspectInfo, d.Direction.Dir);
         title = new TitleCard(titleRoot, d.Direction, Accent(d.Direction));
+        cards = new ChapterCards(cardRoot, d.Direction, Accent(d.Direction));
         beat = new BeatCounter(beatRoot);
         flash = FilmUi.Box(root, "Replay flash", null, new Color(1f, 1f, 1f, 0f));
         fade = FilmUi.Box(root, "Fade", null, new Color(0f, 0f, 0f, 0f));
@@ -94,7 +101,7 @@ public class FilmOverlay : MonoBehaviour
 
     public void OnAspectChanged()
     {
-        captions.Init(captionRoot, director.Direction.Narration?.ChunksFor(director.Aspect), director.Direction.CaptionStyle, director.AspectInfo);
+        captions.Init(captionRoot, director.Direction.Narration?.ChunksFor(director.Aspect), director.Direction.CaptionStyle, director.AspectInfo, director.Direction.Dir);
         laidAspect = null;
     }
 
@@ -102,6 +109,7 @@ public class FilmOverlay : MonoBehaviour
     {
         hud.Restore();
         SkeletonLegend.TopOverride = -1f;
+        SkeletonLegend.Scale = 1f;
     }
 
     public void Tick(float film, float dance)
@@ -123,24 +131,43 @@ public class FilmOverlay : MonoBehaviour
         captions.SetTime(film);
         float fontPx = aspect.CaptionFontPx * unit;
         float lineH = fontPx * 1.24f, padY = 14f * unit;
+        float captionBottom = vertical ? (1f - aspect.CaptionBottomY) * H : (1f - aspect.CaptionBaselineY) * H - 0.32f * fontPx - padY;
+        float barLift = Mathf.Max(0f, BarHeight - captionBottom) * BarShown;
+        if (Mathf.Abs(captionRoot.anchoredPosition.y - barLift) > 0.01f) captionRoot.anchoredPosition = new Vector2(0f, barLift);
         float captionTop = vertical
             ? (1f - aspect.CaptionBottomY) * H + 2f * lineH + 2f * padY
             : (1f - aspect.CaptionBaselineY) * H - 0.32f * fontPx - padY + lineH + 2f * padY;
-        if (captions.CurrentChunk >= 0) captionTop = Mathf.Max(captionTop, captions.BlockRect.yMax);
+        captionTop += barLift;
+        if (captions.CurrentChunk >= 0) captionTop = Mathf.Max(captionTop, captions.BlockRect.yMax + barLift);
         LabelFloor = captionTop + 14f * unit;
 
         // title card
         float titleAlpha = title.Alpha(film);
         TitleAlpha = titleAlpha;
         title.Show(film, titleAlpha, director);
+        // chapter cards (a segment's chapter_card): a pill under the top safe band; the HUD and the call-out labels make room like for the title
+        cards.Tick(film, vertical, W, H, unit, aspect);
+        float cardAlpha = cards.Alpha;
 
         // the dance HUD (move caption, graph inset): hidden under the 9:16 title
         // (gone by the time the title is a third visible: the fading title never overlaps the HUD boxes)
-        float hudAlpha = vertical ? 1f - Mathf.Clamp01(titleAlpha * 3.4f) : 1f;
+        float hudAlpha = vertical ? 1f - Mathf.Clamp01(Mathf.Max(titleAlpha, cardAlpha) * 3.4f) : 1f;
         float lift = captionTop + 18f * unit;
         hud.Apply(vertical, W, H, unit, aspect.SafeTop, lift, hudAlpha);
         // the physics legend ("Skeleton load - ESTIMATED") sits under the HUD row in 9:16, below the top 14 % platform band
         SkeletonLegend.TopOverride = vertical ? Mathf.Max(hud.BottomFromTop + 10f * unit, aspect.SafeTop * H + 8f * unit) : -1f;
+        // a chapter / title card sits in the same band. The legend used to step below the card while it showed and jump back up when it faded (the audit:
+        // it "jumped over the dancers' heads" at 292-297 s): it now always sits under the card's slot (a constant: the top band, the card's height and a gap),
+        // so it never moves, and the physics shot frames the couple below it (camera `fit_band`)
+        if (vertical)
+        {
+            float cardSlotBottom = aspect.SafeTop * H + 14f * unit + 96f * unit + 10f * unit;
+            SkeletonLegend.TopOverride = Mathf.Max(SkeletonLegend.TopOverride, cardSlotBottom);
+            if (Mathf.Max(cardAlpha, titleAlpha) > 0.05f) SkeletonLegend.TopOverride = Mathf.Max(SkeletonLegend.TopOverride, Mathf.Max(cards.BottomFromTop, title.BottomFromTop) + 10f * unit);
+        }
+
+        // 9:16 enlarges the legend: its 11 px text on a 1080-wide frame cannot be read on a phone (1.5x was still about 16 px)
+        SkeletonLegend.Scale = vertical ? Mathf.Max(1f, 1.85f * unit) : 1f;
         // 16:9: the move caption (lower left) and the graph inset (lower right) are boxes the call-out labels keep out of
         // (9:16: they sit under the top band, which LabelCeiling already excludes)
         List<Rect> obstacles = director.Annotations.Obstacles;
@@ -153,6 +180,7 @@ public class FilmOverlay : MonoBehaviour
         float ceiling = (1f - (vertical ? aspect.SafeTop : Mathf.Max(0.04f, aspect.SafeTop))) * H;
         if (vertical && hud.Visible && hudAlpha > 0.05f) ceiling = Mathf.Min(ceiling, H - hud.BottomFromTop - 10f * unit);
         if (titleAlpha > 0.05f) ceiling = Mathf.Min(ceiling, H - title.BottomFromTop - 10f * unit);
+        if (cardAlpha > 0.05f) ceiling = Mathf.Min(ceiling, H - cards.BottomFromTop - 10f * unit);
         LabelCeiling = ceiling;
 
         // beat counter
@@ -229,6 +257,10 @@ public class FilmOverlay : MonoBehaviour
         ["captionFontPx"] = Math.Round(captions.FontPx, 1),
         ["title"] = Math.Round(TitleAlpha, 3),
         ["titleText"] = title.Text,
+        ["chapterCard"] = cards.CurrentTitle,
+        ["chapterCardAlpha"] = Math.Round(cards.Alpha, 3),
+        ["emojiWords"] = captions.IconWords,
+        ["captionSpeaker"] = captions.CurrentSpeaker,
         ["beatCounter"] = beat.Visible,
         ["labelFloor"] = Mathf.Round(LabelFloor),
         ["labelCeiling"] = Mathf.Round(LabelCeiling),

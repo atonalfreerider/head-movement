@@ -3,10 +3,11 @@ using UnityEngine;
 using UnityEngine.UI;
 
 /// <summary>
-/// Narration captions with word-level karaoke (the film's narration timeline: ElevenLabs word timings on the film
-/// clock). One caption chunk at a time, fading in and out; the word being spoken sits on a yellow box (#FFD60A, dark
-/// text) that slides to the next word over ~60 ms; the other words are white with a dark outline and shadow, on a
-/// subtle dark backing.
+/// Captions with word-level karaoke (the film's caption timeline: word timings on the film clock - the narration's ElevenLabs timings in the
+/// demo film, the teachers' transcript in the class recap). One caption chunk at a time, fading in and out; the word being spoken sits on a
+/// yellow box (#FFD60A, dark text) that slides to the next word over ~60 ms; the other words are white (or the speaker's key colour when the
+/// chunk carries one) with a dark outline and shadow, on a subtle dark backing. A chunk that names its speaker shows a small name tag above
+/// the block in the speaker's colour. A word with kind "emoji" is drawn from an image (FilmEmoji), never from the text font.
 /// - 9:16: the lower section of the frame, above the bottom title-safe band (block bottom at 79 % of the height),
 ///   centred, at most 2 short lines (the chunker's 24 characters), 62 px at 1080 wide.
 /// - 16:9: one long line at the bottom (baseline at 92.5 %), 44 px at 1080 high; a line wider than 64 % of the frame
@@ -22,32 +23,42 @@ public class CaptionsOverlay : MonoBehaviour
         public Text Text;
         public Outline Outline;
         public Shadow Shadow;
-        public Rect Box; // word rect in screen px (no padding)
+        public Image Icon;          // emoji words
+        public bool IsIcon;
+        public Color Tint = Color.white;
+        public Rect Box;            // word rect in screen px (no padding)
     }
 
     RectTransform root;
     Image backing, highlight;
+    Text speakerTag;
     readonly List<WordView> pool = new();
     List<FilmNarration.Chunk> chunks = new();
     FilmCaptionStyle style = new();
     FilmAspect aspect = new();
+    string filmDir;
     int laidOut = -1, laidW, laidH, wordCount;
     float fontPx, unit;
 
     public string CurrentWord { get; private set; }
     public string CurrentText { get; private set; }
+    public string CurrentSpeaker { get; private set; }
     public int CurrentChunk { get; private set; } = -1;
     public float Alpha { get; private set; }
     public int Lines { get; private set; }
-    public Rect BlockRect { get; private set; } // screen px (bottom-left origin)
+    public Rect BlockRect { get; private set; } // screen px (bottom-left origin); includes the speaker tag
     public Rect HighlightRect { get; private set; }
     public float FontPx => fontPx;
 
-    public void Init(RectTransform canvasRoot, List<FilmNarration.Chunk> list, FilmCaptionStyle s, FilmAspect a)
+    /// <summary>how many words of the chunk on screen are drawn as images (emoji), for the checks</summary>
+    public int IconWords { get; private set; }
+
+    public void Init(RectTransform canvasRoot, List<FilmNarration.Chunk> list, FilmCaptionStyle s, FilmAspect a, string directionDir = null)
     {
         chunks = list ?? new List<FilmNarration.Chunk>();
         style = s ?? new FilmCaptionStyle();
         aspect = a ?? new FilmAspect();
+        filmDir = directionDir ?? filmDir;
         if (root == null)
         {
             root = FilmUi.Rect(canvasRoot, "Narration captions");
@@ -56,6 +67,9 @@ public class CaptionsOverlay : MonoBehaviour
             root.offsetMin = root.offsetMax = Vector2.zero;
             backing = FilmUi.Box(root, "Caption backing", FilmUi.Rounded, new Color(0f, 0f, 0f, 0.38f));
             highlight = FilmUi.Box(root, "Current word", FilmUi.Rounded, style.Highlight);
+            speakerTag = FilmUi.Label(root, "Speaker tag", 30, Color.white, TextAnchor.MiddleLeft, true);
+            FilmUi.Outline(speakerTag, style.Outline, 2f);
+            speakerTag.enabled = false;
         }
 
         highlight.color = style.Highlight;
@@ -68,10 +82,17 @@ public class CaptionsOverlay : MonoBehaviour
         if (root == null) return;
         backing.enabled = false;
         highlight.enabled = false;
-        foreach (WordView w in pool) w.Text.enabled = false;
+        speakerTag.enabled = false;
+        foreach (WordView w in pool)
+        {
+            w.Text.enabled = false;
+            if (w.Icon != null) w.Icon.enabled = false;
+        }
+
         CurrentChunk = -1;
         CurrentWord = null;
         CurrentText = null;
+        CurrentSpeaker = null;
         Alpha = 0f;
     }
 
@@ -106,6 +127,7 @@ public class CaptionsOverlay : MonoBehaviour
         float a = Mathf.Min(Mathf.SmoothStep(0f, 1f, (t - c.Show) / 0.12f), Mathf.SmoothStep(0f, 1f, (c.Hide - t) / 0.15f));
         Alpha = a;
         CurrentText = string.Join(" / ", c.Lines);
+        CurrentSpeaker = string.IsNullOrEmpty(c.Speaker) ? null : c.Speaker;
 
         // the word being spoken: the last one started, until the next starts (0.3 s after the last word ends: none)
         int cur = -1;
@@ -119,12 +141,29 @@ public class CaptionsOverlay : MonoBehaviour
 
         backing.enabled = true;
         FilmUi.SetAlpha(backing, 0.38f * a);
+        if (speakerTag.enabled)
+        {
+            Color sc0 = c.Tint ?? style.Text;
+            sc0.a = a;
+            speakerTag.color = sc0;
+        }
+
         for (int k = 0; k < wordCount; k++)
         {
             WordView w = pool[k];
             bool isCur = k == cur;
+            if (w.IsIcon)
+            {
+                w.Text.enabled = false;
+                w.Icon.enabled = true;
+                Color ic = Color.white;
+                ic.a = a;
+                w.Icon.color = ic;
+                continue;
+            }
+
             w.Text.enabled = true;
-            Color tc = isCur ? style.HighlightText : style.Text;
+            Color tc = isCur ? style.HighlightText : w.Tint;
             tc.a = a;
             w.Text.color = tc;
             Color oc = style.Outline;
@@ -134,9 +173,14 @@ public class CaptionsOverlay : MonoBehaviour
             w.Shadow.effectColor = sc;
         }
 
-        for (int k = wordCount; k < pool.Count; k++) pool[k].Text.enabled = false;
+        for (int k = wordCount; k < pool.Count; k++)
+        {
+            pool[k].Text.enabled = false;
+            if (pool[k].Icon != null) pool[k].Icon.enabled = false;
+        }
 
-        if (cur < 0)
+        // an emoji is never put on the yellow box (a yellow face on yellow): the box rests while it is "spoken"
+        if (cur < 0 || pool[cur].IsIcon)
         {
             highlight.enabled = false;
             HighlightRect = default;
@@ -148,7 +192,7 @@ public class CaptionsOverlay : MonoBehaviour
         Rect r = to;
         float tr = Mathf.Max(0.001f, style.TransitionMs / 1000f);
         float since = t - c.Words[cur].Start;
-        if (cur > 0 && since < tr && pool[cur - 1].Box.y > to.y - 1f && pool[cur - 1].Box.y < to.y + 1f)
+        if (cur > 0 && since < tr && !pool[cur - 1].IsIcon && pool[cur - 1].Box.y > to.y - 1f && pool[cur - 1].Box.y < to.y + 1f)
         {
             Rect from = Pad(pool[cur - 1].Box);
             float k = Mathf.SmoothStep(0f, 1f, since / tr);
@@ -190,7 +234,7 @@ public class CaptionsOverlay : MonoBehaviour
         for (int l = 0; l < nLines; l++) lines.Add(new List<int>());
         for (int k = 0; k < c.Words.Length; k++) lines[Mathf.Clamp(c.Words[k].Line, 0, nLines - 1)].Add(k);
         float[] ww = new float[c.Words.Length];
-        for (int k = 0; k < c.Words.Length; k++) ww[k] = FilmUi.Width(c.Words[k].Text, size, FontStyle.Bold);
+        for (int k = 0; k < c.Words.Length; k++) ww[k] = c.Words[k].IsEmoji ? fontPx * 1.1f : FilmUi.Width(c.Words[k].Text, size, FontStyle.Bold);
         List<List<int>> wrapped = new();
         foreach (List<int> line in lines)
         {
@@ -233,6 +277,7 @@ public class CaptionsOverlay : MonoBehaviour
         }
 
         wordCount = c.Words.Length;
+        IconWords = 0;
         float widest = 0f;
         for (int l = 0; l < wrapped.Count; l++)
         {
@@ -245,21 +290,61 @@ public class CaptionsOverlay : MonoBehaviour
             foreach (int k in wrapped[l])
             {
                 WordView w = pool[k];
-                w.Text.text = c.Words[k].Text;
+                FilmNarration.Word word = c.Words[k];
+                Sprite emoji = word.IsEmoji ? FilmEmoji.Get(word.Emoji, filmDir) : null;
+                w.IsIcon = emoji != null;
+                w.Tint = word.Tint ?? style.Text;
+                w.Text.text = w.IsIcon ? "" : word.Text;
                 w.Text.fontSize = size;
                 w.Outline.effectDistance = new Vector2(1f, -1f) * Mathf.Max(1f, style.OutlinePx * unit * 0.66f);
                 w.Shadow.effectDistance = new Vector2(1.2f, -2f) * unit;
                 Rect box = new(x, y - fontPx * 0.56f, ww[k], fontPx * 1.12f);
                 w.Box = box;
                 FilmUi.Place(w.Rt, box.center, new Vector2(ww[k] + 4f, lineH));
+                if (w.IsIcon)
+                {
+                    if (w.Icon == null)
+                    {
+                        w.Icon = FilmUi.Box(root, $"Emoji {k}", emoji, Color.white);
+                        w.Icon.preserveAspect = true;
+                    }
+
+                    w.Icon.sprite = emoji;
+                    w.Icon.enabled = true;
+                    FilmUi.Place(w.Icon.rectTransform, box.center, new Vector2(ww[k], fontPx * 1.04f));
+                    IconWords++;
+                }
+                else if (w.Icon != null)
+                {
+                    w.Icon.enabled = false;
+                }
+
                 x += ww[k] + space;
             }
         }
 
         Rect block = new(W * 0.5f - widest * 0.5f - pad.x, bottom, widest + 2f * pad.x, blockH);
-        BlockRect = block;
         FilmUi.Place(backing.rectTransform, block.center, block.size);
         backing.pixelsPerUnitMultiplier = 24f / Mathf.Max(1f, 16f * unit);
         highlight.pixelsPerUnitMultiplier = 24f / Mathf.Max(1f, style.CornerPx * unit);
+
+        // speaker name tag above the block's left edge, in the speaker's colour
+        bool tag = !string.IsNullOrEmpty(c.Speaker);
+        speakerTag.enabled = tag;
+        if (tag)
+        {
+            int tagSize = Mathf.Max(10, Mathf.RoundToInt(fontPx * 0.5f));
+            string label = c.Speaker.ToUpperInvariant();
+            float tw = FilmUi.Width(label, tagSize, FontStyle.Bold);
+            float th = tagSize * 1.3f;
+            speakerTag.text = label;
+            speakerTag.fontSize = tagSize;
+            Color tc = c.Tint ?? style.Text;
+            speakerTag.color = tc;
+            FilmUi.Place(speakerTag.rectTransform, new Vector2(block.xMin + pad.x * 0.5f + tw * 0.5f + 4f, block.yMax + th * 0.5f + 2f * unit), new Vector2(tw + 10f, th));
+            block = new Rect(block.x, block.y, block.width, block.height + th + 4f * unit);
+        }
+
+        BlockRect = block;
     }
 }

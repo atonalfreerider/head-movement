@@ -47,6 +47,20 @@ public class FilmSoundtrack : MonoBehaviour
 
     public float ResyncThreshold = 0.04f;
 
+    /// <summary>held by the viewer (the film is paused or its scrubber is being dragged): the source stays paused at its position and
+    /// Update never restarts it; SetHold(false) plays on from the film clock's time</summary>
+    public bool Held { get; private set; }
+
+    /// <summary>playback rate of the clip (the film clock's rate; the re-sync follows it)</summary>
+    public float Pitch
+    {
+        get => source != null ? source.pitch : 1f;
+        set
+        {
+            if (source != null) source.pitch = value;
+        }
+    }
+
     public float Volume
     {
         get => source != null ? source.volume : 1f;
@@ -150,6 +164,53 @@ public class FilmSoundtrack : MonoBehaviour
         if (startPending) StartNow();
     }
 
+    /// <summary>pause (true) or resume (false) at the clock's time; the clip stays loaded</summary>
+    public void SetHold(bool hold)
+    {
+        Held = hold;
+        if (source == null) return;
+        if (hold)
+        {
+            if (source.isPlaying) source.Pause();
+            return;
+        }
+
+        if (clip == null || clock == null || startPending) return;
+        float t = clock();
+        if (t >= 0f && t < clip.length - 0.02f) PlayAt(SamplesOf(t));
+    }
+
+    /// <summary>move the player to film time t (the viewer seeks): playing on from there, or just positioned while held; a time past
+    /// the end silences it. Before the clip is loaded nothing is needed: it starts at the clock's time when it is.</summary>
+    public void SeekTo(float t)
+    {
+        if (clip == null || source == null) return;
+        if (t >= clip.length - 0.02f)
+        {
+            if (source.isPlaying) source.Stop();
+            return;
+        }
+
+        int s = SamplesOf(t);
+        if (Held)
+        {
+            source.timeSamples = s;
+            return;
+        }
+
+        PlayAt(s);
+    }
+
+    int SamplesOf(float t) => Mathf.Clamp(Mathf.RoundToInt(Mathf.Max(0f, t) * clip.frequency), 0, clip.samples - 1);
+
+    /// <summary>position and play (the position is written again after Play: a stopped or paused source may restart from its old one)</summary>
+    void PlayAt(int samples)
+    {
+        source.timeSamples = samples;
+        if (!source.isPlaying) source.Play();
+        source.timeSamples = samples;
+    }
+
     void StartNow()
     {
         startPending = false;
@@ -163,7 +224,7 @@ public class FilmSoundtrack : MonoBehaviour
 
     void Update()
     {
-        if (clip == null || clock == null || startPending || Recording) return;
+        if (clip == null || clock == null || startPending || Recording || Held) return;
         float t = clock();
         if (t < 0f || t >= clip.length - 0.02f)
         {
