@@ -197,6 +197,12 @@ namespace HmVr.Editor
                 yield break;
             }
 
+            // the dominant hand: the footer's switch swaps the pointing and the panel hand
+            foreach (float w in FarClick("handedness")) yield return w;
+            Add("Pointing: left hand switches the roles", S.Input.Dominant == Hand.Left, "dominant=" + S.Input.Dominant);
+            foreach (float w in FarClick("handedness")) yield return w;
+            Add("and back to the right hand", S.Input.Dominant == Hand.Right, "dominant=" + S.Input.Dominant);
+
             film = pick.Id;
             // hover a card with the ray, pinch: starts loading
             foreach (float w in FarClick("play:" + pick.Id)) yield return w;
@@ -362,6 +368,52 @@ namespace HmVr.Editor
             Sim.PalmUp(Hand.Left, false);
             yield return 1.5f;
             Add("the hand panel hides when the palm is lowered", !S.HandPanel.Shown, $"alpha {S.HandPanel.Alpha:0.00}");
+
+            // Pin: the panel hangs in the air; from a step back it is out of arm's reach and works with the pointing ray and a pinch
+            Stage("pinned panel, far ray and pinch");
+            Sim.PalmUp(Hand.Left, true);
+            yield return 1.2f;
+            foreach (float w in PokeClick("pin")) yield return w;
+            Add("Pin keeps the panel", S.HandPanel.Pinned, "pinned=" + S.HandPanel.Pinned);
+            Sim.PalmUp(Hand.Left, false);
+            yield return 1.5f;
+            Add("a pinned panel stays when the palm is lowered", S.HandPanel.Shown, $"alpha {S.HandPanel.Alpha:0.00}");
+            Sim.Rest(Hand.Right);
+            Vector3 stepBack = -VrRig.Instance.Head.forward;
+            stepBack.y = 0f;
+            VrRig.Instance.transform.position += stepBack.normalized * 1.0f; // the user walks back a metre
+            yield return 0.8f;
+            float tFar = VrFilm.Time;
+            foreach (float w in FarClick("forward 5")) yield return w;
+            Add("far ray + pinch on +5 s", VrFilm.Time - tFar > 4.5f && VrFilm.Time - tFar < 9f, $"{tFar:0.0} -> {VrFilm.Time:0.0}");
+            VrWidget fs = W("scrubber");
+            Vector3 AtU(float u) => fs.Panel.Content.TransformPoint(new Vector3(fs.RectMm.xMin + u * fs.RectMm.width, fs.RectMm.center.y, 0f));
+            float durFar = VrFilm.Duration;
+            Sim.AimAt(Hand.Right, AtU(0.7f), 0f);
+            yield return 0.7f;
+            Sim.SetPinch(Hand.Right, 1f);
+            yield return 0.35f;
+            Add("a pinch on the scrubber holds the film", FilmDirector.Instance.Scrubbing, "scrubbing=" + FilmDirector.Instance.Scrubbing);
+            for (int i = 1; i <= 8; i++)
+            {
+                fs = W("scrubber");
+                Sim.AimAt(Hand.Right, AtU(Mathf.Lerp(0.7f, 0.3f, i / 8f)), 1f);
+                yield return 0.15f;
+            }
+
+            yield return 0.3f;
+            Add("pinch-dragging the scrubber to 30 %", Mathf.Abs(VrFilm.Time - 0.3f * durFar) < 0.05f * durFar, $"time {VrFilm.Time:0.0} of {durFar:0.0}");
+            Sim.SetPinch(Hand.Right, 0f);
+            yield return 0.6f;
+            Add("opening the pinch ends the scrub", !FilmDirector.Instance.Scrubbing, "scrubbing=" + FilmDirector.Instance.Scrubbing);
+            Sim.Rest(Hand.Right);
+            VrRig.Instance.transform.position -= stepBack.normalized * 1.0f;
+            Sim.PalmUp(Hand.Left, true);
+            yield return 1.2f;
+            foreach (float w in PokeClick("pin")) yield return w;
+            Add("Pin again lets the panel go back to the hand", !S.HandPanel.Pinned, "pinned=" + S.HandPanel.Pinned);
+            Sim.PalmUp(Hand.Left, false);
+            yield return 1.5f;
 
             // teleport: pinch with the dominant hand where no panel is, hold, release
             Vector3 from = VrRig.Instance.Head.position;
