@@ -174,6 +174,36 @@ optional layer exists.
   layer is **off by default**; when switched on it replaces or overlays the avatars (4D dancer splats are
   future work). The room reconstruction is not displayed in any mode.
 
+### 3.2b Head-worn props (the performance headset)
+- Some dancers wear a head-worn performance microphone in the source videos (a class taught with a headset). The avatar can wear it as a
+  **prop** (owner 2026-10-09: "let's give her a headset prop"): data driven and generic - a capture declares `props`, a list of
+  `{ role, kind, ...parameters }` per **role** (`lead` | `follow`, never a name), and the viewer builds the geometry when the capture loads
+  (`HeadProps`, on `HeadMovement.AvatarsLoaded`). No external art and no media: one procedural mesh per prop.
+- **Kind `headset`**: an ear hook over the top of the ear, a thin boom that runs along the cheek, and a capsule (the foam windscreen)
+  beside the mouth corner, pointing at the lips. Parameters (all optional, metres, colours `#rrggbb`; the exporter writes every one with its default, the viewer uses the same
+  defaults for a missing key): `side` (`left` | `right`, the dancer's own side; default `left`), `boom_thickness_m` 0.0024, `standoff_m` 0.006
+  (the boom axis above the skin), `bow_m` 0.004 (extra standoff at mid boom: a stiff boom bows off the cheek), `capsule_length_m` 0.026,
+  `capsule_radius_m` 0.0078, `hook` true, `hook_thickness_m` 0.0024, `colour` `#0e0d0d` (the capsule), `boom_colour` and `hook_colour`
+  `#c4bbb2`, `opacity_boost` 0.15; optionally `boom_length_m` (arc length from the ear hook to the capsule centre; absent = the boom reaches the
+  mouth corner) and `boom_path` (2-12 control points `[x, y, z]` in metres relative to the front of the ear: x outward on the dancer's own
+  side, y up, z forward; absent = the surface-following default path).
+- **It sits on the avatar's actual head.** The geometry is laid on the head mesh the avatar was built from (the skin binary after the take's
+  face-shape edit: a tapered jaw or a narrower cheek moves the cheek, and the prop follows), at load, not baked in the exporter. Anchors are
+  SMPL-X topology landmarks (the ear outline, the mouth corner of the side); the boom is a curve that follows the surface from the front of the
+  ear to the mouth corner (rays from the middle of the head through the ear-mouth chord, hit point + the normal x the standoff), smoothed and
+  pushed out until every sample clears the skin (>= tube radius + 1.5 mm), so it neither sinks into the cheekbone nor floats off the face; the
+  capsule floats beside the corner (about 1 cm out, the boom's last direction turned toward the middle of the mouth) and is nudged out the same way. The prop is a rigid child of the **head bone**, so it follows every head pose (down, up, turned) and
+  the jaw opening does not move it. `unity command hm_prop` (Assets/Editor/HeadPropCliCommands.cs) reports the clearances (skin to prop surface, mm) and the anchors, rebuilds with other numbers
+  (`--action set`), and parks a review camera around the head (`--action frame --azimuth --elevation --radius --view body|head`, `--action release`).
+- **It is part of the avatar for display**: it shares the avatar's translucent depth + colour materials (`SmplxAvatar.Attach`), so the avatar
+  opacity, the view-state fades, **role_hidden** span fades, the avatars layer switch, the back-to-front sorting of the two dancers and the
+  skeleton stencil all apply; it is drawn slightly more solid than the body (displayed opacity + `opacity_boost` x smoothstep, like the hair's +0.15) so a
+  2 mm boom still reads at the translucent default, and it fades out with the avatar (0 -> 0). It is not part of the glowing skeleton or any overlay
+  (they never see it). The same avatars are drawn by the free viewer, the directed film and the recorder, so the prop shows in all three.
+- Exporter: `takes/<take>.toml` `[dancers.<role>.props.<kind>]` (`export_unity.resolve_props`, written to `capture.json` `props` by every
+  export, checked by `demo_export.validate` "props as configured"), so a re-export keeps it; `enabled = false` drops it. A texture bake that carries
+  the real microphone on the cheek should have it painted out (the prop replaces it).
+
 ### 3.3 Skeletons — always on, always opaque
 - The stylised glowing skeletons are drawn **inside** the avatars, **fully opaque and bright** in every
   state, never faded by avatar opacity: **lead = red, follow = white** (current Dancer.cs style:
@@ -594,6 +624,44 @@ floor and walks a full circle around her, pivoting her in place.
 - Exporter: `takes/<take>.toml` `[export] role_hidden = { lead = [ { from = 0.0, to = 4.0, fade_in = 1.0 } ] }`
   (`export_unity.resolve_role_hidden`, checked by `demo_export.validate`), so a re-export keeps it. Playtest: `Tools/playtest_role_hidden.ps1`.
 
+### 3.15 Films of a spoken class: caption extras, chapter cards, talking-shot camera keys (all additive)
+A film whose soundtrack is the recording of a class (instead of a song and a narrator) reuses the whole film stack; its direction
+adds the following keys. A direction without them plays exactly as before.
+- **Captions** (the caption timeline, `narration/timeline*.json`, `captions.<aspect>[]` chunks): a chunk may carry `speaker` (a small name tag
+  above the block) and `color` (the speaker's key colour, `#RRGGBB`); the other words of the chunk use it, the current word stays on the yellow
+  box. A word may carry `color` of its own.
+- **Emoji words**: a caption word `{text, kind: "emoji", emoji: "<code point hex>"}` (e.g. the laughing face, `1f602`) is drawn from an image,
+  never from the text font (the built-in dynamic font has no colour glyphs). Lookup (`FilmEmoji`): `<film folder>/emoji/<hex>.png`, then
+  `<StreamingAssets>/emoji/<hex>.png`, then a built-in drawing of the laughing face (own artwork, MIT). The PNG is made at setup time from
+  the machine's own colour-emoji font and stays in the git-ignored film folder; nothing third-party is committed. The image counts as a word
+  of two character widths, is never put on the yellow box and shows identically in the viewer and the frame-locked recorder.
+- **Chapter cards** (`ChapterCards`): a segment's `chapter_card {kind: "chapter" | "title", index, title, subtitle, film_in, film_out}` (seconds
+  into the segment) shows a dark pill under the top safe band - the chapter number on an accent disc and the title (9:16 centred, 16:9 at the
+  left), or for `kind: "title"` a two-line card without a number. Fades in over 0.35 s, out over 0.45 s; the HUD and the call-out labels make
+  room like for the reaction title. State keys: `chapterCard`, `chapterCardAlpha`, `emojiWords`, `captionSpeaker`.
+- **Camera keys of the orbit shots** (`FilmCamera.Orbit`, opt-in): `focus: "lead" | "follow"` with `focus_weight` 0..1 leans the orbit centre toward
+  that dancer (a talking shot follows the speaker); `fit_span: true` widens the lens (then backs the eye off) until both dancers' pelvises with an
+  arm's margin stay inside 90 % of the frame width however far apart they stand - it never narrows, so a close couple keeps the orbit's framing.
+  `avoid_inline: true` lifts the eye (up to 1.9 m, smoothly, within 45 deg of the line from one dancer to the other) so that the dancer behind
+  stays visible above the one in front when the orbit runs along that line.
+- **Director mode keys** (class films: much more phone video, tight feature zooms, close overhead views; all opt-in):
+  - Phone shots: `camera_tour` (a hard cut to the phone's video, `cameras: [{camera, dance_t}]`, `blend_s: 0`) or `fly_to_camera` (a short flight from
+    the previous shot, then the video fades in) with a **`crop`** block `{t0, dt, cx[], cy[], zoom[]}` (dance seconds; centre `cx`, `cy` in -1..1 of the
+    phone's frame, y up; `zoom` >= 1): the camera keeps the phone's position and turns / narrows its lens onto that part of the frame. The video
+    quad lies on the phone's image plane in the world, so the crop still maps the picture 1:1 and the 3D skeleton stays registered on it. The plan
+    frames the two teachers (never the whole audience). Layer `avatars_fade_with_video: true`: the 3D dancers show while the camera flies to the
+    phone and fade out as its video fades in (a cut has them gone at once; without the video they stay). Nested evaluations of a previous shot never
+    leak the phone-POV outputs (`PovCamera`, video opacity) into the shot being shown.
+  - `feature_zoom`: `{feature, dancer: lead | follow | both, joints[], partner_joints[], pad_m, min_distance_m, azimuth_offset_deg, elevation_deg, fov_deg}`:
+    the eye side-on to the couple's line at the feature's height, the look point on the named joints (damped), the distance the smallest that keeps
+    those joints of the named dancer(s) and the partner's matching joints inside the key band of the frame (9:16: between the captions and the top
+    band). Joint lists name shoulders, elbows, torso, hips, knees; there are no hand close-ups.
+  - `overhead_floorcraft` with `fill` (0..1) and `min_fill`: the height follows the dancers' own spread; `fill` = the share of the frame width the box of
+    both dancers' joints (plus a body's radius) fills at the tightest (a weighted envelope over -0.8 .. +0.8 s, never further than `min_fill` asks), and the
+    instant's box (and 0.3 s ahead) always stays inside 90 % of the frame: a pivot or an exit is never cropped. Without `fill` the old `across_m` framing.
+  - `physics_3q` with `distance_m`, `fit_band: true` (+ `band_lo`, `band_hi`, `top_m`): the couple fitted between the captions and the physics legend.
+    In 9:16 the physics legend sits at a fixed place under the card slot (it no longer steps below a chapter card and back up) and is drawn 1.85x.
+
 ---
 
 ## 4. View states
@@ -620,6 +688,9 @@ camera moves).
 ---
 
 ## 5. Cameras
+- **Overhead `across_m`** (camera block of `overhead_floorcraft` with `framing: "couple"`): the footprint of the couple seen from above in metres (default 1.9). When the key is present the footprint
+  is also widened to the spread of the four feet + 1.3 m, so a pivot never throws an arm or a leg out of the frame. A direction without the key is framed exactly as before.
+- **Physics legend in 9:16**: the film overlay enlarges the legend box 1.5x (`SkeletonLegend.Scale`, grows left and down from its top-right corner) and puts it below a chapter / title card while one is showing.
 
 ### 5.1 Virtual cameras
 Built on **Cinemachine** (com.unity.cinemachine): an orbit camera, an overhead camera, a graph chase
@@ -724,6 +795,31 @@ looks at the centre of the nodes the path visits so the path stays in frame.
   setup, or muted below a configurable threshold (default 0.5×) where stretching degrades.
 - The existing lesson transport (play/pause, beat/measure step, loop measure, seek) and CLI `hm_*`
   commands remain and gain `hm_state <name>`, `hm_camera <id>`, `hm_speed <x>`, `hm_graph`, `hm_tour`.
+
+### 7.1 Film library and playback bar (desktop)
+
+The data contract and the screens are specified in FILM_LIBRARY.md; this is the behaviour the viewer guarantees.
+
+- **Start screen = the film library.** When the viewer starts it shows one card per film listed in
+  `StreamingAssets/library/library.json` (git-ignored data): a large poster, the title, the subtitle, the length and a **Play** button.
+  The cards come from data, never from code; no other capture, take or test data is listed in any viewer picker (the HUD list and the
+  digit keys offer the library's captures only). Developer commands (`hm_load`, `hm_film_show`, the recorder) still reach every capture.
+- **Processing state.** A film whose capture folder, direction or soundtrack does not exist yet is shown as **Processing** with a
+  disabled Play button, and becomes playable by itself when the files appear (the library re-reads its data and re-checks the files once
+  a second).
+- **Playing a film** loads its capture, shows a loading screen, then runs the film's direction (the directed show of section 6) with its
+  soundtrack from film time 0, under the **playback bar**: play / pause, a scrubber over the whole film (click or drag to seek), **chapter
+  marks** on the scrubber (tick, hover title, click to jump), previous / next chapter, the current chapter's name, the time, a speed
+  button (0.5x to 2x) and **Back** to the library. Keys: Space, Left / Right (5 s), `[` and `]` (chapters), Home / End, Esc (library).
+  The bar fades out while the film plays and the pointer rests, and the film's captions and labels make room for it while it is up.
+- **Seeking is exact.** Every part of the picture is a pure function of the film time, so a seek forward or backward, playing or
+  paused, shows exactly that frame: the segment's camera, speed ramp and layers, the role fades, the captions and call-outs, the phones'
+  video frames and the 3D capture. The one stateful part, the pre-mixed soundtrack, is moved with the clock (held while paused or
+  scrubbing, resumed at the film time on release).
+- **Never in a recording.** The film recorder starts a film without the bar and the library screen; both also stay out of the picture
+  whenever the Unity Recorder is frame-locking the game.
+- **Desktop only for now.** The screens are screen-space overlays driven by the mouse, a touch screen and the keyboard; every action is
+  a public method for a later VR panel (section 9.3), which does not exist yet.
 
 ---
 
@@ -847,6 +943,7 @@ v4 extends v3 (times, SMPL-X motion + skins, timing, physics) with:
 | `origin` | the dance offset of §3.0 (computed by the exporter from the first frame, applied by the viewer) |
 | `floor_yaw_deg` | optional: degrees the floor visuals (§3.1) are turned counter-clockwise as seen from above (0 = world axes) |
 | `role_hidden` | optional: `{ "lead": [ { "from", "to", "fade_in", "fade_out" } ], "follow": [...] }` spans in capture seconds (from the first frame = the HUD clock) in which a role's avatar, skeleton and the overlays derived from its pose are hidden, then faded in over `fade_in` seconds from `to` (§3.14) |
+| `props` | optional: `[ { "role": "lead" \| "follow", "kind": "headset", ...parameters } ]` head-worn props per role, built on the avatar's head mesh at load (§3.2b) |
 | `cameras/` | per source phone: `video.mp4` (rotation baked, trimmed to the take, re-encoded at a **constant** 30 fps from the phone's variable-rate PTS, full resolution for desktop/recording; not packaged for Quest builds), `track.json` (per frame: reference time, Unity-space position + rotation, vertical FOV, principal point, k1), `clock` (reference → video time mapping) |
 | `textures/`, `hair_groom.json` | avatar albedo per dancer, hair parameters |
 | `physics.json` v2 | per frame: COM, GRF per foot (+ bands), **per-segment axial load estimates** (tension/compression, + band, identifiable flag), contact forces per contact (type, points, force or interval, identifiable flag) |
@@ -904,6 +1001,10 @@ unknown (§3.8 timing honesty); FloorCraftOverlay reads the v2 move `length_m`; 
 the playtests run with a 300 s CLI timeout (a 38 s capture's shoe sweep takes ~31 s, past the default 30 s, and its
 checks were skipped silently). On the 38 s demo the counterbalance draws at HUD 32.00-36.05 s against the user's
 32.0-36.15 s (the end is where her centre of mass comes back within ~6 cm of her standing foot).
+
+Film library and playback bar (2026-10-09): the viewer starts on a library screen with a card per film (FILM_LIBRARY.md,
+Assets/FilmLibrary), Play runs the directed film under a bar with a scrubber, chapter marks, chapter / seek / speed buttons and Back
+(7.1); seeking re-syncs the pre-mixed soundtrack (FilmDirector.Seek / BeginScrub / EndScrub, FilmSoundtrack.SeekTo / SetHold).
 
 Packages to add: `com.unity.cinemachine` (3.x), `com.unity.timeline`, `com.unity.recorder`,
 `com.unity.xr.arfoundation` (passthrough + planes, if not already pulled in by Meta OpenXR).
@@ -967,6 +1068,16 @@ pipeline (MOVES.md).
 - Avatars: each body 65 % ± 4 % transparent as displayed by default, every part alike (hm_opacity --probe: p10..p90
   within 6 points), skeletons visible inside; per-state opacity = default × state factor; from either side the nearer dancer's translucent queues come after the farther dancer's (back to front);
   the room and splat layers start off.
+- Film library (Tools/playtest_library.ps1, section 7.1): the start screen has one card per film of library.json and nothing else (the
+  pickers' capture list is the library's); a film without its capture, direction or soundtrack is Processing with a disabled Play and
+  a click on it starts nothing; the Play button's click starts the film with the bar (a scrubber spanning the screen, one tick per
+  chapter start at chapter start / film length of the track, every button on screen); at least 12 seeks (start, every chapter start,
+  mid-film, 2 s before the end; forward and backward; playing and paused) land on the target film time, show the direction's segment and
+  the narration timeline's caption, keep the lead's role-hidden fade equal to the capture's, leave the soundtrack at the film time (drift
+  < 0.15 s when playing, held when paused) and show the same state when the same time is shown twice; a scrubber drag follows the pointer,
+  holds the sound and restores playing or paused at the release; a click on a chapter tick jumps to the chapter's start and hovering names
+  it; Space, Left / Right, `[` / `]`, Home / End act on the film; Back and Esc return to the library with no film overlay left; a film
+  recording contains neither the bar nor the library screen; no console errors.
 
 ---
 
