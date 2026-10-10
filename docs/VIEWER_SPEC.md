@@ -816,6 +816,11 @@ The data contract and the screens are specified in FILM_LIBRARY.md; this is the 
   paused, shows exactly that frame: the segment's camera, speed ramp and layers, the role fades, the captions and call-outs, the phones'
   video frames and the 3D capture. The one stateful part, the pre-mixed soundtrack, is moved with the clock (held while paused or
   scrubbing, resumed at the film time on release).
+- **Films without narration.** A library film may be an auto-directed recording of a whole performance (FILM_LIBRARY.md section 6): the same
+  direction format with no captions or call-outs, film time = dance time, the capture's own soundtrack as the mix, chapters from the
+  performance's structure, a slow camera that keeps both dancers in the frame and goes overhead now and then, the room and the beat counter
+  on. It plays under the same bar with the same exact seeking. With three or more films a landscape window stacks each card (poster above
+  the text) so nothing is cramped; a portrait window stacks the cards in rows.
 - **Never in a recording.** The film recorder starts a film without the bar and the library screen; both also stay out of the picture
   whenever the Unity Recorder is frame-locking the game.
 - **Desktop only for now.** The screens are screen-space overlays driven by the mouse, a touch screen and the keyboard; every action is
@@ -1077,7 +1082,8 @@ pipeline (MOVES.md).
   < 0.15 s when playing, held when paused) and show the same state when the same time is shown twice; a scrubber drag follows the pointer,
   holds the sound and restores playing or paused at the release; a click on a chapter tick jumps to the chapter's start and hovering names
   it; Space, Left / Right, `[` / `]`, Home / End act on the film; Back and Esc return to the library with no film overlay left; a film
-  recording contains neither the bar nor the library screen; no console errors.
+  recording contains neither the bar nor the library screen; no console errors. Cards never overlap and each Play button lies inside its
+  card (three cards: landscape and portrait); for a film without narration the beat counter is on exactly where the direction's layers say.
 
 ---
 

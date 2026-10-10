@@ -20,6 +20,8 @@ Checks, in order:
             chapter tick jumps to the chapter's start
   keys      Space, Left / Right, [ and ] and Home / End act on the film
   back      the Back button (and Esc) stop the film and show the library again; nothing of the film's overlay remains
+  heat      (a film without narration, the auto-directed heat) the beat counter follows the direction's layers at every seek; the cards do
+            not overlap (three cards fit a landscape and a portrait window)
   console   no errors or warnings produced by the library, the bar or the director during the run
 #>
 param(
@@ -226,6 +228,18 @@ foreach ($c in $s.library.cards) {
     $r = $c.card
     Assert ($r[0] -ge 0 -and $r[1] -ge 0 -and ($r[0] + $r[2]) -le $screenW -and ($r[1] + $r[3]) -le $screenH) "card $($c.id) lies inside the $screenW x $screenH screen"
 }
+# the cards are laid out without overlapping each other, and each Play button lies inside its card (three or more cards: stacked in a landscape window)
+$cardsOk = $true
+$cl = @($s.library.cards)
+for ($i = 0; $i -lt $cl.Count; $i++) {
+    $a = $cl[$i].card; $pb = $cl[$i].play
+    if ($pb[0] -lt $a[0] -or $pb[1] -lt $a[1] -or ($pb[0] + $pb[2]) -gt ($a[0] + $a[2]) -or ($pb[1] + $pb[3]) -gt ($a[1] + $a[3])) { $cardsOk = $false }
+    for ($j = $i + 1; $j -lt $cl.Count; $j++) {
+        $b2 = $cl[$j].card
+        if ($a[0] -lt ($b2[0] + $b2[2] - 1) -and $b2[0] -lt ($a[0] + $a[2] - 1) -and $a[1] -lt ($b2[1] + $b2[3] - 1) -and $b2[1] -lt ($a[1] + $a[3] - 1)) { $cardsOk = $false }
+    }
+}
+Assert $cardsOk "the $($cl.Count) cards do not overlap and every Play button is inside its card"
 Shot "01_library"
 foreach ($p in $pending) {
     $card = @($s.library.cards | Where-Object { $_.id -eq $p.id })[0]
@@ -315,6 +329,10 @@ function Check-Seek([double]$target, [bool]$paused, [string]$label) {
         $shown = $f.overlay.caption
         $same = ($null -eq $cap -and [string]::IsNullOrEmpty($shown)) -or ($cap -eq $shown)
         Assert $same ("{0}: caption {1}" -f $label, $(if ($null -eq $cap) { "none" } else { "'" + $cap.Substring(0, [math]::Min(40, $cap.Length)) + "'" }))
+    }
+    # a film whose segments carry the zouk beat counter layer (the auto-directed heat film): the counter is on exactly where the direction says
+    if (-not $nearEdge -and $null -ne $seg.layers -and $null -ne $seg.layers.beat_counter) {
+        Assert ([bool]$f.overlay.beatCounter -eq [bool]$seg.layers.beat_counter) ("{0}: the beat counter is {1} (segment {2})" -f $label, $(if ($f.overlay.beatCounter) { "on" } else { "off" }), $seg.id)
     }
     # the soundtrack follows
     $au = $f.audio
