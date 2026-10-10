@@ -1,4 +1,6 @@
 ﻿<Solution>
   <Project Path="Assembly-CSharp.csproj" />
+  <Project Path="HmVr.Core.csproj" />
   <Project Path="Assembly-CSharp-Editor.csproj" />
+  <Project Path="HmVr.Core.Tests.csproj" />
 </Solution>
