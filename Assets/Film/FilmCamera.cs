@@ -368,7 +368,8 @@ public class FilmCamera
     FilmPose Orbit(FilmShot s, float film, float dance, float radius, float height, float lookH, float period)
     {
         Vector3 c = CoupleFollow(s, film);
-        if (Vertical) radius *= 1.25f;
+        // 9:16 stands further back (the narrow frame) unless the shot names its own radius_vertical_m (the heat films' closer portrait framing)
+        if (Vertical) radius = s.Camera["radius_vertical_m"] != null ? s.P("radius_vertical_m", radius) : radius * 1.25f;
         // opt-in camera keys of the class recap's talking shots (a direction without them gets exactly the orbit it always got):
         // focus = lead | follow with focus_weight 0..1 - the orbit centre leans toward that dancer (a talk shot follows the speaker);
         // fit_span = true - the lens widens (then the eye backs off) until both dancers stay inside the frame however far apart they stand
@@ -386,7 +387,11 @@ public class FilmCamera
             }
         }
 
-        float phi = SideAzimuth(s, 1) + RunAngle(s, film, r => OrbitRate(r));
+        // opt-in (the auto-directed heat films, FILM_LIBRARY.md): azimuth_deg = the eye's absolute azimuth (atan2(z, x) in world degrees) at the
+        // shot's start, drift_deg_s = how fast it glides from there; a camera that stays on one side of the room instead of circling the couple
+        float phi = s.Camera["azimuth_deg"] != null
+            ? (s.P("azimuth_deg", 0f) + s.P("drift_deg_s", 0f) * Mathf.Max(0f, film - s.F0)) * Mathf.Deg2Rad
+            : SideAzimuth(s, 1) + RunAngle(s, film, r => OrbitRate(r));
         if (s.B("avoid_inline")) height += InlineLift(s, film, phi);
         Vector3 eye = c + new Vector3(Mathf.Cos(phi) * radius, height, Mathf.Sin(phi) * radius);
         Vector3 look = c + Vector3.up * lookH;

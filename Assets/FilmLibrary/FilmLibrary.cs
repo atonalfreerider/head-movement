@@ -610,10 +610,12 @@ public class FilmLibrary : MonoBehaviour
         float cw = Mathf.Min((areaW - gap * (cols - 1)) / cols, 980f * u), ch = Mathf.Min((areaH - gap * (rows - 1)) / rows, 900f * u);
         float blockW = cw * cols + gap * (cols - 1), blockH = ch * rows + gap * (rows - 1);
         float x0 = (W - blockW) * 0.5f, yTop = H - headerH - (areaH - blockH) * 0.5f;
+        // three or more cards side by side (a landscape window) are too narrow for a poster with the text beside it: the poster goes above the text
+        bool stacked = landscape && cards.Count >= 3 && cw < 720f * u;
         for (int i = 0; i < cards.Count; i++)
         {
             int col = landscape ? i : 0, row = landscape ? 0 : i;
-            LayoutCard(cards[i], new Rect(x0 + col * (cw + gap), yTop - (row + 1) * ch - row * gap, cw, ch));
+            LayoutCard(cards[i], new Rect(x0 + col * (cw + gap), yTop - (row + 1) * ch - row * gap, cw, ch), stacked);
         }
 
         // the loading screen
@@ -655,7 +657,7 @@ public class FilmLibrary : MonoBehaviour
         FilmUi.Place(t.rectTransform, r.center, r.size);
     }
 
-    void LayoutCard(Card c, Rect card)
+    void LayoutCard(Card c, Rect card, bool stacked = false)
     {
         c.CardRect = card;
         float pad = 22f * u;
@@ -665,14 +667,27 @@ public class FilmLibrary : MonoBehaviour
         c.Panel.pixelsPerUnitMultiplier = 24f / Mathf.Max(1f, 14f * u);
         c.PosterBack.pixelsPerUnitMultiplier = 24f / Mathf.Max(1f, 10f * u);
 
-        float ph = card.height - 2f * pad, pw = ph * 9f / 16f;
-        if (pw > card.width * 0.56f)
+        // stacked: the poster on top, centred, and the text block below it (title, subtitle, length, Play), every line at a fixed size
+        float titleSize = stacked ? 32f : 36f, subSize = stacked ? 22f : 24f, metaSize = stacked ? 22f : 24f;
+        float titleH = (stacked ? 2f : 3f) * titleSize * 1.2f * u, subH = (stacked ? 3f : 5f) * subSize * 1.25f * u, metaH = (stacked ? 30f : 34f) * u;
+        float statusH = 3f * 22f * 1.25f * u, bh = (stacked ? 64f : 72f) * u;
+        float below = 0f;
+        if (stacked) below = pad + bh + 14f * u + metaH + (c.Entry.Ready ? 0f : statusH + 6f * u) + 12f * u + subH + 8f * u + titleH + 16f * u;
+        float ph = card.height - 2f * pad - below, pw = ph * 9f / 16f;
+        if (stacked && pw > card.width - 2f * pad)
+        {
+            pw = card.width - 2f * pad;
+            ph = pw * 16f / 9f;
+        }
+        else if (!stacked && pw > card.width * 0.56f)
         {
             pw = card.width * 0.56f;
             ph = pw * 16f / 9f;
         }
 
-        Rect poster = new(card.x + pad, card.y + (card.height - ph) * 0.5f, pw, ph);
+        Rect poster = stacked
+            ? new Rect(card.x + (card.width - pw) * 0.5f, card.yMax - pad - ph, pw, ph)
+            : new Rect(card.x + pad, card.y + (card.height - ph) * 0.5f, pw, ph);
         c.PosterRect = poster;
         FilmUi.Place(c.PosterBack.rectTransform, poster.center, poster.size);
         Texture tex = c.Poster.texture;
@@ -690,14 +705,14 @@ public class FilmLibrary : MonoBehaviour
         c.Pill.pixelsPerUnitMultiplier = 24f / Mathf.Max(1f, 18f * u);
         SetText(c.PillLabel, new Rect(c.Pill.rectTransform.anchoredPosition.x - pill.x * 0.5f, c.Pill.rectTransform.anchoredPosition.y - pill.y * 0.5f, pill.x, pill.y), 22f);
 
-        float ix = poster.xMax + pad * 1.3f, iw = card.xMax - pad - ix;
-        float top = card.yMax - pad, bottom = card.y + pad;
-        float titleH = 3f * 36f * 1.2f * u, subH = 5f * 24f * 1.25f * u, metaH = 34f * u, statusH = 3f * 22f * 1.25f * u;
-        SetText(c.Title, new Rect(ix, top - titleH, iw, titleH), 36f);
-        SetText(c.Subtitle, new Rect(ix, top - titleH - 12f * u - subH, iw, subH), 24f);
-        SetText(c.Meta, new Rect(ix, bottom + 96f * u, iw, metaH), 24f);
-        SetText(c.Status, new Rect(ix, bottom + 96f * u + metaH + 6f * u, iw, statusH), 22f);
-        float bh = 72f * u, bwid = Mathf.Min(iw, 380f * u);
+        float ix = stacked ? card.x + pad : poster.xMax + pad * 1.3f, iw = stacked ? card.width - 2f * pad : card.xMax - pad - ix;
+        float top = stacked ? poster.y - 16f * u : card.yMax - pad, bottom = card.y + pad;
+        float gapMeta = stacked ? bh + 14f * u : 96f * u;
+        SetText(c.Title, new Rect(ix, top - titleH, iw, titleH), titleSize);
+        SetText(c.Subtitle, new Rect(ix, top - titleH - (stacked ? 8f : 12f) * u - subH, iw, subH), subSize);
+        SetText(c.Meta, new Rect(ix, bottom + gapMeta, iw, metaH), metaSize);
+        SetText(c.Status, new Rect(ix, bottom + gapMeta + metaH + 6f * u, iw, statusH), 22f);
+        float bwid = Mathf.Min(iw, 380f * u);
         Rect play = new(ix, bottom, bwid, bh);
         c.PlayRect = play;
         FilmUi.Place(c.PlayBack.rectTransform, play.center, play.size);

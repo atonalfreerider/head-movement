@@ -73,7 +73,7 @@ public class FilmDirector : MonoBehaviour
     FloorCraftOverlay tLookOwner;
 
     // layers we change, with the values to restore
-    static readonly string[] HeadLayers = { "floor", "grid", "timing", "physics", "tension", "avatars", "hud" };
+    static readonly string[] HeadLayers = { "floor", "grid", "timing", "physics", "tension", "avatars", "hud", "room" };
     readonly Dictionary<string, bool> savedHead = new();
     readonly Dictionary<LineRenderer, (float width, bool on)> savedWidth = new();
     readonly List<LineRenderer> lineBuffer = new();
@@ -92,6 +92,8 @@ public class FilmDirector : MonoBehaviour
         public float Avatar = 0.35f, Skeleton = 1f, Graph, Glyphs, Contacts = 1f; // Contacts: the hand-contact lights (layer "hand_contacts")
         public bool Physics, Floor, Timing, Tension, Counterbalance, Traces, Neck, Axis, Record, AllPivots, Moves = true, Inset, BeatCounter;
         public bool Grid = true;                                        // the floor's cross grid + plane (layer "grid")
+        public float Lines = 1f;                                        // the skeleton lines' own width factor (layer "skeleton_lines", 0 = hidden; the avatars stay)
+        public bool? Room;                                              // the capture's room mesh (layer "room"); null = leave the viewer's own setting (the demo and the recap)
         public bool FcLabelsCurrent;                                    // layer "floorcraft_labels": "current" = only the running dial keeps its number
         public float TWidth = float.NaN, OldTWidth = float.NaN, TBrightness = float.NaN; // the leader's T on the floor (m / 0..1)
         public DanceGraphLayer.Mode GraphMode = DanceGraphLayer.Mode.Off;
@@ -493,6 +495,8 @@ public class FilmDirector : MonoBehaviour
         string footprints = s.LayerString("footprints", null);
         l.Floor = s.LayerBool("floor", false) || footprints is "recent" or "all";
         l.Grid = s.LayerBool("grid", true);
+        if (s.Layers["room"] != null) l.Room = s.LayerBool("room", false);
+        l.Lines = Mathf.Clamp01(s.LayerFloat("skeleton_lines", 1f));
         l.FcLabelsCurrent = s.LayerString("floorcraft_labels", "all") == "current";
         l.TWidth = s.LayerFloat("t_width_m", float.NaN);
         l.OldTWidth = s.LayerFloat("old_t_width_m", float.NaN);
@@ -685,6 +689,7 @@ public class FilmDirector : MonoBehaviour
             appliedSegment = si;
             SetHead("floor", l.Floor);
             SetHead("grid", l.Grid);
+            if (l.Room.HasValue) SetHead("room", l.Room.Value);
             SetHead("timing", l.Timing);
             SetHead("physics", l.Physics);
             SetHead("tension", l.Tension);
@@ -718,7 +723,8 @@ public class FilmDirector : MonoBehaviour
             hm.SetDirectorAvatarOpacity(avatar);
         }
 
-        if (Mathf.Abs(skeleton - skeletonNow) > 1e-3f) SetSkeletonWidth(skeleton);
+        float lines = skeleton * LayerValue(film, si, x => x.Lines);
+        if (Mathf.Abs(lines - skeletonNow) > 1e-3f) SetSkeletonWidth(lines);
         float contacts = LayerValue(film, si, x => x.Contacts);
         if (Mathf.Abs(contacts - contactsNow) > 1e-3f)
         {
