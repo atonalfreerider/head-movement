@@ -52,7 +52,7 @@ function Copy-Tree([string]$from, [string]$to, [string[]]$exclude = @()) {
     if ($LASTEXITCODE -ge 8) { throw "robocopy $from failed ($LASTEXITCODE)" }
 }
 
-$lib = Get-Content $libFile -Raw | ConvertFrom-Json
+$lib = Get-Content $libFile -Raw -Encoding UTF8 | ConvertFrom-Json
 New-Item -ItemType Directory -Force (Join-Path $out "library/thumbs") | Out-Null
 $films = @()
 foreach ($f in $lib.films) {
@@ -65,7 +65,7 @@ foreach ($f in $lib.films) {
     Copy-Tree $capDir (Join-Path $out $f.capture) $exclude
 
     $film = Split-Path $dir -Parent
-    $name = (Get-Content $dir -Raw | ConvertFrom-Json).name
+    $name = (Get-Content $dir -Raw -Encoding UTF8 | ConvertFrom-Json).name
     $dest = Join-Path $out "library/films/$($f.id)"
     New-Item -ItemType Directory -Force $dest | Out-Null
     Copy-Item $dir (Join-Path $dest "direction.json") -Force
@@ -103,7 +103,7 @@ foreach ($f in $lib.films) {
 }
 
 $lib.films = $films
-$lib | ConvertTo-Json -Depth 30 | Set-Content (Join-Path $out "library/library.json") -Encoding UTF8
+[System.IO.File]::WriteAllText((Join-Path $out "library/library.json"), ($lib | ConvertTo-Json -Depth 30), (New-Object System.Text.UTF8Encoding $false))
 $size = (Get-ChildItem $out -Recurse -File | Measure-Object Length -Sum).Sum / 1MB
 Write-Host ("deployed {0} film(s) to {1} ({2:0} MB)" -f $films.Count, $out, $size)
 
