@@ -16,6 +16,12 @@ public class HeadMovement : MonoBehaviour
 
     public static HeadMovement Instance;
 
+    /// <summary>set by the film library screen (Assets/FilmLibrary): while it covers the viewer the IMGUI HUD and the lesson keys stay quiet</summary>
+    public static bool LibraryOwnsScreen;
+
+    /// <summary>a capture folder is about to load (LoadCapture): the film library screen gives way unless it asked for the load itself</summary>
+    public static event Action<string> CaptureLoading;
+
     int FrameCount = -1;
     float Fps = 30;
     float AudioOffset;
@@ -90,7 +96,10 @@ public class HeadMovement : MonoBehaviour
     void Awake()
     {
         Instance = this;
-        captures = Directory.GetDirectories(assetPath).OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToArray();
+        // the film library's own folder (StreamingAssets/library: library.json, thumbnails) is not a capture
+        captures = Directory.GetDirectories(assetPath)
+            .Where(d => !string.Equals(Path.GetFileName(d), LibraryData.FolderName, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToArray();
 
         floorPatterns = gameObject.AddComponent<FloorPatterns>();
         floorGrid = new GameObject("Floor").AddComponent<FloorGrid>();
@@ -330,6 +339,15 @@ public class HeadMovement : MonoBehaviour
     public void LoadCapture(int selection)
     {
         if (selection < 0 || selection >= captures.Length) return;
+
+        try
+        {
+            CaptureLoading?.Invoke(Path.GetFileName(captures[selection]));
+        }
+        catch (Exception e)
+        {
+            Debug.LogException(e);
+        }
 
         Pause();
         audioLoaded = false;
@@ -1230,7 +1248,7 @@ public class HeadMovement : MonoBehaviour
     void HandleKeyboard()
     {
         Keyboard keyboard = Keyboard.current;
-        if (keyboard == null) return;
+        if (keyboard == null || LibraryOwnsScreen) return;
 
         if (keyboard.rightArrowKey.wasPressedThisFrame)
         {
@@ -1280,27 +1298,34 @@ public class HeadMovement : MonoBehaviour
         {
             if (keyboard[digits[i]].wasPressedThisFrame)
             {
-                LoadCapture(i);
+                string[] pick = PickerCaptures();
+                if (i < pick.Length) LoadCapture(pick[i]);
                 break;
             }
         }
     }
+
+    /// <summary>the capture folders the HUD list and the digit keys offer: the film library's playable captures when the viewer has a
+    /// library (StreamingAssets/library/library.json), every capture folder otherwise. hm_load, hm_film_show and the other developer
+    /// commands are not restricted by it.</summary>
+    string[] PickerCaptures() => LibraryData.PickerCaptureNames() ?? captures.Select(Path.GetFileName).ToArray();
 
     /// <summary>nearest pose frame to the audio clock (binary search over the capture's real frame times)</summary>
     int GetFrameNumber() => timeline.FrameAt(audioSource.time);
 
     void OnGUI()
     {
-        if (!showHud) return;
+        if (!showHud || LibraryOwnsScreen) return;
 
         bool overlays = timingOverlay != null || physicsOverlay != null; // v3 HUD lines are longer
         GUILayout.BeginArea(new Rect(12, 12, overlays ? 620 : 460, overlays ? 520 : 400), GUI.skin.box);
         if (manifest == null)
         {
             GUILayout.Label("Press 1-9/0 to load a performance:");
-            for (int i = 0; i < Mathf.Min(captures.Length, 10); i++)
+            string[] pick = PickerCaptures();
+            for (int i = 0; i < Mathf.Min(pick.Length, 10); i++)
             {
-                GUILayout.Label($"  {(i + 1) % 10}  {Path.GetFileName(captures[i])}");
+                GUILayout.Label($"  {(i + 1) % 10}  {pick[i]}");
             }
         }
         else if (audioLoaded)

@@ -465,7 +465,8 @@ public static class FilmRecorder
 
     public static string[] CaptureNames() =>
         Directory.Exists(Application.streamingAssetsPath)
-            ? Directory.GetDirectories(Application.streamingAssetsPath).Select(Path.GetFileName).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToArray()
+            ? Directory.GetDirectories(Application.streamingAssetsPath).Select(Path.GetFileName)
+                .Where(n => !string.Equals(n, LibraryData.FolderName, StringComparison.OrdinalIgnoreCase)).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToArray()
             : Array.Empty<string>();
 
     public static IEnumerable<string> FilmDirs(string capture)
@@ -512,8 +513,14 @@ public static class FilmRecorder
     }
 
     /// <summary>captures with a film direction, newest (highest number) first</summary>
-    public static string[] FilmCaptures() =>
-        CaptureNames().Where(c => FindDirection(c) != null).OrderByDescending(c => c, StringComparer.OrdinalIgnoreCase).ToArray();
+    public static string[] FilmCaptures()
+    {
+        // the recorder window's capture list and the default capture: with a film library, the library's captures only
+        // (--capture <folder> and the other developer commands still reach every capture)
+        string[] only = LibraryData.PickerCaptureNames();
+        return CaptureNames().Where(c => (only == null || only.Contains(c, StringComparer.OrdinalIgnoreCase)) && FindDirection(c) != null)
+            .OrderByDescending(c => c, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
 
     public static string DefaultCapture() => FilmCaptures().FirstOrDefault();
 
