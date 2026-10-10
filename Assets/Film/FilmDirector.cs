@@ -35,6 +35,10 @@ public class FilmDirector : MonoBehaviour
 
     public const float LayerBlendSeconds = 0.8f;
 
+    /// <summary>VR mode (Assets/VR): the viewer's head is the camera. The film then never moves, re-lenses or parks any camera, and shows no phone video over the view
+    /// (the POV shots become the 3D scene seen from where the user stands); layers, call-outs, captions and the clock run as always.</summary>
+    public static bool HeadIsCamera;
+
     FilmDirection direction;
     FilmClock clock;
     FilmTargets targets;
@@ -423,12 +427,12 @@ public class FilmDirector : MonoBehaviour
 
         ApplyLayers(film, si);
 
-        if (cam == null) cam = DanceText.ViewCamera;
+        if (cam == null && !HeadIsCamera) cam = DanceText.ViewCamera;
         // the orbit rig stays parked for the whole film: the editor CLI commands of the other tools (hm_orbit, hm_hair, hm_shoes,
         // hm_spine, ...) "un-park" it, and an enabled CameraControl rewrites the camera's FOV in every LateUpdate (measured
         // 2026-10-08: three excerpt recordings had the POV shot at 60 deg instead of the phone's 79.85 -> the picture 1.45x too
         // big, video and 3D together; the film's POV shots are only correct when the render camera IS the phone)
-        if (rig != null && rig.enabled) rig.enabled = false;
+        if (rig != null && rig.enabled && !HeadIsCamera) rig.enabled = false;
         // the camera must follow its target: a stale custom aspect (measured 2026-10-08: 16:9 on a 1080x1920 target after a
         // 16:9 recording in the same editor session) squeezes the whole 3D picture to a third of its width
         if (cam != null && cam.pixelHeight > 0 && Mathf.Abs(cam.aspect - (float)cam.pixelWidth / cam.pixelHeight) > 0.02f) cam.ResetAspect();
@@ -446,7 +450,7 @@ public class FilmDirector : MonoBehaviour
         float glyphs = LayerValue(film, si, l => l.Glyphs);
         sources.SetGlyphs(glyphs, dance, cam);
         string pov = filmCamera.PovCamera;
-        if (pov != null && filmCamera.PovVideoOpacity > 0.001f)
+        if (pov != null && filmCamera.PovVideoOpacity > 0.001f && !HeadIsCamera)
         {
             sources.SetVideo(pov, filmCamera.PovVideoOpacity, dance, Speed, filmCamera.PovComposite);
             videoShown = true;
@@ -551,11 +555,11 @@ public class FilmDirector : MonoBehaviour
         foreach (string layer in HeadLayers) savedHead[layer] = hm.LayerVisible(layer);
         if (hm.Footprints != null) savedFootprints = hm.Footprints.Mode;
         rig = hm.OrbitCamera;
-        cam = DanceText.ViewCamera;
+        cam = HeadIsCamera ? null : DanceText.ViewCamera; // VR: the user's head is the camera, the film leaves every camera alone
         if (rig != null)
         {
             rigWasEnabled = rig.enabled;
-            rig.enabled = false; // parked: nothing else writes the camera while the film runs
+            if (!HeadIsCamera) rig.enabled = false; // parked: nothing else writes the camera while the film runs
         }
 
         if (cam != null)

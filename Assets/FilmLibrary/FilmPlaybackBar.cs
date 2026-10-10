@@ -172,7 +172,9 @@ public class FilmPlaybackBar : MonoBehaviour
 
     public void CycleRate()
     {
-        rateIndex = (rateIndex + 1) % Rates.Length;
+        // the rate may have been set from elsewhere (the VR hand panel's slow motion): continue from where it is
+        int next = Array.FindIndex(Rates, r => r > director.Rate + 0.001f);
+        rateIndex = next < 0 ? 0 : next;
         director.Rate = Rates[rateIndex];
         Touch();
     }
@@ -604,7 +606,7 @@ public class FilmPlaybackBar : MonoBehaviour
         if (chapterLabel.text != chapter) chapterLabel.text = chapter;
         string time = $"{LibraryData.Clock(t)} / {LibraryData.Clock(dur)}";
         if (timeLabel.text != time) timeLabel.text = time;
-        string rate = Rates[rateIndex] == 1f ? "1x" : $"{Rates[rateIndex]:0.#}x";
+        string rate = Mathf.Approximately(director.Rate, 1f) ? "1x" : $"{director.Rate:0.##}x";
         if (speedBtn.Label.text != rate) speedBtn.Label.text = rate;
         UpdatePlayGlyph();
 
@@ -661,7 +663,7 @@ public class FilmPlaybackBar : MonoBehaviour
     {
         Dictionary<string, object> s = new()
         {
-            ["visible"] = IsVisible, ["alpha"] = Math.Round(alpha, 3), ["dragging"] = dragging, ["rate"] = Rates[rateIndex],
+            ["visible"] = IsVisible, ["alpha"] = Math.Round(alpha, 3), ["dragging"] = dragging, ["rate"] = director != null ? director.Rate : 1f,
             ["chapter"] = ChapterIndex, ["chapterTitle"] = ChapterIndex >= 0 ? chapters[ChapterIndex].Title : null, ["chapters"] = chapters.Count,
             ["track"] = R(trackRect), ["trackHit"] = R(trackHit), ["tooltip"] = float.IsNaN(hoverTime) ? null : tip, ["hoverTick"] = hoverTick,
             ["ticks"] = chapters.Where(c => c.StartS > 0.05f).Select(c => new[] { c.StartS, XOf(c.StartS) }).ToList(),
