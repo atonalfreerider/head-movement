@@ -68,12 +68,12 @@ namespace HmVr.Editor
 
                 bool had = XRPackageMetadataStore.IsLoaderAssigned("UnityEngine.XR.OpenXR.OpenXRLoader", group);
                 if (!had) XRPackageMetadataStore.AssignLoader(manager, "UnityEngine.XR.OpenXR.OpenXRLoader", group);
-                general.InitManagerOnStart = false;
+                general.InitManagerOnStart = group == BuildTargetGroup.Android; // the headset app is VR from its first frame; the PC viewer starts XR itself, on demand
                 manager.automaticLoading = false;
                 manager.automaticRunning = false;
                 EditorUtility.SetDirty(general);
                 EditorUtility.SetDirty(manager);
-                log.AppendLine($"{group}: OpenXR loader {(had ? "already assigned" : "assigned")}, Initialize XR on Startup off");
+                log.AppendLine($"{group}: OpenXR loader {(had ? "already assigned" : "assigned")}, Initialize XR on Startup {(general.InitManagerOnStart ? "on (the headset app is VR from the start)" : "off (the viewer starts XR itself)")}");
 
                 OpenXRSettings oxr = OpenXRSettings.GetSettingsForBuildTargetGroup(group);
                 if (oxr == null)
@@ -96,8 +96,23 @@ namespace HmVr.Editor
                 log.AppendLine($"{group}: OpenXR render mode single-pass instanced, no depth submission");
             }
 
+            ApplyAndroidPlayer(log);
             AssetDatabase.SaveAssets();
             return log.ToString();
+        }
+
+        /// <summary>the Android player settings of a Quest 2 / 3 standalone build (they only matter for an Android build; the editor stays on its build target)</summary>
+        static void ApplyAndroidPlayer(StringBuilder log)
+        {
+            PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel29; // Quest 2 runs Android 10 and up
+            PlayerSettings.Android.targetSdkVersion = AndroidSdkVersions.AndroidApiLevelAuto;
+            PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
+            PlayerSettings.SetScriptingBackend(UnityEditor.Build.NamedBuildTarget.Android, ScriptingImplementation.IL2CPP);
+            PlayerSettings.SetApplicationIdentifier(UnityEditor.Build.NamedBuildTarget.Android, "com.headmovement.viewer");
+            PlayerSettings.SetUseDefaultGraphicsAPIs(BuildTarget.Android, false);
+            PlayerSettings.SetGraphicsAPIs(BuildTarget.Android, new[] { UnityEngine.Rendering.GraphicsDeviceType.Vulkan, UnityEngine.Rendering.GraphicsDeviceType.OpenGLES3 });
+            EditorUserBuildSettings.androidBuildSubtarget = MobileTextureSubtarget.ASTC;
+            log.AppendLine("Android player: min API 29, ARM64, IL2CPP, Vulkan then GLES3, ASTC textures, package com.headmovement.viewer");
         }
 
         static XRGeneralSettingsPerBuildTarget Store()
