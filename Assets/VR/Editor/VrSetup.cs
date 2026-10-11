@@ -125,7 +125,7 @@ namespace HmVr.Editor
         {
             PlayerSettings.productName = "Head Movement"; // the name in the headset's library (Unknown Sources); was the project's template name
             PlayerSettings.enableFrameTimingStats = true; // FrameTimingManager: GPU / CPU frame time for the on-device log (VrPerf)
-            PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel29; // Quest 2 runs Android 10 and up
+            PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel32; // the Meta passthrough (camera) feature needs Android 12L; Horizon OS on a Quest 2 and 3 is Android 14 (API 34)
             PlayerSettings.Android.targetSdkVersion = AndroidSdkVersions.AndroidApiLevelAuto;
             PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
             PlayerSettings.SetScriptingBackend(UnityEditor.Build.NamedBuildTarget.Android, ScriptingImplementation.IL2CPP);
@@ -133,7 +133,7 @@ namespace HmVr.Editor
             PlayerSettings.SetUseDefaultGraphicsAPIs(BuildTarget.Android, false);
             PlayerSettings.SetGraphicsAPIs(BuildTarget.Android, new[] { UnityEngine.Rendering.GraphicsDeviceType.Vulkan, UnityEngine.Rendering.GraphicsDeviceType.OpenGLES3 });
             EditorUserBuildSettings.androidBuildSubtarget = MobileTextureSubtarget.ASTC;
-            log.AppendLine("Android player: product name 'Head Movement', min API 29, ARM64, IL2CPP, Vulkan then GLES3, ASTC textures, package com.headmovement.viewer, frame timing stats on");
+            log.AppendLine("Android player: product name 'Head Movement', min API 32, ARM64, IL2CPP, Vulkan then GLES3, ASTC textures, package com.headmovement.viewer, frame timing stats on");
         }
 
         static XRGeneralSettingsPerBuildTarget Store()
