@@ -111,6 +111,7 @@ public class FilmOverlay : MonoBehaviour
         if (DanceLayers.Instance != null && DanceLayers.Instance.Rhythm != null) DanceLayers.Instance.Rhythm.ClearFilmPlacement();
         SkeletonLegend.TopOverride = -1f;
         SkeletonLegend.Scale = 1f;
+        SkeletonLegend.RightMargin = 14f;
     }
 
     public void Tick(float film, float dance)
@@ -168,7 +169,8 @@ public class FilmOverlay : MonoBehaviour
         }
 
         // 9:16 enlarges the legend: its 11 px text on a 1080-wide frame cannot be read on a phone (1.5x was still about 16 px)
-        SkeletonLegend.Scale = vertical ? Mathf.Max(1f, 1.85f * unit) : 1f;
+        SkeletonLegend.Scale = vertical ? Mathf.Max(1f, 1.85f * unit) : Mathf.Max(1f, aspect.LegendScale * unit);
+        SkeletonLegend.RightMargin = !vertical && aspect.SafeSide > 0f ? aspect.SafeSide * W : 14f;
         // 16:9: the move caption (lower left) and the graph inset (lower right) are boxes the call-out labels keep out of
         // (9:16: they sit under the top band, which LabelCeiling already excludes)
         List<Rect> obstacles = director.Annotations.Obstacles;

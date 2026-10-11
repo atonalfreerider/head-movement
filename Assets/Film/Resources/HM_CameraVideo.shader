@@ -36,6 +36,8 @@ Shader "HeadMovement/CameraVideo"
             CBUFFER_START(UnityPerMaterial)
                 float4 _MainTex_ST;
                 half _Alpha;
+                float4 _BlurUV;
+                half _Dim;
             CBUFFER_END
 
             struct Attributes
@@ -67,6 +69,20 @@ Shader "HeadMovement/CameraVideo"
             {
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
                 half4 c = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, input.uv);
+                // side fill (CameraVideoRig.SetSideFill): _BlurUV.x > 0 = a 48-tap golden-angle disc blur and a dim; otherwise the frame as it is
+                if (_BlurUV.x > 0.00001)
+                {
+                    half3 acc = c.rgb;
+                    [unroll] for (int k = 1; k <= 48; k++)
+                    {
+                        float r = sqrt(k / 48.0);
+                        float a = k * 2.399963;
+                        acc += SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, input.uv + float2(cos(a), sin(a)) * _BlurUV.xy * r).rgb;
+                    }
+
+                    c.rgb = acc / 49.0 * _Dim;
+                }
+
                 return half4(c.rgb, _Alpha);
             }
             ENDHLSL

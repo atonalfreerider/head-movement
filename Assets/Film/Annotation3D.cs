@@ -919,7 +919,11 @@ public class Annotation3D : MonoBehaviour
         float floorY = ov != null ? ov.LabelFloor : (vertical ? 0.32f * H : 0.17f * H);
         float topY = vertical ? (1f - aspect.SafeTop) * H - 8f * unit : (1f - Mathf.Max(0.04f, aspect.SafeTop)) * H;
         if (ov != null) topY = Mathf.Min(topY, ov.LabelCeiling);
-        Rect safe = Rect.MinMaxRect(vertical ? 0.035f * W : 0.03f * W, floorY, vertical ? 0.965f * W : 0.97f * W, topY);
+        // 16:9 with the opt-in preset margin (`safe.side_frac`): the labels keep that share of the width at both sides; otherwise the old 3 % / 4 %
+        bool sideSet = !vertical && aspect.SafeSide > 0.031f;
+        Rect safe = sideSet
+            ? Rect.MinMaxRect(aspect.SafeSide * W, floorY, (1f - aspect.SafeSide) * W, topY)
+            : Rect.MinMaxRect(vertical ? 0.035f * W : 0.03f * W, floorY, vertical ? 0.965f * W : 0.97f * W, topY);
         int baseSize = Mathf.RoundToInt((vertical ? 36f : 29f) * unit);
         float maxW = vertical ? 0.54f * W : 0.30f * W;
         Vector2 pad = new Vector2(16f, 8f) * unit;

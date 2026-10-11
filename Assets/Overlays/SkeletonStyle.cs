@@ -631,8 +631,11 @@ public class SkeletonLegend : MonoBehaviour
     /// a 1080-wide frame cannot be read on a phone). The box grows to the left and down from its top-right corner.</summary>
     public static float Scale = 1f;
 
+    /// <summary>distance (px) of the legend's right edge from the screen's right edge (the film's 16:9 sets its title-safe margin)</summary>
+    public static float RightMargin = 14f;
+
     /// <summary>legend rectangle (playtests: no overlap with the tour label)</summary>
-    public static Rect Area => new(Screen.width - 14 - 300 * Scale, TopOffset(), 300 * Scale, 74 * Scale);
+    public static Rect Area => new(Screen.width - RightMargin - 300 * Scale, TopOffset(), 300 * Scale, 74 * Scale);
 
     void OnGUI()
     {
@@ -651,7 +654,7 @@ public class SkeletonLegend : MonoBehaviour
 
         // below the tour title (DanceHud: top right, 26 px at 1080 p from 20 px down) so it never covers "from motion"
         float w = 300, h = 74;
-        Rect r = new(Screen.width - w - 14, TopOffset(), w, h);
+        Rect r = new(Screen.width - w - RightMargin, TopOffset(), w, h);
         Matrix4x4 oldMatrix = GUI.matrix;
         if (Scale > 1.001f)
         {

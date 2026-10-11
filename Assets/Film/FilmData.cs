@@ -52,6 +52,10 @@ public class FilmDirection
                 a.Fps = p.Value<float?>("fps") ?? 30f;
                 a.SafeTop = p["safe"]?.Value<float?>("top_frac") ?? a.SafeTop;
                 a.SafeBottom = p["safe"]?.Value<float?>("bottom_frac") ?? a.SafeBottom;
+                a.PhoneSideFill = a.Vertical ? 0f : p.Value<float?>("phone_side_fill") ?? 0f;
+                a.SafeSide = a.Vertical ? 0f : p["safe"]?.Value<float?>("side_frac") ?? 0f;
+                a.PortraitZoom = a.Vertical ? 1f : Mathf.Clamp(p.Value<float?>("portrait_zoom") ?? 1f, 1f, 2f);
+                a.LegendScale = a.Vertical ? 1f : Mathf.Max(1f, p.Value<float?>("legend_scale") ?? 1f);
             }
             else
             {
@@ -210,6 +214,16 @@ public class FilmAspect
     public float CaptionCentreY = 0.735f, CaptionBottomY = 0.79f, CaptionBaselineY = 0.925f;
     public int CaptionMaxLines = 2, CaptionMaxChars = 24;
     public float CaptionFontPx = 62f, CaptionWidthFrac = 0.86f;
+    /// <summary>16:9 only, opt-in (presets.horizontal.phone_side_fill): brightness 0..1 of the blurred copy of a portrait phone clip that fills the
+    /// frame beside the centred clip; 0 = the plain black sides</summary>
+    public float PhoneSideFill;
+    /// <summary>16:9 only, opt-in (presets.horizontal.safe.side_frac): the left / right margin (share of the width) the call-out labels, the chapter
+    /// card and the physics legend keep; 0 = the layout's own margins (3 - 4 %)</summary>
+    public float SafeSide;
+    /// <summary>16:9 only, opt-in (presets.horizontal.portrait_zoom): factor on the crop zoom of a portrait phone clip (capped at 2.1x); 1 = the plan's zoom</summary>
+    public float PortraitZoom = 1f;
+    /// <summary>16:9 only, opt-in (presets.horizontal.legend_scale): size factor of the physics legend (its 11 px text is small on a 1080-high frame); 1 = as is</summary>
+    public float LegendScale = 1f;
 
     public static string Normalise(string aspect)
     {

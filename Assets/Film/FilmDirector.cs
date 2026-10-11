@@ -510,6 +510,7 @@ public class FilmDirector : MonoBehaviour
         // 16:9 recording in the same editor session) squeezes the whole 3D picture to a third of its width
         if (cam != null && cam.pixelHeight > 0 && Mathf.Abs(cam.aspect - (float)cam.pixelWidth / cam.pixelHeight) > 0.02f) cam.ResetAspect();
         filmCamera.Vertical = Vertical;
+        filmCamera.PortraitZoom = Vertical ? 1f : AspectInfo.PortraitZoom;
         FilmPose pose = filmCamera.Evaluate(film);
         if (cam != null) FilmCamera.Apply(cam.transform, cam, pose); // the rig is parked; its camera's local pose is restored on stop
         if (cam != null)

@@ -57,10 +57,10 @@ public sealed class CameraVideoRig : MonoBehaviour
     Shader shader;
     GlowMesh lines;
     Material lineMaterial;
-    MeshRenderer videoRenderer;
-    Mesh videoMesh;
-    Material videoMaterial;
-    string videoPhone;
+    MeshRenderer videoRenderer, fillRenderer;
+    Mesh videoMesh, fillMesh;
+    Material videoMaterial, fillMaterial;
+    string videoPhone, fillPhone;
     int videoQueue = -1;
     int lastGlyphFrame = -100, lastVideoFrame = -100;
 
@@ -187,6 +187,7 @@ public sealed class CameraVideoRig : MonoBehaviour
         phones.Clear();
         ids.Clear();
         videoPhone = null;
+        fillPhone = null;
     }
 
     static void DisposePhone(Phone p)
@@ -414,6 +415,7 @@ public sealed class CameraVideoRig : MonoBehaviour
 
         videoMaterial.SetFloat("_Alpha", Mathf.Clamp01(opacity));
         videoRenderer.enabled = true;
+        SetSideFill(p, opacity, over, pos, rot, hh, hw, c);
         LastVideoCamera = p.Id;
         LastVideoFrameTime = strip.Time[idx];
         LastVideoFrameIndex = idx;
@@ -423,7 +425,58 @@ public sealed class CameraVideoRig : MonoBehaviour
     public void HideVideo()
     {
         if (videoRenderer != null && videoRenderer.enabled) videoRenderer.enabled = false;
+        if (fillRenderer != null && fillRenderer.enabled) fillRenderer.enabled = false;
         LastVideoOpacity = 0f;
+    }
+
+    /// <summary>true while the side fill is drawn behind the phone's picture (diagnostics)</summary>
+    public bool SideFillVisible => fillRenderer != null && fillRenderer.enabled;
+
+    /// <summary>Portrait phone clip in the 16:9 output (opt-in: the direction's horizontal preset `phone_side_fill` = brightness 0..1, 0 = off): the clip
+    /// stays a centred panel with the 3D registered on it, and the empty sides show the same frame magnified to cover the frame, blurred and dimmed.
+    /// A second quad on the same image plane, drawn just before the picture; nothing changes in the 9:16 output or without the switch.</summary>
+    void SetSideFill(Phone p, float opacity, bool videoOver, Vector3 pos, Quaternion rot, float hh, float hw, Vector3 centre)
+    {
+        FilmDirector fd = FilmDirector.Instance;
+        float dim = fd != null && !fd.Vertical ? fd.AspectInfo.PhoneSideFill : 0f;
+        if (dim <= 0.001f || videoOver || p.Track.Aspect >= 1.5f)
+        {
+            if (fillRenderer != null && fillRenderer.enabled) fillRenderer.enabled = false;
+            return;
+        }
+
+        if (fillRenderer == null)
+        {
+            fillMesh = NewQuadMesh("Film camera video side fill");
+            fillMaterial = NewMaterial("Film camera video side fill", 999, CompareFunction.Always);
+            fillRenderer = NewQuad("Film camera video side fill", transform, fillMesh, fillMaterial);
+        }
+
+        // the quad covers a 16:9 view of the phone's own lens at any zoom >= 1 (with a margin for the crop's turn); the picture magnified to cover it
+        float halfH = 1.3f * hh, halfW = halfH * 16f / 9f * 1.05f;
+        Vector3 right = rot * Vector3.right, up = rot * Vector3.up;
+        quad[0] = centre - right * halfW - up * halfH;
+        quad[1] = centre + right * halfW - up * halfH;
+        quad[2] = centre + right * halfW + up * halfH;
+        quad[3] = centre - right * halfW + up * halfH;
+        float scale = halfW / hw;                      // the picture's width over the quad's width
+        float fv = Mathf.Clamp01(halfH / (hh * scale)); // the share of the picture's height the quad shows
+        const float vCentre = 0.46f;
+        float v0 = Mathf.Clamp(vCentre - fv * 0.5f, 0f, 1f - fv), v1 = v0 + fv;
+        fillMesh.vertices = quad;
+        fillMesh.uv = new Vector2[] { new(0, v0), new(1, v0), new(1, v1), new(0, v1) };
+        fillMesh.bounds = new Bounds(centre, new Vector3(1000, 1000, 1000));
+        if (fillPhone != p.Id)
+        {
+            fillMaterial.mainTexture = p.FullTexture;
+            fillPhone = p.Id;
+        }
+
+        // blur radius in texture units (about 5 % of the picture's width: the magnified frame is already soft), isotropic on the screen
+        fillMaterial.SetVector("_BlurUV", new Vector4(0.05f, 0.05f * p.Track.Aspect, 0f, 0f));
+        fillMaterial.SetFloat("_Dim", Mathf.Clamp01(dim));
+        fillMaterial.SetFloat("_Alpha", Mathf.Clamp01(opacity));
+        fillRenderer.enabled = true;
     }
 
     // ------------------------------------------------------------------ frustum glyphs + live thumbnails
@@ -565,6 +618,8 @@ public sealed class CameraVideoRig : MonoBehaviour
         phones.Clear();
         if (videoMesh != null) Destroy(videoMesh);
         if (videoMaterial != null) Destroy(videoMaterial);
+        if (fillMesh != null) Destroy(fillMesh);
+        if (fillMaterial != null) Destroy(fillMaterial);
         if (lineMaterial != null) Destroy(lineMaterial);
     }
 

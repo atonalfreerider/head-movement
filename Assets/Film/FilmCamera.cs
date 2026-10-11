@@ -47,9 +47,15 @@ public class FilmShot
     public float BlendIn;   // seconds of blend from the previous shot (0 = cut)
     public int RunStart;    // index of the first shot of this mode run (same mode, no cut)
 
-    public float P(string key, float fallback) => FilmDirection.F(Camera[key], fallback);
-    public string S(string key, string fallback) => Camera[key]?.Type == JTokenType.String ? Camera.Value<string>(key) : fallback;
-    public bool B(string key) => Camera[key]?.Type == JTokenType.Boolean && Camera.Value<bool>(key);
+    /// <summary>true while the 16:9 output renders. Opt-in per-aspect overrides: a camera block may carry `horizontal` = {key: value}; while Horizontal
+    /// those keys replace the block's own (P / S / B read them). The 9:16 render never looks at the block, so a direction without it, or any 9:16
+    /// render of one with it, is exactly what it always was.</summary>
+    public bool Horizontal;
+
+    JToken Tok(string key) => Horizontal && Camera["horizontal"] is JObject h && h[key] != null ? h[key] : Camera[key];
+    public float P(string key, float fallback) => FilmDirection.F(Tok(key), fallback);
+    public string S(string key, string fallback) => Tok(key)?.Type == JTokenType.String ? Tok(key).Value<string>() : fallback;
+    public bool B(string key) => Tok(key)?.Type == JTokenType.Boolean && Tok(key).Value<bool>();
 }
 
 /// <summary>
@@ -67,7 +73,23 @@ public class FilmCamera
     readonly FilmTargets targets;
     readonly FilmCameraSource sources;
     public readonly List<FilmShot> Shots = new();
-    public bool Vertical;
+    bool vertical;
+    public bool Vertical
+    {
+        get => vertical;
+        set
+        {
+            if (vertical == value) return;
+            vertical = value;
+            foreach (FilmShot sh in Shots) sh.Horizontal = !value;
+        }
+    }
+
+    /// <summary>16:9 only, opt-in (FilmAspect.PortraitZoom, set by the director each frame): a crop's zoom is multiplied by this for a portrait phone clip
+    /// (its panel is narrower than the frame, so the 9:16 plan's zoom leaves the teachers small); 1 = the plan's zoom</summary>
+    public float PortraitZoom = 1f;
+    public const float PortraitZoomMax = 2.1f;
+
     public float BaseFov = 40f;
 
     // fly_to_camera outputs for the director (video layer)
@@ -101,7 +123,7 @@ public class FilmCamera
 
             FilmShot s = new()
             {
-                Index = Shots.Count, Mode = seg.Mode, F0 = seg.F0, F1 = seg.F1, Camera = seg.Camera, Prev = cur, CutIn = cut || cur == null
+                Index = Shots.Count, Mode = seg.Mode, F0 = seg.F0, F1 = seg.F1, Camera = seg.Camera, Prev = cur, CutIn = cut || cur == null, Horizontal = !vertical
             };
             s.Segments.Add(seg);
             float defBlend = s.Mode == "fly_to_camera" ? 0f : s.Mode == "end_card" ? 0f : 1.2f;
@@ -396,6 +418,10 @@ public class FilmCamera
         Vector3 eye = c + new Vector3(Mathf.Cos(phi) * radius, height, Mathf.Sin(phi) * radius);
         Vector3 look = c + Vector3.up * lookH;
         FilmPose p = new() { Eye = eye, Look = look, Up = Vector3.up, Fov = CoupleFov(Vector3.Distance(eye, look)), ScreenY = ScreenYFor() };
+        // opt-in `fov_scale` (the 16:9 recap's `horizontal` block): the lens narrowed by this factor, so the couple fills more of a wide frame (fit_span
+        // below still widens it whenever the dancers stand apart)
+        float fovScale = s.P("fov_scale", 1f);
+        if (Mathf.Abs(fovScale - 1f) > 1e-4f) p.Fov = Mathf.Max(20f, p.Fov * Mathf.Clamp(fovScale, 0.4f, 1.5f));
         if (s.B("fit_span")) FitSpan(s, film, ref p);
         return p;
     }
@@ -465,6 +491,9 @@ public class FilmCamera
         const float eyeH = 1.1f, lookH = 0.9f;
         float top = 2.2f; // the capture's highest hand or head is 2.0 m: a margin under the 9:16 top band and above the 16:9 frame edge
         float bandLo = Vertical ? 0.37f : 0.30f, bandHi = Vertical ? 0.86f : 0.94f, maxFov = Vertical ? 66f : 55f;
+        // opt-in `band_lo` / `band_hi` (the 16:9 recap's `horizontal` block); without them the bands above
+        bandLo = s.P("band_lo", bandLo);
+        bandHi = s.P("band_hi", bandHi);
         Vector3 c = CoupleFollow(s, film);
         float phi = SideAzimuth(s, 1) + RunAngle(s, film, r => OrbitRate(r));
         float radius = Vertical ? 3.9f : 3.3f; // the start; FitBand sets the lens (and backs the eye off) to fit the couple
@@ -589,9 +618,22 @@ public class FilmCamera
         float k = u - i0;
         float cx = Mathf.Lerp(ax[i0].Value<float>(), ax[i1].Value<float>(), k), cy = Mathf.Lerp(ay[i0].Value<float>(), ay[i1].Value<float>(), k);
         float z = Mathf.Max(1f, Mathf.Lerp(az[i0].Value<float>(), az[i1].Value<float>(), k));
-        if (z < 1.001f && Mathf.Abs(cx) < 1e-3f && Mathf.Abs(cy) < 1e-3f) return;
         sources.TryGetAspect(cam, out float aspect);
+        if (!Vertical && PortraitZoom > 1.001f && aspect < 1f) z = Mathf.Max(z, Mathf.Min(z * PortraitZoom, PortraitZoomMax));
+        if (z < 1.001f && Mathf.Abs(cx) < 1e-3f && Mathf.Abs(cy) < 1e-3f) return;
         float tanV = Mathf.Tan(pov.Fov * 0.5f * Mathf.Deg2Rad), tanH = tanV * aspect;
+        if (!Vertical)
+        {
+            // the crop is planned for the 9:16 window. In the 16:9 output the same vertical window is 3.2x wider (relative to a portrait picture), so the
+            // pan only matters where the window is narrower than the picture: a landscape clip is kept inside its own frame (no black strip at an
+            // edge), a portrait clip (the whole width is visible) stays centred as a panel with the side fill around it. The aim is a rotation, so the
+            // limit is in angles: the frustum's edge angle (aim + half the narrowed lens) must stay inside the picture's edge angle.
+            float halfW = Mathf.Atan(tanV / z * (16f / 9f)), halfH = Mathf.Atan(tanV / z);
+            float roomX = Mathf.Atan(tanH) - halfW, roomY = Mathf.Atan(tanV) - halfH;
+            cx = roomX <= 0f ? 0f : Mathf.Clamp(cx, -Mathf.Tan(roomX) / tanH, Mathf.Tan(roomX) / tanH);
+            cy = roomY <= 0f ? 0f : Mathf.Clamp(cy, -Mathf.Tan(roomY) / tanV, Mathf.Tan(roomY) / tanV);
+        }
+
         Vector3 d = new Vector3(cx * tanH, cy * tanV, 1f).normalized;
         Vector3 fwd = pov.Rot * d, up = pov.Rot * Vector3.up;
         float dist = Vector3.Distance(pov.Eye, pov.Look);
@@ -869,7 +911,7 @@ public class FilmCamera
         }
         else
         {
-            look = Follow(s, film, 0.8f, targets.CoupleCentre);
+            look = Follow(s, film, s.P("follow_s", 0.8f), targets.CoupleCentre);
             // the couple's footprint seen from above (his feet to her hand): tighter than the old 2.4 m. A shot may ask for more (`across_m`: the
             // recap film's wide pivots), and it is widened whenever the four feet are apart (a spin throws the arms and legs wide)
             float across = s.P("across_m", 1.9f);
@@ -889,7 +931,7 @@ public class FilmCamera
 
             if (s.P("across_m", 0f) > 0f) across = Mathf.Max(across, feetSpread + 1.3f);
             dist = Mathf.Max(across * 0.5f / (ty * bandY), across * 0.5f / (tx * 0.92f));
-            if (s.P("fill", 0f) > 0.01f) dist = OverheadFillDistance(s, film, ref look, tx, ty, bandY);
+            if (s.P("fill", 0f) > 0.01f) dist = OverheadFillDistance(s, film, ref look, tx, ty, bandY, s.B("parallax"));
         }
 
         dist = Mathf.Clamp(dist, 3f, 30f);
@@ -945,14 +987,48 @@ public class FilmCamera
     /// it) fills at the tightest; the height is a weighted mean over -0.8 .. +0.8 s of what that asks (a smooth envelope that grows ahead of a pivot),
     /// and never less than what the instant (now, and 0.3 s ahead) needs to keep the box inside 90 % of the frame: a pivot or an exit is never cropped.
     /// The look point is the box centre (damped). Pure geometry of the film clock.</summary>
-    float OverheadFillDistance(FilmShot s, float film, ref Vector3 look, float tx, float ty, float bandY)
+    float OverheadFillDistance(FilmShot s, float film, ref Vector3 look, float tx, float ty, float bandY, bool parallax = false)
     {
         float fill = Mathf.Clamp(s.P("fill", 0.62f), 0.3f, 0.9f);
         float minFill = Mathf.Clamp(s.P("min_fill", 0.46f), 0.2f, fill);
-        const float never = 0.9f, margin = 0.22f; // margin: a body beyond its joints (hands, hair, a thick arm)
+        // margin: a body beyond its joints (hands, hair, a thick arm); never: the share of the frame the instant's extent may reach. A shot may name
+        // its own (`margin_m`, `never`: the 16:9 recap's `horizontal` block); the defaults are what every earlier direction got
+        float never = Mathf.Clamp(s.P("never", 0.9f), 0.5f, 0.99f), margin = Mathf.Clamp(s.P("margin_m", 0.22f), 0f, 0.6f);
+        // opt-in `parallax` (the 16:9 recap): the flat box above ignores that a head or a raised hand (up to 2 m) is much nearer the lens than the
+        // floor under it, so it is drawn bigger and a wide frame (the height is what binds there) crops it. The distance is then the least at which
+        // every joint (plus the margin) projects inside the fraction: |offset from the look point| / (tan * frac) + the joint's own height
+        Vector3 centre = Vector3.zero;
+        if (parallax)
+        {
+            centre = Follow(s, film, s.P("follow_s", 0.8f), d =>
+            {
+                if (!ExtentBox(d, out Vector2 l0, out Vector2 h0)) return targets.CoupleCentre(d);
+                return new Vector3((l0.x + h0.x) * 0.5f, 0f, (l0.y + h0.y) * 0.5f);
+            });
+        }
+
         float NeedAt(float f, float frac, float hfrac)
         {
             float dn = clock.Dance(Mathf.Clamp(f, 0f, direction.FilmDuration));
+            if (parallax && !float.IsNaN(centre.x))
+            {
+                float worst = float.NaN;
+                foreach (string role in new[] { "lead", "follow" })
+                {
+                    Dancer dn2 = targets.DancerOf(role);
+                    foreach (SmplJoint j in ExtentJoints)
+                    {
+                        Vector3 q = targets.Joint(dn2, j, dn);
+                        if (float.IsNaN(q.x)) continue;
+                        float h = Mathf.Max(0f, q.y) + 0.12f;
+                        float need = Mathf.Max((Mathf.Abs(q.x - centre.x) + margin) / (tx * frac), (Mathf.Abs(q.z - centre.z) + margin) / (ty * bandY * hfrac)) + h;
+                        worst = float.IsNaN(worst) ? need : Mathf.Max(worst, need);
+                    }
+                }
+
+                return worst;
+            }
+
             if (!ExtentBox(dn, out Vector2 lo, out Vector2 hi)) return float.NaN;
             return Mathf.Max((hi.x - lo.x + 2f * margin) / (2f * tx * frac), (hi.y - lo.y + 2f * margin) / (2f * ty * bandY * hfrac));
         }
@@ -972,7 +1048,7 @@ public class FilmCamera
         float ahead = Mathf.Max(0f, NeedAt(film + 0.3f, never, never));
         float far = NeedAt(film, minFill, minFill); // never further than the least fill allows (a pivot's own need still wins below)
         if (!float.IsNaN(far)) env = Mathf.Min(env, far);
-        Vector3 c = Follow(s, film, 0.8f, d =>
+        Vector3 c = Follow(s, film, s.P("follow_s", 0.8f), d =>
         {
             if (!ExtentBox(d, out Vector2 lo, out Vector2 hi)) return targets.CoupleCentre(d);
             return new Vector3((lo.x + hi.x) * 0.5f, 0f, (lo.y + hi.y) * 0.5f);

@@ -682,6 +682,15 @@ adds the following keys. A direction without them plays exactly as before.
   `physics.json` on that dancer as a share of the body weight (below 4 %: none); `{from, to, vector: "between"}` an arrow from one target to another
   (a foot to the other foot: the weight moving over). `text` is optional; an unlabelled arrow belongs to a legend or a readout.
   `arrow3d` also resolves the targets `stance_foot` (the foot that carries the weight) and `leader_t` as before.
+- **The 16:9 render of a film made 9:16-first (opt-in, additive; R10)**: a camera block may carry `horizontal` = {key: value} - while rendering 16:9 those keys
+  replace the block's own (`FilmShot.P / S / B`); the 9:16 render never reads it, so a direction with or without the block renders the same 9:16 film.
+  Keys the recap uses: `physics_3q` `distance_m` / `band_lo` / `band_hi`; `overhead_floorcraft` `fill` / `min_fill` plus `parallax: true` (the extent is the
+  least distance at which every joint, a head or raised hand nearer the lens included, projects inside the fraction), `margin_m`, `never` (the instant's
+  limit, default 0.9), `follow_s` (the look point's damping, default 0.8 s); `orbit` `fov_scale` (a narrower lens; `fit_span` still widens it);
+  `rhythm` `band_lo` / `band_hi`; `feet_closeup` `distance_m` / `fov_deg`. Presets `horizontal`: `phone_side_fill` (0..1: a portrait phone clip is a centred
+  panel and the frame beside it shows the same picture magnified, blurred and dimmed to that brightness; the 3D stays registered on the panel),
+  `portrait_zoom` (a factor on the crop zoom of a portrait clip, capped at 2.1x; a crop's pan is also limited so the narrowed view stays inside the picture),
+  `safe.side_frac` (left / right margin of the labels, chapter card and physics legend) and `legend_scale` (the physics legend's size).
 
 ---
 

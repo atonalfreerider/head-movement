@@ -146,7 +146,7 @@ public class ChapterCards
         float textBlockH = tSize * 1.2f + (sw > 0f ? sSize * 1.35f : 0f);
         float h = Mathf.Max(hasBadge ? badgeD : 0f, textBlockH) + 2f * pad * 0.7f;
         float w = Mathf.Max(tw, sw) + (hasBadge ? badgeD + gap : 0f) + 2f * pad;
-        float cx = vertical ? W * 0.5f : 0.04f * W + w * 0.5f;
+        float cx = vertical ? W * 0.5f : (aspect.SafeSide > 0.041f ? aspect.SafeSide : 0.04f) * W + w * 0.5f;
         float cy = topY - h * 0.5f;
         BottomFromTop = H - (topY - h);
 
