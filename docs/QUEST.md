@@ -133,7 +133,7 @@ Android the runtime is assumed and XR is started at once).
    the captures, the films (direction, transcript timeline, soundtrack mix, emoji, chapters), the posters and a `library.json` whose paths are
    relative, and `adb push`es it to `/sdcard/Android/data/com.headmovement.viewer/files/hm_data` (`HmData.Root`). The phones' video strips
    (`*.hmj`, hundreds of MB) are left out unless `-PhoneVideo`: VR never draws them. Not done: an OBB for store distribution.
-2. **The first build.** Switching the editor to Android re-imports every asset (the project is script and shader heavy, little imported
+2. **The first build** (done 2026-10-11, see the installed workflow below). Switching the editor to Android re-imports every asset (the project is script and shader heavy, little imported
    art: expect 10 to 20 minutes) and an IL2CPP ARM64 build adds 10 to 20 on four cores. It was **not run** in this session: switching the
    active build target would have stalled the other work in the same editor. Do it in a separate clone, or in the editor when nothing else
    uses it: `unity command hm_vr_build --target android --allow_switch true --output Builds/quest --timeout 3600`, then
@@ -155,13 +155,32 @@ bake the avatar albedo to ASTC 6x6 at import (the viewer loads the PNGs at run t
 decimate the room mesh to under 50 k triangles (the exporter's `room_mesh.bin` is 100 KB for the heat: already small), cap the physics
 and trace overlays' line counts, turn the translucent avatar's depth prepass into a single opaque pass at opacity 1 for the tier.
 
-**Install and run on the headset** (once built): `adb install -r headmovement.apk`; push the data; start *Head Movement* from the headset's
-*Unknown Sources* library. Hand tracking must be on (Settings > Movement tracking). The app asks for the hand-tracking permission on
-first start. `adb logcat -s Unity` shows the `VrMode:` lines.
+**Install and run on the headset** (built and installed once, 2026-10-11): `adb install -r headmovement.apk`; push the data; start the app
+from the headset's *Unknown Sources* library (its name there is the Player Settings product name). Hand tracking must be on (Settings >
+Movement tracking). `com.oculus.permission.HAND_TRACKING` is an install-time permission (granted by the install). `adb logcat -s Unity`
+shows the `VrMode:` lines.
+
+**Installed workflow (generic)**
+
+1. Editor idle, then `unity command hm_vr_build --target android --allow_switch true --development false --output Builds/quest --timeout 5400`.
+   `Assets/StreamingAssets` is copied wholesale into an APK: move its contents out (to a folder outside `Assets`) for the build and move them
+   back after, so the APK stays about 50 MB (the data goes to the app's folder instead). The first Android build on a 4-core PC took about
+   75 minutes (texture and shader import for the target, 2880 URP post-processing variants, 1700 IL2CPP C++ units); later builds reuse the caches.
+   Then switch the editor back to the Windows target and `git checkout` the files the build rewrites (`Assets/Bloom.asset`, `Assets/DefaultVolumeProfile.asset`,
+   `Assets/UniversalRenderPipelineGlobalSettings.asset`, `ProjectSettings/ProjectSettings.asset` preloaded assets, `ProjectSettings/UnityConnectSettings.asset`).
+2. `adb install -r Builds/quest/headmovement.apk`.
+3. `powershell -File Tools/deploy_data.ps1 -Out Builds/data -Push` (about 490 MB without the phones' video strips; 15 s over USB).
+   Package `com.headmovement.viewer`, data in `/sdcard/Android/data/com.headmovement.viewer/files/hm_data`.
+4. `adb shell am start -n com.headmovement.viewer/com.unity3d.player.UnityPlayerActivity`.
+5. Logs: `adb logcat -d -s Unity` (look for `VrMode: VR mode on (headset)`), `adb logcat -d | grep "VrApi   : FPS"` (frame rate, stale
+   frames, CPU/GPU levels, temperature). With the headset off the head the OS keeps it asleep and the XR session never becomes ready;
+   `adb shell am broadcast -a com.oculus.vrpowermanager.prox_close` fakes the proximity sensor for a desk test and
+   `...automation_disable` undoes it.
+6. Remove: `adb uninstall com.headmovement.viewer` (removes the pushed data too); reset only: `adb shell pm clear com.headmovement.viewer`.
 
 ## 8. Known limits (honest list)
 
-- Never run with a real headset: the XR start, the head pose, the XR Hands joint reading, the floor origin, foveation and everything on
+- Android build installed and started on a Quest 2 (XR session focused, Vulkan, 72/72 fps on the menu scene), but not yet worn or used with hands: the head pose, the XR Hands joint reading, the floor origin, foveation and everything on
   the Quest are untested. The hand logic is tested against simulated joints built from the same 26-joint layout; real tracking is noisier
   than the simulation (the pinch hysteresis, debounce, the One Euro ray filter and the poke "finger points into the surface" rule are the
   defences; their thresholds are the first things to tune with a real hand).
