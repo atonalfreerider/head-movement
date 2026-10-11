@@ -9,25 +9,26 @@ using UnityEngine.UI;
 /// <summary>
 /// The capture's rhythm layer (rhythm.json, dancecap.rhythm.for_unity; docs/RHYTHM.md in the dancecap repo): a causal LIVE rhythm score at 30 Hz
 /// (a pure function of time: the score at t was computed from data up to t only), its five components, a confidence, the footsteps with the class the
-/// HUD flashes (on the beat / near / off) and the final card. Times are reference seconds; the viewer adds the capture's time_to_audio.
+/// HUD flashes (on the dancer's own step rhythm / near / off / neutral) and the final card. Times are reference seconds; the viewer adds the capture's time_to_audio.
 /// The score is an ESTIMATE FROM MOTION, never an official score; the HUD says so.
 /// </summary>
 public class RhythmData
 {
     public const int ComponentCount = 5;
 
-    public string Title = "Rhythm score (estimated from motion, not an official score)";
+    public string Title = "Rhythm entrainment (estimated from motion, not an official score)";
     public string FinalConfidence = "low";
     public float FinalScore, FinalConfidenceValue, RangeLo = float.NaN, RangeHi = float.NaN;
+    public bool FinalInsufficient;
     public float CardFrom = float.NaN, CardTo = float.NaN;
     public float Hz = 30f, T0;
     public int N;
-    public float[] Score, Confidence;
+    public float[] Score, Confidence, Evidence;
     public readonly float[][] Comp = new float[ComponentCount][];
     public byte[] State;
-    public readonly string[] CompKeys = { "lock", "accents", "tempo", "flow", "sync" };
-    public readonly string[] CompLabels = { "Beat lock", "Accents", "Tempo", "Flow", "Couple sync" };
-    public readonly int[] CompWeights = { 40, 20, 15, 15, 10 };
+    public readonly string[] CompKeys = { "body", "feet", "recent", "couple", "accents" };
+    public readonly string[] CompLabels = { "Body sway", "Footwork", "Recent form", "Couple sync", "Accents" };
+    public readonly int[] CompWeights = { 45, 15, 20, 10, 10 };
     public float[] FinalComp = new float[ComponentCount];
     public double[] StepT = new double[0];
     public byte[] StepRole = new byte[0], StepClass = new byte[0];
@@ -58,6 +59,7 @@ public class RhythmData
             d.FinalScore = fin.Value<float?>("score") ?? 0f;
             d.FinalConfidence = fin.Value<string>("confidence") ?? "low";
             d.FinalConfidenceValue = fin.Value<float?>("confidence_value") ?? 0f;
+            d.FinalInsufficient = fin.Value<bool?>("insufficient_evidence") ?? false;
             if (fin["range"] is JArray rg && rg.Count == 2)
             {
                 d.RangeLo = rg[0].Value<float>();
@@ -83,6 +85,7 @@ public class RhythmData
         d.N = d.Score.Length;
         if (d.N < 2) throw new InvalidDataException("rhythm.json live timeline is empty");
         d.Confidence = Floats(live["confidence"], d.N);
+        d.Evidence = live["evidence"] != null ? Floats(live["evidence"], d.N) : Fill(d.N, 1f);
         for (int i = 0; i < ComponentCount; i++) d.Comp[i] = Floats(live[d.CompKeys[i]], d.N);
         JArray st = live["state"] as JArray;
         d.State = new byte[d.N];
@@ -118,6 +121,13 @@ public class RhythmData
         return d;
     }
 
+    static float[] Fill(int n, float v)
+    {
+        float[] f = new float[n];
+        for (int i = 0; i < n; i++) f[i] = v;
+        return f;
+    }
+
     static float[] Floats(JToken t, int expect = -1)
     {
         JArray a = t as JArray;
@@ -134,7 +144,7 @@ public class RhythmData
 
     static long Key(int role, double t) => (long)role * 100000000L + (long)Math.Round(t * 1000.0);
 
-    /// <summary>the class (0 on the beat, 1 near, 2 off) of the step of a role at reference time t (within a millisecond), or -1</summary>
+    /// <summary>the class (0 on the dancer's own step rhythm, 1 near, 2 off, 3 neutral: no lock yet) of the step of a role at reference time t (within a millisecond), or -1</summary>
     public int ClassOf(int role, double t)
     {
         long k = Key(role, t);
@@ -208,7 +218,9 @@ public class RhythmData
 [AddComponentMenu("")]
 public class RhythmScoreHud : MonoBehaviour
 {
-    public static readonly Color OnColour = new(0.20f, 0.86f, 0.45f), NearColour = new(1f, 0.78f, 0.15f), OffColour = new(0.95f, 0.27f, 0.25f);
+    public static readonly Color OnColour = new(0.20f, 0.86f, 0.45f), NearColour = new(1f, 0.78f, 0.15f), OffColour = new(0.95f, 0.27f, 0.25f), NeutralColour = new(0.78f, 0.84f, 0.92f);
+    /// <summary>the live evidence (0..1) under which the number is greyed and the HUD says there is not enough beat-lock evidence</summary>
+    public const float MinEvidence = 0.3f;
     static readonly Color[] BarColours =
     {
         new(0.96f, 0.55f, 0.15f), new(0.62f, 0.55f, 0.95f), new(0.20f, 0.78f, 0.62f), new(0.95f, 0.38f, 0.65f), new(0.55f, 0.82f, 0.30f)
@@ -324,8 +336,13 @@ public class RhythmScoreHud : MonoBehaviour
         Shown = score;
         big.text = Mathf.RoundToInt(score).ToString(CultureInfo.InvariantCulture);
         float conf = data.Sample(data.Confidence, t);
+        float evidence = data.Sample(data.Evidence, t);
+        bool lowEvidence = state == 0 && evidence < MinEvidence;
+        big.color = lowEvidence ? new Color(1f, 1f, 1f, 0.42f) : Color.white;               // greyed while the beat-lock evidence is thin
         string level = conf >= 0.7f ? "high" : conf >= 0.4f ? "medium" : "low";
-        confidence.text = $"confidence {level}";
+        confidence.text = lowEvidence ? "confidence low" : $"confidence {level}";
+        subtitle.text = lowEvidence ? "insufficient beat-lock evidence (provisional)" : "estimated from motion, not an official score";
+        subtitle.color = lowEvidence ? new Color(1f, 0.84f, 0.04f, 0.95f) : new Color(0.78f, 0.82f, 0.88f, 0.85f);
         confidence.color = new Color(0.78f, 0.82f, 0.88f, level == "low" ? 0.9f : 0.75f);
         for (int i = 0; i < RhythmData.ComponentCount; i++)
         {
@@ -372,7 +389,7 @@ public class RhythmScoreHud : MonoBehaviour
                 if (age >= 0f && age < 0.9f)
                 {
                     cls = data.StepClass[i];
-                    Color f = cls == 0 ? OnColour : cls == 1 ? NearColour : OffColour;
+                    Color f = cls == 0 ? OnColour : cls == 1 ? NearColour : cls == 2 ? OffColour : NeutralColour;
                     float k = Mathf.Exp(-age / 0.32f);
                     c = Color.Lerp(c, f, Mathf.Clamp01(0.25f + 0.75f * k));
                     lamp.rectTransform.localScale = Vector3.one * (1f + 0.55f * k);
@@ -477,10 +494,11 @@ public class RhythmScoreHud : MonoBehaviour
     {
         float k = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01((float)((t - data.CardFrom - 0.2) / 1.6)));  // the count-up
         cardNumber.text = Mathf.RoundToInt(data.FinalScore * k).ToString(CultureInfo.InvariantCulture);
-        cardConfidence.text = $"confidence {data.FinalConfidence}";
+        cardConfidence.text = data.FinalInsufficient ? "insufficient beat-lock evidence: the number is not meaningful" : $"confidence {data.FinalConfidence}";
+        cardNumber.color = data.FinalInsufficient ? new Color(1f, 1f, 1f, 0.42f) : Color.white;
         if (!float.IsNaN(data.RangeLo))
         {
-            cardRange.text = $"range {data.RangeLo:0} to {data.RangeHi:0} under +-30 ms audio-video offset and the DJ mix read either way";
+            cardRange.text = $"range {data.RangeLo:0} to {data.RangeHi:0} (estimate noise, +-30 ms clock offset, DJ seam read either way)";
         }
         else cardRange.text = "";
         for (int i = 0; i < RhythmData.ComponentCount; i++)
@@ -514,7 +532,7 @@ public class RhythmScoreHud : MonoBehaviour
         panel = FilmUi.Rect(root, "Panel");
         panelBack = FilmUi.Box(panel, "Back", FilmUi.Rounded, new Color(0f, 0f, 0f, 0.58f));
         title = FilmUi.Label(panel, "Title", 20, new Color(0.92f, 0.94f, 0.97f), TextAnchor.MiddleLeft, true);
-        title.text = "RHYTHM SCORE";
+        title.text = "RHYTHM ENTRAINMENT";
         pulse = FilmUi.Box(panel, "Beat pulse", FilmUi.Disc, new Color(1f, 0.84f, 0.04f, 0.5f));
         subtitle = FilmUi.Label(panel, "Subtitle", 14, new Color(0.78f, 0.82f, 0.88f, 0.85f), TextAnchor.MiddleLeft);
         subtitle.text = "estimated from motion, not an official score";
@@ -540,14 +558,14 @@ public class RhythmScoreHud : MonoBehaviour
         lampFollowLabel = FilmUi.Label(panel, "Follow label", 15, new Color(0.88f, 0.9f, 0.94f), TextAnchor.MiddleLeft);
         lampFollowLabel.text = "follow step";
         footer = FilmUi.Label(panel, "Footer", 14, new Color(0.7f, 0.74f, 0.8f, 0.8f), TextAnchor.MiddleLeft);
-        footer.text = "green on the beat, amber near, red off";
+        footer.text = "lamp: step vs own locked rhythm; grey = no lock";
 
         cardRoot = FilmUi.Rect(root, "Final card");
         cardGroup = cardRoot.gameObject.AddComponent<CanvasGroup>();
         cardGroup.interactable = cardGroup.blocksRaycasts = false;
         cardBack = FilmUi.Box(cardRoot, "Back", FilmUi.Rounded, new Color(0.02f, 0.02f, 0.04f, 0.97f));
         cardTitle = FilmUi.Label(cardRoot, "Title", 30, new Color(1f, 0.84f, 0.04f), TextAnchor.MiddleCenter, true);
-        cardTitle.text = "FINAL RHYTHM SCORE";
+        cardTitle.text = "FINAL RHYTHM ENTRAINMENT";
         cardNumber = FilmUi.Label(cardRoot, "Number", 150, Color.white, TextAnchor.MiddleCenter, true);
         FilmUi.Shadow(cardNumber, new Color(0f, 0f, 0f, 0.6f), 3f);
         cardConfidence = FilmUi.Label(cardRoot, "Confidence", 24, new Color(0.85f, 0.88f, 0.92f), TextAnchor.MiddleCenter);
@@ -555,7 +573,7 @@ public class RhythmScoreHud : MonoBehaviour
         cardNote = FilmUi.Label(cardRoot, "Note", 17, new Color(0.78f, 0.82f, 0.88f, 0.9f), TextAnchor.MiddleCenter);
         cardNote.text = "estimated from motion, not an official score";
         cardSmall = FilmUi.Label(cardRoot, "Small", 15, new Color(0.7f, 0.74f, 0.8f, 0.85f), TextAnchor.MiddleCenter);
-        cardSmall.text = "0 = what random steps would score, 100 = perfect";
+        cardSmall.text = "0 = unrelated to the music, 100 = as locked as the best stretches of a pro demo";
         for (int i = 0; i < RhythmData.ComponentCount; i++)
         {
             cardLabel[i] = FilmUi.Label(cardRoot, $"Label {i}", 20, new Color(0.9f, 0.92f, 0.95f), TextAnchor.MiddleLeft);
@@ -708,16 +726,17 @@ public class RhythmScoreHud : MonoBehaviour
             ["finalScore"] = data != null ? data.FinalScore : float.NaN, ["state"] = state, ["card"] = Math.Round(CardAlpha, 3),
             ["placement"] = Placement, ["panel"] = new[] { Mathf.Round(PanelRect.x), Mathf.Round(PanelRect.y), Mathf.Round(PanelRect.width), Mathf.Round(PanelRect.height) },
             ["leadFlash"] = LeadFlash, ["followFlash"] = FollowFlash, ["steps"] = data != null ? data.StepT.Length : 0,
-            ["confidence"] = data != null && !float.IsNaN(t) ? Math.Round(data.Sample(data.Confidence, t), 3) : (object)null
+            ["confidence"] = data != null && !float.IsNaN(t) ? Math.Round(data.Sample(data.Confidence, t), 3) : (object)null,
+            ["evidence"] = data != null && !float.IsNaN(t) ? Math.Round(data.Sample(data.Evidence, t), 3) : (object)null, ["insufficientEvidence"] = data != null && data.FinalInsufficient
         };
     }
 
-    /// <summary>the timing ring colour of a touchdown: green on the beat, amber near, red off; null = not a rhythm step (or the layer is off)</summary>
+    /// <summary>the timing ring colour of a touchdown: green on the dancer's own locked step rhythm, amber near, red off, pale blue = no lock yet; null = not a rhythm step (or the layer is off)</summary>
     public Color? RingColour(Role role, double referenceTime)
     {
         if (data == null || !visible || FilmDirector.HeadIsCamera) return null;
         int c = data.ClassOf(role == Role.Lead ? 0 : 1, referenceTime);
         if (c < 0) return null;
-        return c == 0 ? OnColour : c == 1 ? NearColour : OffColour;
+        return c == 0 ? OnColour : c == 1 ? NearColour : c == 2 ? OffColour : NeutralColour;
     }
 }
