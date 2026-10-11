@@ -51,6 +51,9 @@ public class CaptureManifest
     public RoomRef room;
 
     public string timing;
+
+    /// <summary>rhythm.json (dancecap.rhythm.for_unity): the live rhythm score layer (RhythmScoreHud); absent = no rhythm layer</summary>
+    public string rhythm;
     public string physics;
     public string contacts;
     public string world;

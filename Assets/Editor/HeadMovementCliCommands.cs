@@ -94,7 +94,7 @@ public static class HeadMovementCliCommands
         return JsonConvert.SerializeObject(hm.State());
     }
 
-    [CliCommand("hm_layer", "Show or hide a visual layer: floor | tension | splats | room | cameras | hud | avatars | timing | physics | counterbalance | traces | neck | graph | contacts (the hand-contact lights)")]
+    [CliCommand("hm_layer", "Show or hide a visual layer: floor | tension | splats | room | cameras | hud | avatars | timing | physics | counterbalance | traces | neck | graph | contacts (the hand-contact lights) | rhythm (the live rhythm score HUD)")]
     public static string Layer(
         [CliArg("layer", "floor|tension|splats|room|cameras|hud|avatars|timing|physics|counterbalance|traces|neck|graph|contacts")] string layer,
         [CliArg("visible", "true to show, false to hide")] bool visible = true)

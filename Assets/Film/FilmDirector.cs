@@ -98,6 +98,8 @@ public class FilmDirector : MonoBehaviour
         public bool Grid = true;                                        // the floor's cross grid + plane (layer "grid")
         public float Lines = 1f;                                        // the skeleton lines' own width factor (layer "skeleton_lines", 0 = hidden; the avatars stay)
         public bool? Room;                                              // the capture's room mesh (layer "room"); null = leave the viewer's own setting (the demo and the recap)
+        public bool? Rhythm;                                            // the live rhythm score HUD + final card (layer "rhythm_score"); null = the viewer's own setting
+        public bool RhythmRings;                                        // the touchdown rings, coloured by the rhythm class (layer "rhythm_rings")
         public bool FcLabelsCurrent;                                    // layer "floorcraft_labels": "current" = only the running dial keeps its number
         public float TWidth = float.NaN, OldTWidth = float.NaN, TBrightness = float.NaN; // the leader's T on the floor (m / 0..1)
         public DanceGraphLayer.Mode GraphMode = DanceGraphLayer.Mode.Off;
@@ -492,7 +494,10 @@ public class FilmDirector : MonoBehaviour
             "physics" => 1f / 3f,
             _ => 0f
         };
-        l.Avatar = s.LayerFloat("avatars", HeadMovement.DefaultAvatarOpacity * factor);
+        // a direction's own top-level "avatar_opacity" (one number for the whole film) replaces the viewer's default for every segment without an "avatars" layer
+        Newtonsoft.Json.Linq.JToken directionOpacity = direction?.Root?["avatar_opacity"];
+        bool hasOpacity = directionOpacity != null && (directionOpacity.Type == Newtonsoft.Json.Linq.JTokenType.Float || directionOpacity.Type == Newtonsoft.Json.Linq.JTokenType.Integer);
+        l.Avatar = s.LayerFloat("avatars", hasOpacity ? Mathf.Clamp01((float)directionOpacity) : HeadMovement.DefaultAvatarOpacity * factor);
         l.AvatarsFadeWithVideo = s.LayerBool("avatars_fade_with_video", false);
         l.Skeleton = Mathf.Clamp01(s.LayerFloat("dance_full_size", graphView ? 0f : 1f));
         l.Physics = s.LayerString("skeleton_mode", "") == "physics" || s.LayerBool("physics", view == "physics");
@@ -500,13 +505,15 @@ public class FilmDirector : MonoBehaviour
         l.Floor = s.LayerBool("floor", false) || footprints is "recent" or "all";
         l.Grid = s.LayerBool("grid", true);
         if (s.Layers["room"] != null) l.Room = s.LayerBool("room", false);
+        if (s.Layers["rhythm_score"] != null) l.Rhythm = s.LayerBool("rhythm_score", false);
+        l.RhythmRings = s.LayerBool("rhythm_rings", false);
         l.Lines = Mathf.Clamp01(s.LayerFloat("skeleton_lines", 1f));
         l.FcLabelsCurrent = s.LayerString("floorcraft_labels", "all") == "current";
         l.TWidth = s.LayerFloat("t_width_m", float.NaN);
         l.OldTWidth = s.LayerFloat("old_t_width_m", float.NaN);
         l.TBrightness = s.LayerFloat("t_brightness", float.NaN);
         l.Footprints = footprints == "all" ? FloorPatterns.FootprintMode.All : FloorPatterns.FootprintMode.Recent;
-        l.Timing = footprints is "touchdown_rings_neutral" or "touchdown_rings";
+        l.Timing = footprints is "touchdown_rings_neutral" or "touchdown_rings" || l.RhythmRings;
         l.Tension = view is "orbit" or "physics" && !graphView;
         l.Counterbalance = s.LayerBool("counterbalance", false) && !graphView;
         l.Traces = s.LayerBool("traces", view == "geometry") && !graphView;
@@ -629,6 +636,7 @@ public class FilmDirector : MonoBehaviour
             layers.GraphOverride = null;
             layers.MovesOverride = null;
             layers.InsetOverride = null;
+            layers.RhythmOverride = null;
             layers.ShowAllPivots = false;
             layers.ApplyVisibility();
             if (tLookSaved && tLookOwner != null)
@@ -711,6 +719,7 @@ public class FilmDirector : MonoBehaviour
                 layers.GraphOverride = l.GraphMode;
                 layers.MovesOverride = l.Moves;
                 layers.InsetOverride = l.Inset;
+                layers.RhythmOverride = l.Rhythm;
                 layers.ApplyVisibility();
                 ApplyFloorCraftLook(layers.FloorCraft, l);
             }

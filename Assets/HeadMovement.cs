@@ -151,6 +151,7 @@ public class HeadMovement : MonoBehaviour
     public Dancer FollowDancer => Follow;
     public IReadOnlyDictionary<Role, SmplxAvatar> Avatars => avatars;
     public CameraControl OrbitCamera => cameraControl;
+    public TimingOverlay Timing => timingOverlay;
     public SkeletonStyle Skeletons => skeletonStyle;
     public FloorPatterns Footprints => floorPatterns;
     public FloorGrid Grid => floorGrid;
@@ -910,9 +911,9 @@ public class HeadMovement : MonoBehaviour
             case "avatars": SetAvatarsVisible(visible); break;
             case "timing": SetTimingVisible(visible); break;
             case "physics": SetPhysicsVisible(visible); break;
-            case "counterbalance" or "traces" or "neck" or "graph" or "axis" or "floorcraft" or "balance" or "moves" or "contacts": DanceLayers.SetLayer(layer.ToLowerInvariant(), visible); break;
+            case "counterbalance" or "traces" or "neck" or "graph" or "axis" or "floorcraft" or "balance" or "moves" or "contacts" or "rhythm": DanceLayers.SetLayer(layer.ToLowerInvariant(), visible); break;
             default:
-                throw new ArgumentException($"unknown layer '{layer}' (floor|grid|tension|splats|room|cameras|hud|avatars|timing|physics|counterbalance|traces|neck|graph|axis|floorcraft|balance|moves|contacts)");
+                throw new ArgumentException($"unknown layer '{layer}' (floor|grid|tension|splats|room|cameras|hud|avatars|timing|physics|counterbalance|traces|neck|graph|axis|floorcraft|balance|moves|contacts|rhythm)");
         }
 
         return visible;

@@ -124,6 +124,17 @@ public class TimingOverlay : MonoBehaviour
     TimingData data;
     CaptureTimeline timeline;
     readonly List<(Role role, TimingData.Touchdown td, Vector3 pos, LineRenderer ring)> rings = new();
+
+    /// <summary>a ring colour from elsewhere (the rhythm score colours a step green / amber / red by its class); null or a null result = the asynchrony colour</summary>
+    public Func<Role, double, Color?> ColorOverride;
+
+    /// <summary>colour the rings again at the last time (the colour override changed)</summary>
+    public void RefreshColours()
+    {
+        float t = lastAudioTime;
+        lastAudioTime = float.NaN;
+        if (!float.IsNaN(t)) SetTime(t);
+    }
     bool visible = true;
     float lastAudioTime = float.NaN;
 
@@ -200,7 +211,8 @@ public class TimingOverlay : MonoBehaviour
             float baseR = role == Role.Lead ? 0.11f : 0.085f;
             float r = baseR * (age < 0.15f ? Mathf.Lerp(0.5f, 1.15f, Mathf.Clamp01(age / 0.15f)) : Mathf.Lerp(1.15f, 1f, k));
             OverlayDraw.Ring(ring, pos, r);
-            Color c = OverlayDraw.AsyncColor(td.AsyncMs) * (Mathf.Lerp(2.2f, 0.25f, k) * landedAlpha);
+            Color baseColour = ColorOverride?.Invoke(role, td.T) ?? OverlayDraw.AsyncColor(td.AsyncMs);
+            Color c = baseColour * (Mathf.Lerp(2.2f, 0.25f, k) * landedAlpha);
             c.a = 1;
             OverlayDraw.SetColor(ring, c);
         }

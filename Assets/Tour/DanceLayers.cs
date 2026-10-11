@@ -26,6 +26,8 @@ public class DanceLayers : MonoBehaviour
 
     // user layer flags (hm_layer); view states override them while active
     static bool counterbalanceOn = true, tracesOn = true, graphOn, neckOn = true, axisOn = true, floorcraftOn = true, balanceOn = true, movesOn = true, contactsOn = true;
+    static bool rhythmOn;                                    // the live rhythm score HUD (layer "rhythm"): off until asked for; a film turns it on with the segment layer "rhythm_score"
+    public bool? RhythmOverride;
     public bool? CounterbalanceOverride, TracesOverride, NeckOverride, AxisOverride, FloorcraftOverride;
     public DanceGraphLayer.Mode? GraphOverride;
     public bool? MovesOverride, InsetOverride; // the tour: move caption throughout, graph inset outside the graph states
@@ -41,6 +43,7 @@ public class DanceLayers : MonoBehaviour
     FloorCraftOverlay floorCraft;
     BalanceAxisOverlay balance;
     DanceGraphLayer graph;
+    RhythmScoreHud rhythm;
     DanceHud hud;
     DanceTour tour;
     readonly List<string> warnings = new();
@@ -51,6 +54,7 @@ public class DanceLayers : MonoBehaviour
     public FloorCraftOverlay FloorCraft => floorCraft;
     public BalanceAxisOverlay Balance => balance;
     public DanceGraphLayer Graph => graph;
+    public RhythmScoreHud Rhythm => rhythm;
     public DanceHud Hud => hud;
     public DanceTour Tour => tour;
     public HeadMovement Head => hm;
@@ -99,7 +103,7 @@ public class DanceLayers : MonoBehaviour
 
     // ---------------------------------------------------------------- layer switches (hm_layer)
 
-    public static bool Handles(string layer) => layer is "counterbalance" or "traces" or "graph" or "neck" or "axis" or "floorcraft" or "balance" or "moves" or "contacts";
+    public static bool Handles(string layer) => layer is "counterbalance" or "traces" or "graph" or "neck" or "axis" or "floorcraft" or "balance" or "moves" or "contacts" or "rhythm";
 
     /// <summary>hm_layer counterbalance | traces | neck | graph | axis | floorcraft | balance (balance: physics mode only)</summary>
     public static void SetLayer(string layer, bool visible)
@@ -115,6 +119,7 @@ public class DanceLayers : MonoBehaviour
             case "balance": balanceOn = visible; break;
             case "moves": movesOn = visible; break;
             case "contacts": contactsOn = visible; break; // the hand-contact lights (ContactDetection orbs)
+            case "rhythm": rhythmOn = visible; break;    // the live rhythm score HUD
             default: throw new ArgumentException($"unknown dance layer '{layer}'");
         }
 
@@ -133,6 +138,7 @@ public class DanceLayers : MonoBehaviour
         "balance" => balanceOn,
         "moves" => movesOn,
         "contacts" => contactsOn,
+        "rhythm" => rhythmOn,
         _ => false
     };
 
@@ -153,6 +159,18 @@ public class DanceLayers : MonoBehaviour
         if (traces != null) traces.SetVisible((TracesOverride ?? tracesOn) && followAlpha >= 0.5f);
         if (neckAxis != null) neckAxis.SetVisible((NeckOverride ?? neckOn) && followAlpha > RoleHiddenSpans.HiddenBelow);
         if (floorCraft != null) floorCraft.SetVisible(AxisOverride ?? axisOn, FloorcraftOverride ?? floorcraftOn);
+        if (rhythm != null)
+        {
+            bool on = RhythmOverride ?? rhythmOn;
+            rhythm.SetVisible(on);
+            TimingOverlay rings = hm != null ? hm.Timing : null;
+            if (rings != null)
+            {
+                rings.ColorOverride = rhythm.Loaded ? new Func<Role, double, Color?>(rhythm.RingColour) : null;     // the step rings turn green / amber / red while the rhythm layer is on
+                rings.RefreshColours();
+            }
+        }
+
         if (balance != null) balance.SetVisible(balanceOn && hm != null && hm.SkeletonMode == SkeletonStyle.Mode.Physics);
         if (graph != null)
         {
@@ -215,6 +233,7 @@ public class DanceLayers : MonoBehaviour
         }
 
         SubFrameTime = exact;
+        if (rhythm != null) rhythm.SetTime(exact);
         Camera cam = DanceText.ViewCamera;
         if (counterbalance != null) counterbalance.SetTime(exact, frame, cam);
         if (traces != null)
@@ -281,6 +300,7 @@ public class DanceLayers : MonoBehaviour
         floorCraft = null;
         balance = null;
         graph = null;
+        rhythm = null;
         hud.Clear();
         if (loaded == null || hm.LeadDancer == null || hm.FollowDancer == null || hm.Timeline == null) return;
 
@@ -383,6 +403,24 @@ public class DanceLayers : MonoBehaviour
             }
         }
 
+        string rhythmPath = FileFromCapture(capture, "rhythm", "rhythm.json");
+        if (rhythmPath != null)
+        {
+            try
+            {
+                RhythmData rhythmData = RhythmData.Load(rhythmPath);
+                rhythm = new GameObject("Rhythm score").AddComponent<RhythmScoreHud>();
+                rhythm.transform.SetParent(root, false);
+                rhythm.Init(rhythmData, hm.Timeline);
+            }
+            catch (Exception e)
+            {
+                Warn($"rhythm.json unreadable ({e.Message}) - rhythm layer disabled");
+                if (rhythm != null) Destroy(rhythm.gameObject);
+                rhythm = null;
+            }
+        }
+
         ApplyVisibility();
         tour.OnCaptureLoaded();
     }
@@ -467,6 +505,7 @@ public class DanceLayers : MonoBehaviour
             flags["balance"] = balanceOn;
             flags["moves"] = movesOn;
             flags["contacts"] = contactsOn;
+            flags["rhythm"] = rhythmOn;
         }
 
         HeadMovement head = HeadMovement.Instance;
@@ -493,6 +532,7 @@ public class DanceLayers : MonoBehaviour
         state["graph"] = layers.graph != null
             ? layers.graph.State()
             : new Dictionary<string, object> { ["loaded"] = false, ["mode"] = "off" };
+        state["rhythm"] = layers.rhythm != null ? layers.rhythm.State() : new Dictionary<string, object> { ["loaded"] = false, ["layer"] = rhythmOn };
         state["tour"] = layers.tour.State();
         if (layers.warnings.Count > 0) state["danceLayerWarnings"] = new List<string>(layers.warnings);
         // the move being danced now (the move caption's span: move | uncertain | unlabelled) - the live move ribbon

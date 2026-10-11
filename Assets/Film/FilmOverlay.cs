@@ -108,6 +108,7 @@ public class FilmOverlay : MonoBehaviour
     public void Restore()
     {
         hud.Restore();
+        if (DanceLayers.Instance != null && DanceLayers.Instance.Rhythm != null) DanceLayers.Instance.Rhythm.ClearFilmPlacement();
         SkeletonLegend.TopOverride = -1f;
         SkeletonLegend.Scale = 1f;
     }
@@ -196,6 +197,11 @@ public class FilmOverlay : MonoBehaviour
 
         HeadMovement hm = HeadMovement.Instance;
         beat.Show(beatAlpha, hm != null ? hm.Beats : null, hm?.Timeline != null ? dance + hm.Timeline.TimeToAudio : float.NaN);
+        // the live rhythm score panel (layer "rhythm_score"): top left, level with the beat counter; it dims under a title or chapter card
+        if (DanceLayers.Instance != null && DanceLayers.Instance.Rhythm != null)
+        {
+            DanceLayers.Instance.Rhythm.SetFilmPlacement(vertical, W, H, unit, aspect.SafeTop, 1f - 0.7f * Mathf.Max(titleAlpha, cardAlpha));
+        }
 
         // speed + POV pills (into the call-out readout stack)
         SpeedPill(film);

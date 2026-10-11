@@ -22,6 +22,8 @@ Checks, in order:
   back      the Back button (and Esc) stop the film and show the library again; nothing of the film's overlay remains
   heat      (a film without narration, the auto-directed heat) the beat counter follows the direction's layers at every seek; the cards do
             not overlap (three cards fit a landscape and a portrait window)
+  rhythm    (a film whose segments carry the "rhythm_score" layer and whose capture has rhythm.json) the live rhythm score layer is on where the
+            direction says and its value is the file's live score at the dance time at every seek
   console   no errors or warnings produced by the library, the bar or the director during the run
 #>
 param(
@@ -160,6 +162,9 @@ if ($null -eq $entry) { throw "no ready film in the library (-Film '$Film')" }
 $direction = Get-Content $directionPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $filmDur = [double]$direction.timeline.film_duration_s
 $chapters = @($entry.chapters)
+$script:rhythmData = $null
+$rhythmFile = Join-Path $script:projectPath "Assets\StreamingAssets\$($entry.capture)\rhythm.json"
+if (Test-Path $rhythmFile) { $script:rhythmData = Get-Content $rhythmFile -Raw -Encoding UTF8 | ConvertFrom-Json }
 $capDir = Join-Path $script:projectPath "Assets\StreamingAssets\$($entry.capture)"
 $capJson = Get-Content (Join-Path $capDir "capture.json") -Raw -Encoding UTF8 | ConvertFrom-Json
 $timeline = $null
@@ -333,6 +338,20 @@ function Check-Seek([double]$target, [bool]$paused, [string]$label) {
     # a film whose segments carry the zouk beat counter layer (the auto-directed heat film): the counter is on exactly where the direction says
     if (-not $nearEdge -and $null -ne $seg.layers -and $null -ne $seg.layers.beat_counter) {
         Assert ([bool]$f.overlay.beatCounter -eq [bool]$seg.layers.beat_counter) ("{0}: the beat counter is {1} (segment {2})" -f $label, $(if ($f.overlay.beatCounter) { "on" } else { "off" }), $seg.id)
+    }
+    # a film with the live rhythm score layer: the HUD is on where the direction says, and what it shows is the capture's rhythm.json at that time (a pure function of time)
+    if (-not $nearEdge -and $null -ne $seg.layers -and $null -ne $seg.layers.rhythm_score -and $null -ne $script:rhythmData) {
+        $rz = (HmState).rhythm
+        Assert ([bool]$rz.layer -eq [bool]$seg.layers.rhythm_score) ("{0}: the rhythm layer is {1} (segment {2})" -f $label, $(if ($rz.layer) { "on" } else { "off" }), $seg.id)
+        if ($rz.layer -and $null -ne $rz.score) {
+            $live = $script:rhythmData.live
+            $x = ([double]$rz.time - [double]$live.t0) * [double]$live.hz
+            $i0 = [math]::Max(0, [math]::Min([int]$live.n - 2, [int][math]::Floor($x)))
+            $fr = [math]::Max(0.0, [math]::Min(1.0, $x - $i0))
+            $want = [double]$live.score[$i0] + ([double]$live.score[$i0 + 1] - [double]$live.score[$i0]) * $fr
+            Assert ([math]::Abs([double]$rz.score - $want) -lt 0.02) ("{0}: the rhythm score {1:0.00} is the file's {2:0.00} at {3:0.00} s" -f $label, [double]$rz.score, $want, [double]$rz.time)
+            Assert ($null -eq $f.danceTime -or ([double]$rz.time -ge [double]$f.danceTime - 0.1 -and [double]$rz.time -le [double]$f.danceTime + $(if ($paused) { 0.1 } else { 3.5 }))) ("{0}: the rhythm clock {1:0.00} s follows the film's dance time" -f $label, [double]$rz.time)
+        }
     }
     # the soundtrack follows
     $au = $f.audio
