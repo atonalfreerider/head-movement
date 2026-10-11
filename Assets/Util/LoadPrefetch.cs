@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 
@@ -22,6 +23,7 @@ public static class LoadPrefetch
 
     static readonly Dictionary<string, Entry> Entries = new();
     static readonly object Gate = new();
+    static readonly SemaphoreSlim Slots = new(2, 2);
 
     public static int Started { get; private set; }
 
@@ -36,6 +38,20 @@ public static class LoadPrefetch
             Started++;
             e.Task = Task.Run(() =>
             {
+                // at most two loads at a time, and below the main thread's priority: the loading screen is drawn by the main thread and the render thread
+                // beside them, and a headset has few big cores - a burst of parsers on all of them starved the frames (the first stalls of a load)
+                Slots.Wait();
+                Thread th = Thread.CurrentThread;
+                System.Threading.ThreadPriority was = th.Priority;
+                try
+                {
+                    th.Priority = System.Threading.ThreadPriority.BelowNormal;
+                }
+                catch (Exception)
+                {
+                    // a platform without priorities
+                }
+
                 System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
                 try
                 {
@@ -47,6 +63,16 @@ public static class LoadPrefetch
                 }
 
                 e.Ms = sw.Elapsed.TotalMilliseconds;
+                try
+                {
+                    th.Priority = was;
+                }
+                catch (Exception)
+                {
+                    // as above
+                }
+
+                Slots.Release();
             });
         }
     }
