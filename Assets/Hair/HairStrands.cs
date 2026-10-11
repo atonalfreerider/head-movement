@@ -97,6 +97,10 @@ public partial class HairStrands : MonoBehaviour
     public float OpacityOverride = -1f;
     /// <summary>-1 = automatic (head height on screen), 0..2 = forced</summary>
     public int LodOverride = -1;
+    [Tooltip("headset quality tier: > 1 switches to the cheaper levels at a larger head size (= from a shorter distance); 1 = the default thresholds")]
+    public float LodScale = 1f;
+    [Tooltip("headset quality tier: the most detailed level allowed (1 = never the full card set, 2 = inner + outer cards only)")]
+    public int MinLod;
     /// <summary>bit per HairCardLayout layer id (cap, inner, mid, outer, part, flyaway)</summary>
     public int LayerMask = 0x3F;
     public bool UseBake = true;
@@ -1388,6 +1392,43 @@ public partial class HairStrands : MonoBehaviour
         if (ptRenderer != null) PonytailAppearance(avatar);
     }
 
+    /// <summary>
+    /// The headset's quality tier (HmVr.VrQuality): LOD thresholds scaled, the most detailed level allowed, the tip glow on or off, and
+    /// the whole hair off (no simulation, no bake step, nothing drawn) or back on. Nothing here changes the simulation, so no re-bake.
+    /// </summary>
+    public void ApplyQuality(bool on, float lodScale, int minLod, bool tips)
+    {
+        LodScale = lodScale;
+        MinLod = minLod;
+        TipGlow = tips ? 1f : 0f;
+        if (on == enabled && Visible == on) return;
+        Visible = on;
+        if (!on)
+        {
+            Refresh(); // hides the renderers while the component still runs
+            enabled = false;
+        }
+        else
+        {
+            enabled = true;
+            meshDirty = true;
+        }
+    }
+
+    /// <summary>headset budget of the simulation (HmVr.VrQuality, quest_settings.json): the background bake on or off, its chunk size, and the solver's substeps / iterations (0 = leave)</summary>
+    public void ApplyBudget(bool bake, int chunkFrames, int substeps, int iterations)
+    {
+        if (UseBake != bake)
+        {
+            UseBake = bake;
+            if (!bake && BakeStarted) StopBake();
+        }
+
+        BakeChunkFrames = Mathf.Max(1, chunkFrames);
+        if (substeps > 0) Substeps = substeps;
+        if (iterations > 0) Iterations = iterations;
+    }
+
     void UpdateRenderers(bool show)
     {
         bool cards = Mode == RenderMode.Cards;
@@ -1402,7 +1443,7 @@ public partial class HairStrands : MonoBehaviour
     /// <summary>LOD from her head's height on screen (pixels of the main camera; hysteresis 10 %)</summary>
     void UpdateLod()
     {
-        int want = LodOverride >= 0 ? Mathf.Clamp(LodOverride, 0, 2) : AutoLod();
+        int want = Mathf.Max(LodOverride >= 0 ? Mathf.Clamp(LodOverride, 0, 2) : AutoLod(), Mathf.Clamp(MinLod, 0, 2));
         if (want == lod) return;
         lod = want;
         cardMesh.SetSubMesh(0, new SubMeshDescriptor(0, lodIndexCount[lod]), MeshUpdateFlags.DontRecalculateBounds | MeshUpdateFlags.DontValidateIndices);
@@ -1452,7 +1493,7 @@ public partial class HairStrands : MonoBehaviour
         int cur = Mathf.Max(lod, 0);
         float h0 = cur == 0 ? 0.9f : 1.1f, h1 = cur <= 1 ? 0.9f : 1.1f;
         // thresholds are Quest eye-buffer pixels; a desktop view is about half as many pixels per degree
-        float k = Application.isMobilePlatform ? 1f : 0.5f;
+        float k = (Application.isMobilePlatform ? 1f : 0.5f) * Mathf.Max(0.1f, LodScale);
         return px >= lod0Px * k * h0 ? 0 : px >= lod1Px * k * h1 ? 1 : 2;
     }
 

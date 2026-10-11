@@ -20,7 +20,7 @@ namespace HmVr
     {
         public static VrMenu Instance { get; private set; }
 
-        public const float Radius = 0.78f, CardW = 320f, CardH = 520f, CardStepMm = 355f;
+        public const float Radius = 0.78f, CardW = 320f, CardH = 520f, CardStepMm = 355f, FooterW = 1100f, FooterH = 200f;
 
         public bool IsOpen { get; private set; }
         public bool OverLesson { get; private set; }
@@ -37,7 +37,7 @@ namespace HmVr
 
         readonly List<Card> cards = new();
         VrPanel header, footer, loading;
-        VrWidget footerNote, loadTitle, loadStatus, loadBar, handedBtn, resumeBtn, libraryBtn, exitBtn;
+        VrWidget footerNote, loadTitle, loadStatus, loadBar, handedBtn, resumeBtn, libraryBtn, exitBtn, viewBtn, hairBtn;
         string signature;
         float menuYawDeg, yawVel;
         bool placed, movingYaw;
@@ -61,7 +61,7 @@ namespace HmVr
             header.AddLabel("kicker", "Choose a lesson", new Rect(-340f, -40f, 680f, 38f), 28f, VrStyle.Muted, TextAnchor.MiddleCenter);
             header.Interactive = false;
 
-            footer = VrPanel.Create("VR menu footer", new Vector2(1100f, 120f), transform);
+            footer = VrPanel.Create("VR menu footer", new Vector2(FooterW, FooterH), transform);
             footer.Background.color = new Color(0.04f, 0.047f, 0.07f, 0.9f);
             BuildFooter();
 
@@ -86,13 +86,29 @@ namespace HmVr
         void BuildFooter()
         {
             VrPanel.ClearWidgets(footer);
-            float w = 1100f;
-            resumeBtn = footer.AddButton("resume", "Resume lesson", VrPanel.R(-390f, 12f, 250f, 58f), () => Close(), 25f);
-            libraryBtn = footer.AddButton("back to library", "Back to library", VrPanel.R(-100f, 12f, 270f, 58f), () => VrFilm.BackToLibrary(), 25f);
-            handedBtn = footer.AddButton("handedness", "", VrPanel.R(200f, 12f, 270f, 58f), () => ToggleHanded(), 22f);
+            float w = FooterW;
+            // two rows of three big buttons, kept narrow so the pointing ray to a corner button does not pass behind the outer cards
+            const float bw = 330f, gap = 20f, rowA = 42f, rowB = -30f;
+            float x0 = -(bw + gap);
+            resumeBtn = footer.AddButton("resume", "Resume lesson", VrPanel.R(x0, rowA, bw, 58f), () => Close(), 25f);
+            libraryBtn = footer.AddButton("back to library", "Back to library", VrPanel.R(x0 + bw + gap, rowA, bw, 58f), () => VrFilm.BackToLibrary(), 25f);
+            viewBtn = footer.AddButton("view mode", "", VrPanel.R(x0 + 2f * (bw + gap), rowA, bw, 58f), () => VrDisplay.Instance?.Toggle(), 23f);
+            viewBtn.LabelFunc = ViewLabel;
+            hairBtn = footer.AddButton("hair level", "", VrPanel.R(x0, rowB, bw, 58f), () => VrQuality.SetHair(VrQuality.NextHairLevel(VrQuality.Hair)), 23f);
+            hairBtn.LabelFunc = () => VrQuality.Current == VrQuality.Tier.Quest ? "Hair: " + VrQuality.Hair : "Hair: PC";
+            hairBtn.Enabled = () => VrQuality.Current == VrQuality.Tier.Quest;
+            handedBtn = footer.AddButton("handedness", "", VrPanel.R(x0 + bw + gap, rowB, bw, 58f), () => ToggleHanded(), 23f);
             handedBtn.LabelFunc = () => LeftHanded() ? "Pointing: left hand" : "Pointing: right hand";
-            exitBtn = footer.AddButton("exit vr", Application.platform == RuntimePlatform.Android ? "Quit" : "Exit VR", VrPanel.R(440f, 12f, 150f, 58f), () => OnExitVr(), 24f);
-            footerNote = footer.AddLabel("note", "", VrPanel.R(0f, -42f, w - 40f, 30f), 20f, VrStyle.Amber, TextAnchor.MiddleCenter);
+            exitBtn = footer.AddButton("exit vr", Application.platform == RuntimePlatform.Android ? "Quit" : "Exit VR", VrPanel.R(x0 + 2f * (bw + gap), rowB, bw, 58f), () => OnExitVr(), 25f);
+            footerNote = footer.AddLabel("note", "", VrPanel.R(0f, -80f, w - 40f, 30f), 20f, VrStyle.Amber, TextAnchor.MiddleCenter);
+        }
+
+        static string ViewLabel()
+        {
+            VrDisplay d = VrDisplay.Instance;
+            if (d == null) return "View";
+            if (d.Current == VrDisplay.State.Failed) return "View: Immersive";
+            return d.Wanted == DisplayMode.Passthrough ? (d.Current == VrDisplay.State.Starting ? "View: Passthrough..." : "View: Passthrough") : "View: Immersive";
         }
 
         // ------------------------------------------------------------------ open / close
@@ -139,6 +155,7 @@ namespace HmVr
             IReadOnlyList<LibraryEntry> films = lib.Films;
             string sig = string.Join("|", films.Select(f => $"{f.Id}/{f.Ready}/{f.Title}/{f.Subtitle}/{f.DurationS}/{f.Chapters.Count}/{f.ThumbnailPath}"));
             if (!force && sig == signature && cards.Count == films.Count) return;
+            if (sig != signature) Debug.Log($"VrMenu: {films.Count} library cards ({films.Count(f => f.Ready)} ready) read from {LibraryData.FilePath}");
             signature = sig;
             foreach (Card c in cards)
             {
@@ -294,7 +311,9 @@ namespace HmVr
             resumeBtn.Enabled = () => OverLesson;
             libraryBtn.Enabled = () => OverLesson;
             exitBtn.Enabled = () => true;
-            footerNote.Label.text = !string.IsNullOrEmpty(Message) ? Message : !string.IsNullOrEmpty(lib.Error) ? lib.Error : Notice ?? "";
+            VrDisplay disp = VrDisplay.Instance;
+            string displayNote = disp != null && disp.Current == VrDisplay.State.Failed ? VrDisplay.StatusLine : "";
+            footerNote.Label.text = !string.IsNullOrEmpty(Message) ? Message : !string.IsNullOrEmpty(lib.Error) ? lib.Error : !string.IsNullOrEmpty(displayNote) ? displayNote : Notice ?? "";
             if (lib.State == FilmLibrary.Mode.Library && !string.IsNullOrEmpty(lib.Error)) Message = "";
 
             // loading
@@ -368,7 +387,7 @@ namespace HmVr
             Vector3 fwd = ViewpointMath.Dir(menuYawDeg);
             Vector3 hp = new(head.x + fwd.x * Radius, centreY + CardH * 0.0005f + 0.09f, head.z + fwd.z * Radius);
             header.FaceFrom(hp, new Vector3(head.x, hp.y, head.z), 0f);
-            Vector3 fp = new(head.x + fwd.x * (Radius - 0.03f), centreY - CardH * 0.0005f - 0.095f, head.z + fwd.z * (Radius - 0.03f));
+            Vector3 fp = new(head.x + fwd.x * (Radius - 0.03f), centreY - CardH * 0.0005f - 0.155f, head.z + fwd.z * (Radius - 0.03f));
             footer.FaceFrom(fp, new Vector3(head.x, fp.y, head.z), 0f);
         }
 

@@ -234,10 +234,26 @@ namespace HmVr
             y = -146f;
             float tw = 82f, tg = 16f, tx = -(tw * 5 + tg * 4) * 0.5f;
             tabChapters = main.AddButton("tab chapters", "Chapters", VrPanel.R(tx + tw * 0.5f, y, tw, 58f), () => ToggleList(true), 17f);
-            tabViews = main.AddButton("tab views", "Views", VrPanel.R(tx + tw * 1.5f + tg, y, tw, 58f), () => ToggleList(false), 20f);
+            tabViews = main.AddButton("tab views", "Views", VrPanel.R(tx + tw * 1.5f + tg, y, tw, 58f), OnViewsTab, 20f);
+            tabViews.LabelFunc = () => PassthroughNow ? "Place" : "Views"; // in passthrough the user walks around the dancers: this tab places the dance in the room instead
             cc = main.AddButton("captions", "CC", VrPanel.R(tx + tw * 2.5f + 2f * tg, y, tw, 58f), CycleCaptions, 24f);
             pin = main.AddButton("pin", "Pin", VrPanel.R(tx + tw * 3.5f + 3f * tg, y, tw, 58f), () => SetPinned(!Pinned), 21f);
             library = main.AddButton("library", "Library", VrPanel.R(tx + tw * 4.5f + 4f * tg, y, tw, 58f), () => OnLibrary(), 18f);
+        }
+
+        static bool PassthroughNow => VrDisplay.Instance != null && VrDisplay.Instance.PassthroughActive;
+
+        void OnViewsTab()
+        {
+            if (PassthroughNow)
+            {
+                VrPlacement.Instance?.TogglePlaceMode();
+                ShowViews = false;
+            }
+            else
+            {
+                ToggleList(false);
+            }
         }
 
         /// <summary>CC: captions below the dancers' view line, then above it, then off</summary>
@@ -342,7 +358,7 @@ namespace HmVr
             Place(input, !wasShown, dt);
             wasShown = true;
             UpdateContents();
-            bool vc = ShowChapters && alpha > 0.5f, vv = ShowViews && alpha > 0.5f;
+            bool vc = ShowChapters && alpha > 0.5f, vv = ShowViews && !PassthroughNow && alpha > 0.5f;
             SetListsVisible(vc, vv);
         }
 
@@ -445,7 +461,7 @@ namespace HmVr
             pauseB.gameObject.SetActive(playing);
             for (int i = 0; i < rateBtns.Length; i++) rateBtns[i].Toggled = Mathf.Abs(VrFilm.Rate - VrFilm.SlowRates[i]) < 0.001f;
             tabChapters.Toggled = ShowChapters;
-            tabViews.Toggled = ShowViews;
+            tabViews.Toggled = PassthroughNow ? VrPlacement.Instance != null && VrPlacement.Instance.PlaceMode : ShowViews;
             VrCaptions caps = VrCaptions.Instance;
             cc.Toggled = caps != null && caps.Enabled && caps.HasTranscript;
             string ccLabel = caps == null || !caps.Enabled ? "CC off" : caps.High ? "CC up" : "CC";

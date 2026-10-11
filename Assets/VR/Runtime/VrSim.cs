@@ -139,6 +139,14 @@ namespace HmVr
             SetHandWorld(side, p, yaw, pinch, 0f);
         }
 
+        /// <summary>a hand at a place relative to the head (right, up, forward in metres; the head's heading), turned yawDeg about the vertical, palm down (the placement gestures)</summary>
+        public void HandAtHead(Hand side, Vector3 headRelative, float yawDeg, float pinch)
+        {
+            Quaternion yaw = HeadWorldYaw;
+            Vector3 p = HeadWorldPos + yaw * headRelative;
+            SetHandWorld(side, p, yaw * Quaternion.Euler(0f, yawDeg, 0f), pinch, 0f);
+        }
+
         static Vector3 KnuckleOffset(Hand side)
         {
             HandState tmp = new(side);

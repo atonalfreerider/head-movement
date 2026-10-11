@@ -23,6 +23,8 @@ namespace HmVr
         readonly HandView[] views = new HandView[2];
         Material skin, skinHot, lineMat;
         public bool Visible = true;
+        /// <summary>passthrough: the real hands are in the picture, so only a cursor at each fingertip and the lit pinch point are drawn</summary>
+        public bool Minimal;
 
         static readonly int[][] FingerChains =
         {
@@ -94,11 +96,23 @@ namespace HmVr
                 bool on = Visible && hand != null && hand.Tracked;
                 if (v.Root.gameObject.activeSelf != on) v.Root.gameObject.SetActive(on);
                 if (!on) continue;
-                for (int i = 0; i < HandJoint.Count; i++) v.Joints[i].position = hand.State.Joints[i];
+                for (int i = 0; i < HandJoint.Count; i++)
+                {
+                    v.Joints[i].position = hand.State.Joints[i];
+                    bool cursor = i == HandJoint.IndexTip || i == HandJoint.ThumbTip;
+                    if (v.Spheres[i].enabled != (!Minimal || cursor)) v.Spheres[i].enabled = !Minimal || cursor;
+                }
+
                 for (int f = 0; f < 5; f++)
                 {
                     int[] chain = FingerChains[f];
                     LineRenderer l = v.Fingers[f];
+                    if (Minimal)
+                    {
+                        l.enabled = false;
+                        continue;
+                    }
+
                     l.enabled = true;
                     l.positionCount = chain.Length;
                     for (int k = 0; k < chain.Length; k++) l.SetPosition(k, hand.State.Joints[chain[k]]);

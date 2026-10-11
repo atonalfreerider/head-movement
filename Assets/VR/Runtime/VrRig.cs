@@ -178,6 +178,91 @@ namespace HmVr
             Cam.transform.localRotation = lastLocalRot;
         }
 
+        // ------------------------------------------------------------------ passthrough: the real room is the background
+
+        Color immersiveBackground = new(0.02f, 0.025f, 0.04f, 1f);
+        bool passthroughBackground;
+
+        /// <summary>the colour behind everything in immersive mode (the viewer's own background)</summary>
+        public void SetImmersiveBackground(Color c)
+        {
+            c.a = 1f;
+            immersiveBackground = c;
+            if (!passthroughBackground && Cam != null) Cam.backgroundColor = c;
+        }
+
+        /// <summary>
+        /// Passthrough needs a transparent camera background (alpha 0, solid colour): the headset composites the real room BEHIND the eye
+        /// buffer wherever it is transparent. Immersive mode puts the opaque background back.
+        /// </summary>
+        public void SetPassthroughBackground(bool on)
+        {
+            passthroughBackground = on;
+            if (Cam == null) return;
+            Cam.clearFlags = CameraClearFlags.SolidColor;
+            Cam.backgroundColor = on ? new Color(0f, 0f, 0f, 0f) : immersiveBackground;
+        }
+
+        // ------------------------------------------------------------------ placing the dance in the real room (passthrough)
+
+        /// <summary>the head in real floor coordinates (the tracking floor, metres): x, z and the eye height above the floor</summary>
+        public Vector3 HeadReal => transform.InverseTransformPoint(Head.position);
+
+        /// <summary>the heading of the head on the real floor, degrees (0 = +Z of the tracking space)</summary>
+        public float HeadRealYawDeg
+        {
+            get
+            {
+                Vector3 f = Quaternion.Inverse(transform.rotation) * Head.forward;
+                return Mathf.Atan2(f.x, f.z) * Mathf.Rad2Deg;
+            }
+        }
+
+        public Vector3 ToReal(Vector3 world) => transform.InverseTransformPoint(world);
+
+        /// <summary>a floor direction in world space as a real-floor direction (no scale)</summary>
+        public Vector3 DirToReal(Vector3 worldDir) => transform.InverseTransformDirection(worldDir);
+
+        /// <summary>the rig carries the inverse of the dance's placement: the user moves, the dance (a world of its own objects) stays</summary>
+        public void ApplyPlacement(DancePlacement p)
+        {
+            p.RigPose(out Vector3 pos, out Quaternion rot, out float k);
+            Vector3 headBefore = Head.position;
+            Quaternion rotBefore = transform.rotation;
+            transform.SetPositionAndRotation(pos, rot);
+            transform.localScale = Vector3.one * k;
+            HandState.WorldScale = k;
+            CarryPanels(headBefore, Head.position, transform.rotation * Quaternion.Inverse(rotBefore));
+        }
+
+        /// <summary>the rig on the floor origin, unrotated, unscaled (the lobby, immersive mode)</summary>
+        public void ClearPlacement()
+        {
+            Vector3 headBefore = Head.position;
+            Quaternion rotBefore = transform.rotation;
+            transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
+            transform.localScale = Vector3.one;
+            HandState.WorldScale = 1f;
+            CarryPanels(headBefore, Head.position, transform.rotation * Quaternion.Inverse(rotBefore));
+        }
+
+        /// <summary>
+        /// The panels hang in the user's space (the Place panel, the captions, the HUD, the hand panel glide to the gaze): when the rig moves
+        /// under the user to place the dance, they move with the head - the same offset from it, turned with the rig - so they stay where the
+        /// user sees them (their sizes and distances in world metres stay as they are).
+        /// </summary>
+        static void CarryPanels(Vector3 headBefore, Vector3 headAfter, Quaternion turn)
+        {
+            if ((headBefore - headAfter).sqrMagnitude < 1e-10f && Quaternion.Angle(turn, Quaternion.identity) < 1e-3f) return;
+            foreach (VrPanel panel in VrPanel.All)
+            {
+                Transform t = panel.transform;
+                t.SetPositionAndRotation(headAfter + turn * (t.position - headBefore), turn * t.rotation);
+            }
+        }
+
+        public float RigScale => transform.localScale.x;
+
         // ------------------------------------------------------------------ moving the user
 
         /// <summary>the yaw of the head inside the rig, degrees</summary>

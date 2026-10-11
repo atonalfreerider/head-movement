@@ -305,7 +305,7 @@ namespace HmVr
             VrRig rig = VrRig.Create(xr, template);
             if (template != null)
             {
-                rig.Cam.backgroundColor = template.backgroundColor;
+                rig.SetImmersiveBackground(template.backgroundColor);
                 rig.Cam.farClipPlane = Mathf.Max(rig.Cam.farClipPlane, template.farClipPlane);
             }
 

@@ -24,6 +24,10 @@ namespace HmVr
         public VrCaptions Captions { get; private set; }
         public VrWristButton Wrist { get; private set; }
         public VrHandVisuals Hands { get; private set; }
+        public VrDisplay Display { get; private set; }
+        public VrPlacement Placement { get; private set; }
+        public VrPerf Perf { get; private set; }
+        public VrHud Hud { get; private set; }
         public bool Xr { get; private set; }
         public int LessonStarts, LessonEnds;
         public string LastLesson;
@@ -51,6 +55,10 @@ namespace HmVr
             HandPanel = root.AddComponent<VrHandPanel>();
             Captions = root.AddComponent<VrCaptions>();
             Wrist = root.AddComponent<VrWristButton>();
+            Display = root.AddComponent<VrDisplay>();
+            Placement = root.AddComponent<VrPlacement>();
+            Perf = root.AddComponent<VrPerf>();
+            Hud = root.AddComponent<VrHud>();
 
             Menu.OnExitVr = () =>
             {
@@ -70,6 +78,28 @@ namespace HmVr
 
             VrQuality.Apply(xr);
             ApplyCullMask(false);
+            Placement.Init(rig, Display);
+            Display.Changed += OnDisplayChanged;
+            Display.Init(rig, xr); // passthrough or immersive: the remembered choice, else passthrough on a headset
+        }
+
+        bool Passthrough => Display != null && Display.PassthroughActive;
+
+        /// <summary>the view was switched (menu button) or passthrough failed to start: the lesson's vantage follows the mode</summary>
+        void OnDisplayChanged()
+        {
+            if (Hands != null) Hands.Minimal = Passthrough;
+            if (!VrFilm.InLesson || tornDown) return;
+            if (Passthrough)
+            {
+                // the rig keeps its immersive pose until the placement takes over (next frame, in front of the user)
+                Locomotion.Enabled = false;
+            }
+            else
+            {
+                Placement.Release();
+                Locomotion.GoTo("start", true);
+            }
         }
 
         void ApplyCullMask(bool lesson)
@@ -94,8 +124,10 @@ namespace HmVr
             else if (!lesson && wasLesson) OnLessonEnd();
             wasLesson = lesson;
             ApplyCullMask(lesson);
-            Locomotion.Enabled = lesson && !Menu.IsOpen;
+            // passthrough: the user walks around the dancers themselves (no teleport, no snap turn, no directed vantage points)
+            Locomotion.Enabled = lesson && !Menu.IsOpen && !Passthrough;
             Pointers.SuppressRays = false;
+            if (Hands != null && Hands.Minimal != Passthrough) Hands.Minimal = Passthrough;
         }
 
         void OnLessonStart()
@@ -106,7 +138,8 @@ namespace HmVr
             float t = d != null && !float.IsNaN(d.DanceTime) ? d.DanceTime : 0f;
             List<Viewpoint> list = VrViewpoints.Build(HeadMovement.Instance, VrFilm.Entry, t);
             Locomotion.SetViewpoints(list);
-            Locomotion.GoTo("start", true);
+            if (!Passthrough) Locomotion.GoTo("start", true); // in passthrough VrPlacement stands the dance in front of the user instead
+            else Rig.ClearPlacement();
             HandPanel.ShowChapters = HandPanel.ShowViews = false;
             Menu.Close();
         }
@@ -116,8 +149,9 @@ namespace HmVr
             LessonEnds++;
             Locomotion.SetViewpoints(null);
             Locomotion.Enabled = false;
-            // back at the library: the user is put back at the lobby origin facing forward
-            Rig.PlaceHead(new Vector3(0f, 0f, 0f), 0f, 0f, false);
+            // back at the library: the user is put back at the lobby origin facing forward (passthrough: the rig simply on the real floor)
+            Placement.Release();
+            if (!Passthrough) Rig.PlaceHead(new Vector3(0f, 0f, 0f), 0f, 0f, false);
         }
 
         void LateUpdate()
@@ -167,6 +201,7 @@ namespace HmVr
                 ["pointers"] = Pointers?.State(), ["menu"] = Menu?.State(), ["handPanel"] = HandPanel?.State(),
                 ["captions"] = new Dictionary<string, object>
                     { ["enabled"] = Captions != null && Captions.Enabled, ["hasTranscript"] = Captions != null && Captions.HasTranscript, ["alpha"] = Captions?.Alpha ?? 0f, ["text"] = Captions?.CurrentText, ["word"] = Captions?.CurrentWord },
+                ["display"] = Display?.State_(), ["placement"] = Placement?.State(), ["perf"] = Perf?.Summary(), ["hud"] = Hud?.State(),
                 ["wristButtonAlpha"] = Wrist?.Alpha ?? 0f, ["suppressedCanvases"] = suppressed.Count, ["quality"] = VrQuality.State(), ["hands"] = (Input?.Source as XrInputSource)?.HandsStatus
             };
             if (VrFilm.InLesson)
