@@ -30,7 +30,7 @@ namespace HmVr.Editor
     {
         [CliCommand("hm_vr", "VR mode (Play mode, simulated hands): state | enter | exit | widgets | aim | poke | palm | pinch | hold | rest | look | head | dominant | lost | selftest | result")]
         public static string Vr(
-            [CliArg("action", "state | enter | exit | widgets | aim | poke | palm | pinch | hold | handat | rest | look | head | dominant | lost | instant | display | place | hair | tier | selftest | result")] string action = "state",
+            [CliArg("action", "state | enter | exit | widgets | aim | poke | palm | pinch | hold | handat | rest | look | head | dominant | lost | instant | display | place (state) | hair | tier | selftest | result")] string action = "state",
             [CliArg("hand", "left | right")] string hand = "right",
             [CliArg("widget", "widget id (see widgets)")] string widget = null,
             [CliArg("value", "pinch 0..1 / lateral metres / yaw")] float value = 0f,
@@ -120,21 +120,8 @@ namespace HmVr.Editor
                     else d.Set(want == "passthrough" ? DisplayMode.Passthrough : DisplayMode.Immersive, false);
                     break;
                 }
-                case "place": // --widget reset | lock | unlock | turn | size1   (--value = degrees for turn)
-                {
-                    VrPlacement p = Need(mode).Session?.Placement ?? throw new InvalidOperationException("no VR session");
-                    switch ((widget ?? "reset").ToLowerInvariant())
-                    {
-                        case "reset": p.ResetInFront(); break;
-                        case "lock": p.SetPlaceMode(false); break;
-                        case "unlock": p.SetPlaceMode(true); break;
-                        case "turn": p.TurnBy(value); break;
-                        case "size1": p.ResetSize(); break;
-                        default: throw new ArgumentException("place: reset | lock | unlock | turn | size1");
-                    }
-
-                    break;
-                }
+                case "place": // state of the fixed placement (the origin is locked; there is nothing to set)
+                    return Json(Need(mode).Session?.Placement?.State());
                 case "hair": // --widget full | light | off
                     VrQuality.SetHair(VrSettings.ParseLevel(widget, HairLevel.Full), false);
                     break;

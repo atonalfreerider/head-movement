@@ -121,6 +121,7 @@ namespace HmVr
         public static void SetHair(HairLevel level, bool save = true)
         {
             Hair = level;
+            Debug.Log("VrQuality: hair " + level.ToString().ToLowerInvariant());
             ApplyHair();
             if (save)
             {

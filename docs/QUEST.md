@@ -7,6 +7,95 @@ the setup, the steps to try it on a headset, the commands, the limits, and the p
 Status of this page's claims is marked: **verified** = measured in the editor on simulated hands (`Tools/playtest_vr.ps1`, the EditMode
 tests) or by a build that ran; **untested on a headset** = written against the OpenXR / XR Hands APIs and reviewed, never run on a device.
 
+## 0. The Quest 3 app (standalone APK, passthrough mixed reality by default)
+
+What the app does on a Quest 3 (a Quest 2 too, where passthrough is supported). Everything below was written against the Meta OpenXR
+packages and the headset's logs; items marked **verified in the editor** ran on simulated hands (`Tools/playtest_vr.ps1`), items marked
+**device log** were read from `adb logcat` on a Quest 3; the rest needs a person looking.
+
+**Passthrough is the default view.** The room is the background; only the dancers, hair, props and the graphics (T axis, floor craft, physics,
+arrows, beat count and rhythm score where the lesson turns them on, captions when switched on) are drawn over it, life size.
+- Setup: OpenXR features *Meta Quest: Session*, *Meta Quest: Camera (Passthrough)* (with the passthrough pre-splash) and *Display Utilities*
+  (`hm_vr_setup`); the head camera clears to a solid colour with alpha 0 (`VrRig.SetPassthroughBackground`); AR Foundation's `ARSession` +
+  `ARCameraManager` are added to the rig at run time (`VrDisplay`), which makes the Meta camera subsystem create the passthrough layer. The package
+  `com.unity.xr.arfoundation` 6.6.2 comes with `com.unity.xr.meta-openxr`: nothing extra was downloaded. Manifest: `com.oculus.feature.PASSTHROUGH`,
+  hand tracking permissions; minimum Android API 32 (the passthrough camera feature requires Android 12L; Horizon OS is Android 14).
+- **Device log**: `VrDisplay: passthrough running (MetaOpenXRCameraSubsystem, layer 'Default Scene Layer' order 0 on blend Premultiply, layer
+  'Passthrough' order -1 on blend Alpha)`. The scene layer is composited premultiplied over the passthrough layer, so the shaders write
+  premultiplied-correct alpha (`Blend SrcAlpha OneMinusSrcAlpha, One OneMinusSrcAlpha`; additive glow writes alpha 0).
+- In passthrough: no room mesh, no sky or black background, no floor fill (the dark translucent plane is off; the grid is shortened to the dance
+  area and fainter; a soft translucent contact disc sits under the couple), a flat ambient fill so the shaded side does not go black, hands drawn as
+  fingertip cursors only (the real hands are in view), no teleport and no snap turn (the user walks around the dancers), no directed viewpoints.
+- **Immersive** (opaque, room and floor) stays one button away: the menu footer's *View: Passthrough / Immersive*; the choice is remembered
+  (`PlayerPrefs hm_vr_display`; `-hmvr-display immersive|passthrough`, `HM_VR_DISPLAY`, `quest_settings.json` "display"). If passthrough does not start
+  within 6 s the app falls back to immersive and says so in the menu's note line and in the log (`VrDisplay: passthrough failed: ...`).
+
+**The dance has a fixed place.** The capture's world origin is mapped once, when a lesson starts, to the origin (0, 0, 0) of the headset's Floor
+tracking space (the centre of the Meta world floor), the capture's floor on the real floor, scale exactly 1.0 (`VrPlacement`; the log line
+`VrPlacement: lesson '...' origin LOCKED: static offset (...) ... scale 1.000 OK (exactly 1:1)` states it). It never moves, drifts, re-centres or follows
+anything afterwards; the dancers keep their captured motion and travel across the floor around it (nothing cancels their root motion). The one
+static offset per lesson: the dancers' mean floor position over the whole take for a capture without an origin of its own (the demo and the class
+recap), zero for a capture whose own `origin` already is that mean (Carlos + Aline, John + Lula). A constant turn about the vertical axis, applied
+with it, makes the dancers' front (the start vantage's side) face where the user stands at the start. Only a teleport moves the origin relative to
+the user (immersive mode); in passthrough teleport is off (it would make no sense in a real room), so the origin never moves. There are no place /
+rotate / scale gestures. If the headset recentres its tracking space the dance recentres with it (a Meta anchor would pin it; not done).
+
+**Menus are anchored.** Every panel (library menu, the in-lesson hand panel, captions, the beat / rhythm HUD, the loading splash) is placed ONCE when
+it opens - 0.8 to 1.0 m ahead of the head along the horizontal gaze, at chest-to-eye height, facing the user with a slight tilt - and then stays
+exactly there: no follow, no easing, no drift (`VrAnchor`). It never opens inside the dancers (it is moved out, to the user's side, unless the
+user stands among them). Recall = close and open again in front of the user: raise the LEFT palm (the hand panel and the open library menu), or the
+wrist button (an open menu that is out of view); a teleport or a viewpoint also brings the open panels along, once. The hand panel's *Close* button
+closes it. Captions are OFF by default (the panel's CC button turns them on, and the choice is remembered).
+
+**Loading does not freeze.** A lesson builds over many frames behind the splash (`HeadMovement.AsyncLoad`): the JSON of the poses, physics, rhythm,
+counterbalance, floor craft and graph, the avatars' binaries, the jerk series, the phones' tracks are read on worker threads (`LoadPrefetch`), the
+dance layers are built one layer per frame, and the avatars' albedo is a baked GPU texture (below). Lines starting `HM-LOAD` in logcat give the time of
+every step; `HM-PERF lesson-load` gives the frames, the worst frame and the number over 40 / 100 ms during the load; `HM-STALL` names any frame over
+100 ms and the step it followed. The first Quest 3 build froze 8.6 s (recap) and 4.8 s (demo) in one frame; see the numbers in NOTES_X3.
+**Splash** (`VrSplash`): the wordmark, two stick dancers in a closed hold swaying to a slow beat, a T-axis ring, floor ripples, the lesson's title and
+subtitle from the library data, a progress bar with the stage, a spinner that turns every frame; anchored like the menus (a dark backdrop behind it in
+immersive mode), shown at app start for at least 2.4 s and during every load. The adaptive app icon is generated (`VrBranding`, `Assets/Icons`); the
+Unity player splash is switched off where the licence allows it.
+
+**Skeletons at full opacity.** The skeleton lines and joints show in their own colours whatever the bodies' opacity (a lesson's `avatar_opacity` 0.25
+applies to the bodies only): in VR the translucent body skips the pixels of its own skeleton (`SmplxAvatar.SkeletonsOverBodies`, a stencil bit).
+
+**Hair on the Quest.** The follow's groomed hair (160 guides x 16 segments, cards, Burst simulation baked in the background after load) stays ON in the
+Quest tier. `VrQuality`: hair level *Full* (all cards close up, LOD by head size on screen, tip glow), *Light* (cheaper levels from a shorter distance,
+no tip glow), *Off*; the menu footer's *Hair* button cycles them; when a lesson keeps missing the frame budget the level steps down by itself
+(`adaptive`, logged as `HM-PERF adaptive`), never up. The tier is data: `hm_data/quest_settings.json` (keys in `VrSettings.cs`: `display`, `hair`, `hair_full`,
+`hair_light`, `adaptive`, `hair_bake`, `hair_bake_chunk`, `hair_substeps`, `hair_iterations`, `msaa`, `eye_scale`, `refresh_hz`, `perf_log`); command line
+`-hmhair full|light|off`. MSAA 4x on a Quest 3 (hair alpha-to-coverage needs it; 2x on a Quest 2), no HDR, no shadows, no extra lights, eye buffer 1.0
+(0.9 on a Quest 2), the renderer's intermediate texture set to Auto (Meta's passthrough advice), 72 Hz asked from the runtime. The frame log
+(`HM-PERF`, every 5 s, tag Unity): fps, mean / p95 / worst frame ms, share of frames over budget, GPU and CPU frame time from `FrameTimingManager`, hair
+level and LOD, hair triangles, bake progress, memory.
+
+**Test switches without hands** (adb): `adb shell am start -n com.headmovement.viewer/com.unity3d.player.UnityPlayerActivity -e unity "-hmplay recap -hmseek 120 -hmhair light"`
+starts a lesson by itself (`-hmplay <film id>`), jumps to a time a few seconds after it started (`-hmseek <s>`), sets the hair level.
+
+**Rebuild and push (about 15 minutes with warm caches; the first build on a cold cache took 76 minutes)**
+1. Editor idle, lock held; move the contents of `Assets/StreamingAssets` out (an APK copies the whole folder): `Builds/_sa_hold`.
+2. `unity command hm_vr_build --target android --allow_switch true --development false --output Builds/quest --timeout 5400` (`hm_vr_setup` first when
+   the XR settings changed). Then switch the editor back to Windows (`switch_build_target StandaloneWindows64`), move the data back, `git checkout --` the
+   files the build rewrites (`Assets/Bloom.asset`, `Assets/DefaultVolumeProfile.asset`, `Assets/UniversalRenderPipelineGlobalSettings.asset`,
+   `ProjectSettings/UnityConnectSettings.asset`).
+3. `adb -s <serial> install -r -g Builds/quest/headmovement.apk` (the serial of the Quest 3 when several headsets are attached).
+4. `powershell -File Tools/deploy_data.ps1 -Out Builds/data -Bake -Push -Serial <serial>`: lays out the four lessons (about 520 MB without the phones' frame
+   strips and clips), bakes the avatars' textures (`hm_vr_bake_textures`, editor open), creates the folders from the shell and pushes, then makes the
+   folders world-readable. **Scoped storage (Android 11+) matters here**: `adb push` cannot create sub-folders under `Android/data/<package>`, so the
+   script creates them with the shell; the folders the shell makes are owned by it with mode 770, which the app (another uid) cannot list - the app then
+   logs `UnauthorizedAccessException ... hm_data is denied` and shows no cards. `chmod 755` on the folders (the script does it) fixes it.
+5. Launch from the headset (Library > Unknown Sources > *Head Movement*) or `adb shell am start -n com.headmovement.viewer/com.unity3d.player.UnityPlayerActivity`.
+   Logs: `adb -s <serial> logcat -G 16M` first (the default 256 KB buffer rolls over in a minute), then `adb logcat -s Unity` and
+   `grep -E "VrDisplay|VrPlacement|VrMenu|HM-PERF|HM-LOAD|HM-STALL"`.
+
+**Troubleshooting.** *No cards in the menu*: the data folder is not readable (step 4); the log says so. *Passthrough black*: the Meta camera feature
+failed - look for `VrDisplay: passthrough failed`; the app is then in immersive. *Boundary / Guardian*: passthrough needs no boundary; the Floor
+tracking origin needs the floor level set in the headset (Settings > Boundary), otherwise the app falls back to eye-level and puts the rig 1.6 m
+above the floor (`VrRig.floorTracked`). *No hands*: Settings > Movement tracking > Hand tracking on, put the controllers down. *Headset asleep during a
+desk test*: `adb shell am broadcast -a com.oculus.vrpowermanager.prox_close` fakes the proximity sensor (and `...automation_disable` undoes it);
+never while someone wears it. *The app closed after a few minutes*: leaving to the system UI backgrounds and may kill it.
+
 ## 1. What exists
 
 | Piece | Where | State |
@@ -18,11 +107,11 @@ tests) or by a build that ran; **untested on a headset** = written against the O
 | World-space menu, hand panel, wrist button, captions, loading panel | `VrMenu`, `VrHandPanel`, `VrWristButton`, `VrCaptions` | verified (89-check scenario on 3 films) |
 | Teleport, snap turn, viewpoints (a phone's real position) | `VrLocomotion`, `VrViewpoints` | verified in simulation |
 | VR mode (enter / leave, camera swap, flat overlays kept out) | `VrMode`, `VrSession` | verified in simulation; the XR start path fails cleanly without a runtime (verified), untested with one |
-| Quest quality tier | `VrQuality` | applied and restored in the editor (hair off, MSAA 2x, no HDR, no shadows); not measured on a Quest |
+| Quest quality tier | `VrQuality`, `VrSettings` | device log: hair on (levels), MSAA 4x on a Quest 3, 72 fps in the lessons (see section 0 and NOTES_X3) |
 | Data root for Android | `HmData` | trivial; untested on a device |
 | Data layout and adb push | `Tools/deploy_data.ps1` | verified (layout); push untested |
 | Windows (PC VR) build | `hm_vr_build` | see section 6 |
-| Android build | `hm_vr_build --target android` | not run (see section 7) |
+| Android build | `hm_vr_build --target android` | built and installed on a Quest 2 and a Quest 3 (section 0) |
 
 ## 2. Try it now on a Quest 2 through a PC (Meta Quest Link / Air Link)
 
@@ -90,9 +179,9 @@ Switches: command line `-hmvr auto|on|off|sim`, environment `HM_VR`; `-hmvr-tier
 - **XR Plug-in Management**: OpenXR loader for Windows and for Android; *Initialize XR on Startup* **off** for Windows (the viewer starts XR
   itself, on demand, so a PC without a headset gets no XR error in the Unity console; the start is a coroutine in `VrMode`. The OpenXR loader still writes a few "no runtime" lines to the Player log at the start of a Windows build: it pre-initialises to pick the graphics adapter. On **Android** it is on: the headset app is VR from its first frame).
 - **OpenXR features**: *Hand Tracking Subsystem* (package `com.unity.xr.hands` 1.9.0) on both; the Touch controller profile (the Quest
-  runtime expects an interaction profile; the viewer ignores controllers); on Android *Meta Quest Support* and *Foveated Rendering*.
+  runtime expects an interaction profile; the viewer ignores controllers); on Android *Meta Quest Support*, *Foveated Rendering*, *Meta Quest: Session*, *Meta Quest: Camera (Passthrough)* and *Display Utilities*.
   Render mode single-pass instanced (every viewer shader carries the stereo macros), no depth submission.
-- **Android player**: minimum API 29 (Quest 2 runs Android 10+), ARM64, IL2CPP, Vulkan then GLES3, ASTC textures, package
+- **Android player**: minimum API 32 (the passthrough camera feature; Horizon OS is Android 14), product name *Head Movement*, ARM64, IL2CPP, Vulkan then GLES3, ASTC textures, package
   `com.headmovement.viewer`. The hand-tracking permission and feature entries of the manifest are added by the XR Hands build hook when
   the Hand Tracking feature is on (`com.oculus.permission.HAND_TRACKING`, `oculus.software.handtracking`).
 - Packages added: `com.unity.xr.hands`. Already present: XR Plug-in Management, OpenXR, Unity OpenXR Meta, Input System.
@@ -148,10 +237,9 @@ Android the runtime is assumed and XR is started at once).
    ASTC-compressed, the motion and skin binaries (17 + 17 MB for the recap), the physics and figure JSON (10 + 10 MB, parsed to objects:
    the largest managed allocations, worth converting to binary), the soundtrack (decoded PCM, 70 MB for the recap).
 
-**Quest quality tier** (`VrQuality`, `Tier.Quest`; default on Android, `-hmvr-tier quest` to try it on a PC): MSAA 2x instead of 4x, no HDR
-(the additive overlay glow clips; the overlays stay visible), no shadows, no extra lights, eye texture 0.9, **hair simulation and strands
-off** (the avatars keep their cards-less look), fixed foveation level 1; every value restored when VR mode ends. Further steps, in the order they pay:
-bake the avatar albedo to ASTC 6x6 at import (the viewer loads the PNGs at run time today; load a pre-compressed texture instead),
+**Quest quality tier** (`VrQuality`, `Tier.Quest`; default on Android, `-hmvr-tier quest` to try it on a PC): MSAA 4x (2x on a Quest 2), no HDR
+(the additive overlay glow clips; the overlays stay visible), no shadows, no extra lights, eye texture 1.0 (0.9 on a Quest 2), **hair kept on (section 0)**, fixed foveation level 1; every value restored when VR mode ends. Further steps, in the order they pay:
+the avatar albedo is baked to ASTC 6x6 by the deploy step (`BakedTexture`, done),
 decimate the room mesh to under 50 k triangles (the exporter's `room_mesh.bin` is 100 KB for the heat: already small), cap the physics
 and trace overlays' line counts, turn the translucent avatar's depth prepass into a single opaque pass at opacity 1 for the tier.
 
@@ -189,4 +277,4 @@ shows the `VrMode:` lines.
 - The phones' real position viewpoints use the phone's pose at the moment you choose them, standing at its height (1.2 to 2.0 m).
 - Panels are drawn over the dancers (they sort after the translucent avatars); the film's 3D call-outs use an always-on-top shader and can
   draw over a panel.
-- Passthrough / mixed reality (VIEWER_SPEC 9.1) is not built.
+- Passthrough placement is fixed (section 0); there is no Meta spatial anchor and no scene-model alignment, so a recentre of the headset's tracking space moves the dance with it.

@@ -39,12 +39,14 @@ namespace HmVr
         VrPanel header, footer, loading;
         VrWidget footerNote, loadTitle, loadStatus, loadBar, handedBtn, resumeBtn, libraryBtn, exitBtn, viewBtn, hairBtn;
         string signature;
-        float menuYawDeg, yawVel;
-        bool placed, movingYaw;
+        float menuYawDeg;
+        bool placed, loadPlaced, wasFacing;
         float menuY;
+        Vector3 menuHead, menuShift;
+        public int Recalls { get; private set; }
+        public Vector3 AnchorPosition => cards.Count > 0 ? cards[cards.Count / 2].Panel.transform.position : Vector3.zero;
         float nextRefresh;
         bool pausedByOverlay;
-        readonly LazyFollow loadFollow = new() { Distance = 1.25f, DropM = 0.05f };
         readonly Dictionary<string, (DateTime stamp, Texture2D tex)> thumbs = new();
         public string Message = "";
         /// <summary>a standing remark under the buttons (the session sets it: hand tracking is not available)</summary>
@@ -241,10 +243,17 @@ namespace HmVr
                 return;
             }
 
+            // loading a capture blocks the main thread for seconds on a headset: put the loading panel in front of the user first (a moment), then load
             Message = "";
             IsOpen = false;
-            if (!lib.Play(e)) Message = lib.Error ?? "could not start";
+            pendingPlay = e;
+            pendingUntil = Time.unscaledTime + 0.4f;
+            Debug.Log($"VrMenu: loading '{e.Id}'");
         }
+
+        bool autoPlayDone;
+        LibraryEntry pendingPlay;
+        float pendingUntil;
 
         Texture2D ThumbFor(LibraryEntry e)
         {
@@ -280,7 +289,15 @@ namespace HmVr
             if (lib == null || input == null || input.Source == null) return;
             bool lessonPlaying = lib.State == FilmLibrary.Mode.Playing;
             bool lobby = lib.State == FilmLibrary.Mode.Library || lib.State == FilmLibrary.Mode.Hidden;
-            bool loadingNow = lib.State == FilmLibrary.Mode.Loading;
+            bool loadingNow = lib.State == FilmLibrary.Mode.Loading || pendingPlay != null;
+            if (pendingPlay != null && Time.unscaledTime >= pendingUntil)
+            {
+                LibraryEntry e = pendingPlay;
+                pendingPlay = null;
+                if (!lib.Play(e)) Message = lib.Error ?? "could not start";
+                loadingNow = lib.State == FilmLibrary.Mode.Loading;
+            }
+
             if (lobby && !IsOpen)
             {
                 IsOpen = true;
@@ -297,7 +314,19 @@ namespace HmVr
                 if (IsOpen) RebuildCards(false);
             }
 
-            bool show = IsOpen && cards.Count >= 0;
+            if (!autoPlayDone && lib.State == FilmLibrary.Mode.Library && lib.Films.Count > 0 && Time.unscaledTime > 6f)
+            {
+                autoPlayDone = true;
+                string want = VrArgs.Get("-hmplay");
+                LibraryEntry auto = want == null ? null : lib.Films.FirstOrDefault(f => string.Equals(f.Id, want, StringComparison.OrdinalIgnoreCase));
+                if (auto != null) PlayEntry(auto);
+            }
+
+            // palm raised (non-pointing hand) while the menu is open: recall it in front of the user
+            bool facing = input.OffHand.Tracked && input.OffHand.Palm.Facing;
+            if (facing && !wasFacing && IsOpen) Recall();
+            wasFacing = facing;
+            bool show = IsOpen && cards.Count >= 0 && !(VrSplash.Instance != null && VrSplash.Instance.Blocking);
             float dt = Time.unscaledDeltaTime;
             float target = show ? 1f : 0f;
             header.Alpha = Mathf.MoveTowards(header.Alpha, target, dt * 6f);
@@ -317,62 +346,71 @@ namespace HmVr
             if (lib.State == FilmLibrary.Mode.Library && !string.IsNullOrEmpty(lib.Error)) Message = "";
 
             // loading
-            float la = Mathf.MoveTowards(loading.Alpha, loadingNow ? 1f : 0f, dt * 6f);
-            loading.Alpha = la;
-            if (la > 0.002f) UpdateLoading(lib, input);
+            loading.Alpha = 0f; // the loading screen is the splash (VrSplash) now
+            UpdateSplash(lib, loadingNow);
             // an open menu over a finished lesson keeps the film paused; closing resumes
         }
 
-        void UpdateLoading(FilmLibrary lib, VrInput input)
+        bool startSplashDone;
+
+        void UpdateSplash(FilmLibrary lib, bool loadingNow)
         {
-            FilmDirector d = FilmDirector.Instance;
-            loadTitle.Label.text = lib.Current?.Title ?? "";
-            string status = "loading";
-            if (d != null)
+            VrSplash splash = VrSplash.Instance;
+            if (splash == null) return;
+            if (loadingNow)
             {
-                FilmSoundtrack st = FilmSoundtrack.Current;
-                bool audioReady = st == null || st.IsLoaded || st.Error != null;
-                status = d.IsReady ? (audioReady ? "starting" : "loading the soundtrack") : "loading the capture and its phone videos";
+                LibraryEntry e = lib.Current ?? pendingPlay;
+                splash.Show(e?.Title ?? "", e?.Subtitle ?? "");
+                HeadMovement hm = HeadMovement.Instance;
+                FilmDirector d = FilmDirector.Instance;
+                float p = hm != null && hm.IsLoadingCapture ? hm.LoadProgress : d != null && d.IsReady ? 0.98f : hm != null ? Mathf.Max(0.02f, hm.LoadProgress) : 0.02f;
+                string stage = pendingPlay != null ? "getting ready" : hm != null && hm.IsLoadingCapture ? hm.LoadStage : d != null && d.IsReady ? "starting" : "loading the soundtrack";
+                splash.SetProgress(p, stage);
+                startSplashDone = true;
+                return;
             }
 
-            loadStatus.Label.text = status;
-            // the bar: a block sliding back and forth
-            RectTransform fill = loading.Content.Find("bar fill") as RectTransform;
-            if (fill != null)
+            if (!startSplashDone)
             {
-                float k = Mathf.SmoothStep(0f, 1f, Mathf.PingPong(Time.unscaledTime * 0.7f, 1f));
-                fill.anchoredPosition = new Vector2(-250f + 70f + k * (500f - 140f), -78f);
+                // the app's own splash: at least two seconds (the menu cards and their posters build behind it), then it gives way to the menu
+                splash.Show("", "", 2.4f);
+                splash.SetProgress(Mathf.Clamp01((Time.unscaledTime - 0.3f) / 2.4f), "starting");
+                if (splash.MinimumElapsed && cards.Count > 0 && Time.unscaledTime > 2.6f)
+                {
+                    startSplashDone = true;
+                    splash.Hide();
+                }
+
+                return;
             }
 
-            InputFrame f = input.Frame;
-            Vector3 p = loadFollow.Step(loading.transform.position, f.HeadPosition, f.HeadRotation, f.HeadYaw, Time.unscaledDeltaTime);
-            loading.FaceFrom(p, f.HeadPosition, 0.3f);
+            splash.Hide();
+        }
+
+        /// <summary>the arc is placed ONCE when the menu opens (in front of the user along the gaze) and stays; Recall() places it again</summary>
+        public void Recall()
+        {
+            placed = false;
         }
 
         void Layout(VrInput input)
         {
-            InputFrame f = input.Frame;
-            float headYaw = Mathf.Atan2(f.HeadForward.x, f.HeadForward.z) * Mathf.Rad2Deg;
-            if (f.HeadForward.x * f.HeadForward.x + f.HeadForward.z * f.HeadForward.z < 0.04f) headYaw = menuYawDeg; // looking straight up or down
+            InputFrame f = VrAnchor.Now(input.Frame);
             if (!placed)
             {
                 placed = true;
+                float headYaw = Mathf.Atan2(f.HeadForward.x, f.HeadForward.z) * Mathf.Rad2Deg;
+                if (f.HeadForward.x * f.HeadForward.x + f.HeadForward.z * f.HeadForward.z < 0.04f) headYaw = menuYawDeg; // looking straight up or down
                 menuYawDeg = headYaw;
                 menuY = f.HeadPosition.y;
-                yawVel = 0f;
-                movingYaw = false;
+                menuHead = f.HeadPosition;
+                Vector3 d0 = ViewpointMath.Dir(menuYawDeg);
+                Vector3 front = new(menuHead.x + d0.x * Radius, menuY - 0.12f, menuHead.z + d0.z * Radius);
+                menuShift = VrAnchor.KeepOutOfDancers(front, menuHead) - front; // never opens among the dancers
+                Recalls++;
             }
 
-            float delta = ViewpointMath.Wrap(headYaw - menuYawDeg);
-            if (!movingYaw && Mathf.Abs(delta) > 62f) movingYaw = true;
-            if (movingYaw)
-            {
-                menuYawDeg = Mathf.SmoothDampAngle(menuYawDeg, headYaw, ref yawVel, 0.45f, 400f, Time.unscaledDeltaTime);
-                menuY = Mathf.Lerp(menuY, f.HeadPosition.y, 1f - Mathf.Exp(-4f * Time.unscaledDeltaTime));
-                if (Mathf.Abs(ViewpointMath.Wrap(headYaw - menuYawDeg)) < 3f) movingYaw = false;
-            }
-
-            Vector3 head = f.HeadPosition;
+            Vector3 head = menuHead;
             float centreY = menuY - 0.12f;
             int n = cards.Count;
             float stepDeg = CardStepMm * 0.001f / Radius * Mathf.Rad2Deg;
@@ -380,14 +418,14 @@ namespace HmVr
             {
                 float a = (i - (n - 1) * 0.5f) * stepDeg;
                 Vector3 dir = ViewpointMath.Dir(menuYawDeg + a);
-                Vector3 pos = new(head.x + dir.x * Radius, centreY, head.z + dir.z * Radius);
+                Vector3 pos = new Vector3(head.x + dir.x * Radius, centreY, head.z + dir.z * Radius) + menuShift;
                 cards[i].Panel.FaceFrom(pos, new Vector3(head.x, pos.y, head.z), 0f);
             }
 
             Vector3 fwd = ViewpointMath.Dir(menuYawDeg);
-            Vector3 hp = new(head.x + fwd.x * Radius, centreY + CardH * 0.0005f + 0.09f, head.z + fwd.z * Radius);
+            Vector3 hp = new Vector3(head.x + fwd.x * Radius, centreY + CardH * 0.0005f + 0.09f, head.z + fwd.z * Radius) + menuShift;
             header.FaceFrom(hp, new Vector3(head.x, hp.y, head.z), 0f);
-            Vector3 fp = new(head.x + fwd.x * (Radius - 0.03f), centreY - CardH * 0.0005f - 0.155f, head.z + fwd.z * (Radius - 0.03f));
+            Vector3 fp = new Vector3(head.x + fwd.x * (Radius - 0.03f), centreY - CardH * 0.0005f - 0.155f, head.z + fwd.z * (Radius - 0.03f)) + menuShift;
             footer.FaceFrom(fp, new Vector3(head.x, fp.y, head.z), 0f);
         }
 

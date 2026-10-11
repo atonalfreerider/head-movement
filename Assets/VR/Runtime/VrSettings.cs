@@ -88,6 +88,8 @@ namespace HmVr
                 Debug.LogWarning("VrSettings: quest_settings.json unreadable, using defaults: " + e.Message);
             }
 
+            string hair = VrArgs.Get("-hmhair");
+            if (hair != null) s.Hair = ParseLevel(hair, s.Hair);
             Current = s;
             return s;
         }
@@ -127,6 +129,24 @@ namespace HmVr
             {
                 Debug.LogWarning("VrSettings: could not save quest_settings.json: " + e.Message);
             }
+        }
+    }
+
+    /// <summary>
+    /// Command-line switches for tests on a headset without hands (adb shell am start ... -e unity "-hmplay recap -hmseek 120 -hmhair light"):
+    /// -hmplay &lt;film id&gt; starts a lesson by itself, -hmseek &lt;seconds&gt; jumps there a few seconds after it started, -hmhair full|light|off.
+    /// </summary>
+    public static class VrArgs
+    {
+        public static string Get(string name)
+        {
+            string[] args = Environment.GetCommandLineArgs();
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase)) return args[i + 1];
+            }
+
+            return null;
         }
     }
 

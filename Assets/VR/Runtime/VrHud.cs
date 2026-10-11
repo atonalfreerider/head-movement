@@ -25,7 +25,6 @@ namespace HmVr
         public int Eighth { get; private set; } = -1;
         public int Measure { get; private set; } = -1;
         public float Score { get; private set; } = float.NaN;
-        [System.NonSerialized] public LazyFollow Follow = new() { Distance = 1.45f, DropM = 0.42f, ReengageDeg = 40f };
 
         VrPanel panel;
         readonly Image[] dots = new Image[8];
@@ -82,17 +81,23 @@ namespace HmVr
             if (BeatShown) UpdateBeat(hm.Beats, audio);
             if (RhythmShown) UpdateRhythm(rh, audio);
             Fade(1f);
-            float dt = Time.unscaledDeltaTime;
-            InputFrame f = input.Frame;
-            Quaternion toRight = f.HeadYaw * Quaternion.Euler(0f, 24f, 0f); // a little to the right of the gaze
-            Vector3 p = Follow.Step(panel.transform.position, f.HeadPosition, f.HeadRotation, toRight, dt);
-            panel.FaceFrom(p, f.HeadPosition, 0.5f);
+            if (!placed)
+            {
+                placed = true; // anchored, like every panel: placed once a little to the right of the gaze, then it stays (a recall places it again)
+                InputFrame f = VrAnchor.Now(input.Frame);
+                panel.FaceFrom(VrAnchor.Spot(f, 1.45f, 0.42f, 24f), f.HeadPosition, 0.5f);
+            }
         }
+
+        bool placed;
+
+        public void Recall() => placed = false;
 
         void Fade(float target)
         {
             Alpha = Mathf.MoveTowards(Alpha, target, Time.unscaledDeltaTime * 5f);
             panel.Alpha = Alpha;
+            if (Alpha <= 0.002f && target <= 0f) placed = false;
         }
 
         bool laidBeat, laidRhythm, laidOnce;

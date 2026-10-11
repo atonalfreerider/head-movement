@@ -26,7 +26,7 @@ namespace HmVr
             public VrHand Hand;
             public readonly PokeDetector Poke = new();
             public VrWidget Hover, PokeHover, Pressed, Drag;
-            public VrPanel HitPanel;
+            public VrPanel HitPanel, PokePanel;
             public Vector3 HitPoint;
             public bool NearPanel, RayHit, PokePressed;
             public float HitDistance;
@@ -156,6 +156,7 @@ namespace HmVr
                 }
             }
 
+            p.PokePanel = pokePanel;
             bool near = pokePanel != null && pokeDepth <= PokeNear && !p.PressedFar;
             p.NearPanel = near;
             VrWidget pokeWidget = null;
@@ -328,6 +329,7 @@ namespace HmVr
             ClickLog.Add($"{Time.unscaledTime:0.00} {w.Id} {side} {(poke ? "poke" : "ray")}");
             if (ClickLog.Count > 12) ClickLog.RemoveAt(0);
             Pointers[(int)side].LastClick = w.Id;
+            Debug.Log($"VrPointers: click '{w.Id}' ({(poke ? "poke" : "ray + pinch")}, {side} hand)");
             VrAudio.Click(w.WorldCentre);
             w.Click();
             Clicked?.Invoke(w, side, poke);

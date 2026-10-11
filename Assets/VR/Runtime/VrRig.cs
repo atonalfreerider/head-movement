@@ -24,6 +24,8 @@ namespace HmVr
         public SimInputSource Sim { get; private set; }
         public float FloorY => transform.position.y;
         public int Teleports { get; private set; }
+        /// <summary>raised after the user was put somewhere else (teleport, viewpoint, entering a lesson)</summary>
+        public event Action Moved;
         public int Turns { get; private set; }
         public float TotalTurnDeg { get; private set; }
         public bool Blinking { get; private set; }
@@ -292,6 +294,7 @@ namespace HmVr
                 ViewpointMath.RigPose(headWorld, yawDeg, floorY, Cam.transform.localPosition, HeadLocalYawDeg, out Vector3 pos, out float rigYaw);
                 transform.SetPositionAndRotation(pos, Quaternion.Euler(0f, rigYaw, 0f));
                 Teleports++;
+                Moved?.Invoke(); // the user was put somewhere else (a teleport, a viewpoint): the anchored panels come along, once
             }
 
             if (blinkFirst && !(Sim != null && Sim.Instant)) Blink(Apply);

@@ -28,16 +28,18 @@ namespace HmVr
         public VrPlacement Placement { get; private set; }
         public VrPerf Perf { get; private set; }
         public VrHud Hud { get; private set; }
+        public VrSplash Splash { get; private set; }
         public bool Xr { get; private set; }
         public int LessonStarts, LessonEnds;
         public string LastLesson;
 
         bool wasLesson;
         float handsMissing;
+        bool handsWereRunning;
         readonly HashSet<Canvas> suppressed = new();
         float nextCanvasScan;
         GameObject root;
-        bool tornDown;
+        bool tornDown, skeletonsWere;
 
         public void Init(VrMode mode, VrRig rig, bool xr)
         {
@@ -59,6 +61,8 @@ namespace HmVr
             Placement = root.AddComponent<VrPlacement>();
             Perf = root.AddComponent<VrPerf>();
             Hud = root.AddComponent<VrHud>();
+            Splash = root.AddComponent<VrSplash>();
+            HeadMovement.AsyncLoad = true; // a lesson loads in slices behind the splash (the main thread keeps rendering)
 
             Menu.OnExitVr = () =>
             {
@@ -72,15 +76,39 @@ namespace HmVr
             Wrist.Available = () => VrFilm.InLesson;
             Wrist.OnPressed = () =>
             {
-                if (Menu.IsOpen) Menu.Close();
-                else Menu.Open(true);
+                if (!Menu.IsOpen)
+                {
+                    Menu.Open(true);
+                    return;
+                }
+
+                // an open menu that the user is looking at is closed by the button; one they turned away from is recalled in front of them
+                Vector3 to = Menu.AnchorPosition - Rig.Head.position;
+                if (Vector3.Angle(Rig.Head.forward, to) > 50f) Menu.Recall();
+                else Menu.Close();
             };
 
             VrQuality.Apply(xr);
+            // skeleton lines and joints at FULL opacity whatever the avatar opacity is (a lesson can set 0.25 for the bodies): the translucent
+            // body skips the pixels of its own skeleton (stencil), so the skeleton shows in its own colour, untinted by the body
+            skeletonsWere = SmplxAvatar.SkeletonsOverBodies;
+            SmplxAvatar.SkeletonsOverBodies = true;
             ApplyCullMask(false);
             Placement.Init(rig, Display);
+            rig.Moved += RecallPanels;
             Display.Changed += OnDisplayChanged;
             Display.Init(rig, xr); // passthrough or immersive: the remembered choice, else passthrough on a headset
+        }
+
+        /// <summary>the user was put somewhere else: every open anchored panel is placed once more in front of them (no drift otherwise)</summary>
+        void RecallPanels()
+        {
+            if (tornDown) return;
+            if (Menu != null && Menu.IsOpen) Menu.Recall();
+            if (HandPanel != null && HandPanel.Anchored) HandPanel.Recall();
+            Captions?.Recall();
+            Hud?.Recall();
+            Splash?.Recall();
         }
 
         bool Passthrough => Display != null && Display.PassthroughActive;
@@ -116,6 +144,11 @@ namespace HmVr
             if (Input.Source is XrInputSource xs)
             {
                 handsMissing = xs.HandsRunning ? 0f : handsMissing + Time.unscaledDeltaTime;
+                if (xs.HandsRunning != handsWereRunning)
+                {
+                    handsWereRunning = xs.HandsRunning;
+                    Debug.Log("VrSession: hand tracking " + (handsWereRunning ? "running" : "stopped") + " (" + xs.HandsStatus + ")");
+                }
                 Menu.Notice = handsMissing > 4f ? "No hand tracking from the headset: turn on Hand tracking (Settings > Movement tracking) and put the controllers down" : "";
             }
 
@@ -177,6 +210,8 @@ namespace HmVr
         public void Teardown()
         {
             tornDown = true;
+            SmplxAvatar.SkeletonsOverBodies = skeletonsWere;
+            HeadMovement.AsyncLoad = false;
             suppressed.Clear();
             if (Rig != null) Destroy(Rig.gameObject);
             Destroy(gameObject);
@@ -201,7 +236,7 @@ namespace HmVr
                 ["pointers"] = Pointers?.State(), ["menu"] = Menu?.State(), ["handPanel"] = HandPanel?.State(),
                 ["captions"] = new Dictionary<string, object>
                     { ["enabled"] = Captions != null && Captions.Enabled, ["hasTranscript"] = Captions != null && Captions.HasTranscript, ["alpha"] = Captions?.Alpha ?? 0f, ["text"] = Captions?.CurrentText, ["word"] = Captions?.CurrentWord },
-                ["display"] = Display?.State_(), ["placement"] = Placement?.State(), ["perf"] = Perf?.Summary(), ["hud"] = Hud?.State(),
+                ["display"] = Display?.State_(), ["placement"] = Placement?.State(), ["perf"] = Perf?.Summary(), ["hud"] = Hud?.State(), ["splash"] = Splash?.State(), ["skeletonsOverBodies"] = SmplxAvatar.SkeletonsOverBodies,
                 ["wristButtonAlpha"] = Wrist?.Alpha ?? 0f, ["suppressedCanvases"] = suppressed.Count, ["quality"] = VrQuality.State(), ["hands"] = (Input?.Source as XrInputSource)?.HandsStatus
             };
             if (VrFilm.InLesson)

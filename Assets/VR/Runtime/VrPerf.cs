@@ -30,6 +30,10 @@ namespace HmVr
         public bool Enabled = true;
         public bool Adaptive = true;
         public float LoadSeconds { get; private set; } = -1f;
+        public float LoadMaxFrameMs { get; private set; }
+        public int LoadFrames { get; private set; }
+        public int LoadFramesOver100 { get; private set; }
+        public int LoadFramesOver40 { get; private set; }
         public string LoadedLesson { get; private set; }
 
         readonly List<float> dts = new(512);
@@ -37,6 +41,7 @@ namespace HmVr
         double gpuSum, cpuSum;
         int timingN;
         FrameTiming[] timings = new FrameTiming[1];
+        (float when, float to)? seekAt;
         float lessonSince = -1f, adaptCooldown;
         float loadStart = -1f;
         bool wasLesson;
@@ -70,6 +75,7 @@ namespace HmVr
         {
             float dt = Time.unscaledDeltaTime;
             dts.Add(dt);
+            if (dt > 0.1f) Debug.Log($"HM-STALL frame {dt * 1000f:0} ms (last load mark: '{LoadTrace.Last}', {(VrFilm.InLesson ? "lesson " + VrFilm.Entry?.Id : FilmLibrary.Instance != null ? FilmLibrary.Instance.State.ToString().ToLowerInvariant() : "no library")})");
             try
             {
                 FrameTimingManager.CaptureFrameTimings();
@@ -85,6 +91,16 @@ namespace HmVr
                 // frame timing not available on this device
             }
 
+            FilmLibrary fl = FilmLibrary.Instance;
+            if (fl != null && fl.State == FilmLibrary.Mode.Loading)
+            {
+                // frames while a lesson loads: the loading screen must keep moving (no frame over 100 ms, ideally under 40)
+                LoadFrames++;
+                if (dt * 1000f > LoadMaxFrameMs) LoadMaxFrameMs = dt * 1000f;
+                if (dt > 0.1f) LoadFramesOver100++;
+                if (dt > 0.04f) LoadFramesOver40++;
+            }
+
             TrackLesson();
             Adapt(dt);
             if (Time.unscaledTime - windowStart >= 5f) Flush();
@@ -94,7 +110,12 @@ namespace HmVr
         {
             FilmLibrary lib = FilmLibrary.Instance;
             bool lesson = VrFilm.InLesson;
-            if (lib != null && lib.State == FilmLibrary.Mode.Loading && loadStart < 0f) loadStart = Time.unscaledTime;
+            if (lib != null && lib.State == FilmLibrary.Mode.Loading && loadStart < 0f)
+            {
+                loadStart = Time.unscaledTime;
+                LoadMaxFrameMs = 0f;
+                LoadFrames = LoadFramesOver100 = LoadFramesOver40 = 0;
+            }
             if (lesson && !wasLesson)
             {
                 lessonSince = Time.unscaledTime;
@@ -102,11 +123,20 @@ namespace HmVr
                 if (loadStart >= 0f)
                 {
                     LoadSeconds = Time.unscaledTime - loadStart;
-                    Debug.Log($"HM-PERF lesson-load id={LoadedLesson} seconds={LoadSeconds:0.0}");
+                    Debug.Log($"HM-PERF lesson-load id={LoadedLesson} seconds={LoadSeconds:0.0} frames={LoadFrames} max-frame={LoadMaxFrameMs:0}ms frames>40ms={LoadFramesOver40} frames>100ms={LoadFramesOver100} (longest build step '{LoadTrace.LongestStep}' {LoadTrace.LongestStepMs:0}ms)");
                 }
 
                 adaptWindowStart = Time.unscaledTime;
                 overBudgetFrames = adaptWindowFrames = 0f;
+                string seek = VrArgs.Get("-hmseek");
+                if (seek != null && float.TryParse(seek, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float at)) seekAt = (Time.unscaledTime + 4f, at);
+            }
+
+            if (seekAt.HasValue && Time.unscaledTime >= seekAt.Value.when && lesson)
+            {
+                Debug.Log($"HM-PERF seek to {seekAt.Value.to:0} s (command line)");
+                VrFilm.SeekTo(seekAt.Value.to);
+                seekAt = null;
             }
 
             if (!lesson) lessonSince = -1f;

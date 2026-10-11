@@ -6,6 +6,7 @@ build placed anywhere, or the Quest (Android: StreamingAssets is inside the APK,
     powershell -File Tools/deploy_data.ps1 -Out Builds/data -Push            # ... and push it to a Quest over adb
     powershell -File Tools/deploy_data.ps1 -Out Builds/data -Only demo,recap # some films only
     powershell -File Tools/deploy_data.ps1 -Out Builds/data -PhoneVideo      # include the phones' frame strips and clips (hundreds of MB; VR does not draw them)
+    powershell -File Tools/deploy_data.ps1 -Out Builds/data -Bake -Push   # also bake the headset textures (editor open; see below)
     powershell -File Tools/deploy_data.ps1 -Out Builds/data -Push -Serial <adb serial>   # with several headsets attached, name the one (adb devices)
 
 What it copies, for every film of StreamingAssets/library/library.json that is ready:
@@ -24,6 +25,7 @@ param(
     [string[]]$Only = @(),
     [switch]$PhoneVideo,
     [switch]$Push,
+    [switch]$Bake,
     [string]$Package = "com.headmovement.viewer",
     [string]$Serial = ""
 )
@@ -110,6 +112,14 @@ $lib.films = $films
 $size = (Get-ChildItem $out -Recurse -File | Measure-Object Length -Sum).Sum / 1MB
 Write-Host ("deployed {0} film(s) to {1} ({2:0} MB)" -f $films.Count, $out, $size)
 
+if ($Bake) {
+    # the avatars' albedo (and the room / floor photos) as GPU-compressed mips + the transparency model: the headset loads them without decoding a PNG
+    # (the Unity editor must be open on this project: com.unity.pipeline)
+    Push-Location $project
+    try { & unity command hm_vr_bake_textures --folder ($out.Substring($project.Length).TrimStart("\", "/").Replace("\", "/")) --project-path $project --result-only --no-banner }
+    finally { Pop-Location }
+}
+
 if ($Push) {
     $adb = (Get-ChildItem "C:/Program Files/Unity/Hub/Editor/*/Editor/Data/PlaybackEngines/AndroidPlayer/SDK/platform-tools/adb.exe" | Select-Object -Last 1).FullName
     if (-not $adb) { throw "adb not found in the Unity editor's Android module" }
@@ -126,8 +136,16 @@ if ($Push) {
     & $adb @a shell "df -h /sdcard | tail -n 1"
     $target = "/sdcard/Android/data/$Package/files/hm_data"
     & $adb @a shell "mkdir -p $target"
+    # Android 11+ (scoped storage): adb push cannot create sub-folders under Android/data/<package>, but the shell can
+    $dirs = @(Get-ChildItem $out -Recurse -Directory | ForEach-Object { $_.FullName.Substring($out.Length).TrimStart("\", "/").Replace("\", "/") })
+    foreach ($chunk in ($dirs | ForEach-Object -Begin { $batch = @() } -Process { $batch += "$target/$_"; if ($batch.Count -ge 20) { ,$batch; $batch = @() } } -End { if ($batch.Count) { ,$batch } })) {
+        & $adb @a shell ("mkdir -p " + ($chunk -join " "))
+    }
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     & $adb @a push "$out/." $target
     Write-Host ("pushed {0:0} MB to {1} in {2:0} s" -f $size, $target, $sw.Elapsed.TotalSeconds)
+    # the folders the shell made are private to it (owner shell, mode 770): the app (another uid) gets "access denied" listing them until they are world-readable
+    & $adb @a shell "find $target -type d -exec chmod 755 {} + ; find $target -type f -exec chmod 644 {} +"
+    Write-Host "made the pushed folders readable by the app"
     & $adb @a shell "df -h /sdcard | tail -n 1"
 }

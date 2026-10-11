@@ -146,6 +146,16 @@ namespace HmVr
             }
         }
 
+        /// <summary>draw order of this panel's canvas (29000 over the avatars; lower for a backdrop)</summary>
+        public int SortingOrder
+        {
+            get => canvas != null ? canvas.sortingOrder : 0;
+            set
+            {
+                if (canvas != null) canvas.sortingOrder = value;
+            }
+        }
+
         public bool IsLive => isActiveAndEnabled && Interactive && alpha > 0.35f;
         public bool IsShown => isActiveAndEnabled && alpha > 0.002f;
         public RectPlane Plane => RectPlane.OfCanvas(Content, SizeMm * MetersPerMm);

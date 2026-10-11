@@ -126,7 +126,9 @@ namespace HmVr
     /// (PalmDetector), and fades away when it is not; the other hand pokes it or points at it and pinches. It carries: play / pause,
     /// slow motion (1x, 0.5x, 0.25x, 0.1x), 5 s back / forward, previous / next chapter, a pinch-drag scrubber with the chapter ticks, the
     /// chapter's name and the time, and tabs for the chapter list, the viewpoint presets (with 45 degree turns), captions on / off and
-    /// Back to library. "Pin" leaves the panel hanging in the air where it is (steadier than a hand) until unpinned.
+    /// Back to library. The panel is ANCHORED (VrAnchor): raising the off hand's palm opens it once in front of the user, at chest-to-eye
+    /// height, and it then stays exactly where it is until "Close" (or the lesson ends); raising the palm again recalls it (closes it and opens
+    /// it again in front of the user).
     /// </summary>
     [DefaultExecutionOrder(150)]
     [AddComponentMenu("")]
@@ -134,7 +136,10 @@ namespace HmVr
     {
         public static VrHandPanel Instance { get; private set; }
 
-        public bool Pinned { get; private set; }
+        /// <summary>the panel is open and stays where it was put (anchored)</summary>
+        public bool Anchored => open;
+        public int Recalls { get; private set; }
+        public Vector3 AnchorPosition => anchor != null ? anchor.position : Vector3.zero;
         public bool Shown => alpha > 0.5f;
         public float Alpha => alpha;
         public VrPanel Main => main;
@@ -145,12 +150,11 @@ namespace HmVr
 
         VrPanel main;
         Transform anchor;
-        VrWidget playBtn, pin, scrub, chapterLabel, timeLabel, cc, tabChapters, tabViews, library;
+        VrWidget playBtn, closeBtn, scrub, chapterLabel, timeLabel, cc, tabChapters, tabViews, library;
         VrWidget[] rateBtns = new VrWidget[4];
         Image pauseA, pauseB, playTri;
-        Vector3 vel;
-        float alpha, graceUntil;
-        bool wasShown;
+        float alpha;
+        bool open, needPlace, wasFacing;
         int ticksFor = -1;
         const float PanelW = 480f, PanelH = 350f, Scale = 0.78f, MmToM = 0.001f * Scale;
 
@@ -234,27 +238,14 @@ namespace HmVr
             y = -146f;
             float tw = 82f, tg = 16f, tx = -(tw * 5 + tg * 4) * 0.5f;
             tabChapters = main.AddButton("tab chapters", "Chapters", VrPanel.R(tx + tw * 0.5f, y, tw, 58f), () => ToggleList(true), 17f);
-            tabViews = main.AddButton("tab views", "Views", VrPanel.R(tx + tw * 1.5f + tg, y, tw, 58f), OnViewsTab, 20f);
-            tabViews.LabelFunc = () => PassthroughNow ? "Place" : "Views"; // in passthrough the user walks around the dancers: this tab places the dance in the room instead
+            tabViews = main.AddButton("tab views", "Views", VrPanel.R(tx + tw * 1.5f + tg, y, tw, 58f), () => ToggleList(false), 20f);
+            tabViews.Enabled = () => !PassthroughNow; // in passthrough the user walks around the dancers: no directed viewpoints
             cc = main.AddButton("captions", "CC", VrPanel.R(tx + tw * 2.5f + 2f * tg, y, tw, 58f), CycleCaptions, 24f);
-            pin = main.AddButton("pin", "Pin", VrPanel.R(tx + tw * 3.5f + 3f * tg, y, tw, 58f), () => SetPinned(!Pinned), 21f);
+            closeBtn = main.AddButton("close", "Close", VrPanel.R(tx + tw * 3.5f + 3f * tg, y, tw, 58f), () => open = false, 21f);
             library = main.AddButton("library", "Library", VrPanel.R(tx + tw * 4.5f + 4f * tg, y, tw, 58f), () => OnLibrary(), 18f);
         }
 
         static bool PassthroughNow => VrDisplay.Instance != null && VrDisplay.Instance.PassthroughActive;
-
-        void OnViewsTab()
-        {
-            if (PassthroughNow)
-            {
-                VrPlacement.Instance?.TogglePlaceMode();
-                ShowViews = false;
-            }
-            else
-            {
-                ToggleList(false);
-            }
-        }
 
         /// <summary>CC: captions below the dancers' view line, then above it, then off</summary>
         void CycleCaptions()
@@ -275,17 +266,9 @@ namespace HmVr
                 c.Enabled = false;
                 c.High = false;
             }
-        }
 
-        void SetPinned(bool on)
-        {
-            Pinned = on;
-            pin.Toggled = on;
-            pin.Label.text = on ? "Pinned" : "Pin";
-            if (!on) main.AttachedTo = null;
+            c.Recall(); // anchored: the new height is applied by placing it again
         }
-
-        public void SetPinnedForTest(bool on) => SetPinned(on);
 
         void ToggleList(bool chapters)
         {
@@ -330,37 +313,43 @@ namespace HmVr
         {
             VrInput input = VrInput.Instance;
             bool lesson = VrFilm.InLesson;
-            bool want = false;
-            if (lesson && input != null && input.Source != null && !MenuOpen())
-            {
-                VrHand off = input.OffHand;
-                if (Pinned) want = true;
-                else if (off.Tracked && off.Palm.Facing) want = true;
-                // keep it while a hand is working on it
-                bool busy = false;
-                foreach (VrWidget w in main.Widgets) busy |= w.Pushed || w.Hovered;
-                if (busy) graceUntil = Time.unscaledTime + 0.6f;
-                if (Time.unscaledTime < graceUntil && !Pinned && alpha > 0.5f) want = true;
-            }
-
+            bool canShow = lesson && input != null && input.Source != null && !MenuOpen();
+            bool facing = canShow && input.OffHand.Tracked && input.OffHand.Palm.Facing;
+            if (facing && !wasFacing) Recall(); // palm raised: open in front of the user, or recall an open panel
+            wasFacing = facing;
+            if (!canShow) open = false;
             float dt = Time.unscaledDeltaTime;
-            alpha = Mathf.MoveTowards(alpha, want ? 1f : 0f, dt * (want ? 7f : 4f));
+            alpha = Mathf.MoveTowards(alpha, open ? 1f : 0f, dt * (open ? 7f : 4f));
             main.Alpha = alpha;
+            main.AttachedTo = null; // anchored in the world: either hand may poke it
             bool visible = alpha > 0.002f;
             if (!visible)
             {
-                wasShown = false;
                 SetListsVisible(false, false);
                 return;
             }
 
             if (!lesson) return;
-            Place(input, !wasShown, dt);
-            wasShown = true;
+            if (needPlace) PlaceInFront(input);
+            PlaceListsAndSelection(input);
             UpdateContents();
             bool vc = ShowChapters && alpha > 0.5f, vv = ShowViews && !PassthroughNow && alpha > 0.5f;
             SetListsVisible(vc, vv);
         }
+
+        /// <summary>close and open again in front of the user (palm raised, or called from outside)</summary>
+        public void Recall()
+        {
+            if (open) Recalls++;
+            open = true;
+            needPlace = true;
+            VrCaptions.Instance?.Recall();
+            VrHud.Instance?.Recall();
+            alpha = 0f; // it fades in again at its new place
+            main.Alpha = 0f;
+        }
+
+        public void Close() => open = false;
 
         void SetListsVisible(bool chapters, bool views)
         {
@@ -370,33 +359,22 @@ namespace HmVr
             ViewsList.Panel.Alpha = views ? alpha : 0f;
         }
 
-        void Place(VrInput input, bool snap, float dt)
+        /// <summary>placed ONCE: 0.9 m ahead along the horizontal gaze, 0.2 m below the eyes (chest to eye height), facing the user, kept out of the dancers</summary>
+        void PlaceInFront(VrInput input)
         {
-            if (!Pinned)
-            {
-                VrHand off = input.OffHand;
-                main.AttachedTo = off.Side;
-                if (off.Tracked)
-                {
-                    Vector3 head = input.Frame.HeadPosition;
-                    Vector3 palm = off.State.Palm;
-                    Vector3 toHeadFlat = head - palm;
-                    toHeadFlat.y = 0f;
-                    toHeadFlat = toHeadFlat.sqrMagnitude > 1e-6f ? toHeadFlat.normalized : Vector3.back;
-                    // above the palm, a little toward the user, tilted to face them; the lower edge about 6 cm over the hand
-                    Vector3 target = palm + Vector3.up * (0.045f + PanelH * 0.5f * MmToM) + toHeadFlat * 0.04f;
-                    Vector3 pos = snap ? target : Vector3.SmoothDamp(anchor.position, target, ref vel, 0.07f, 3f, dt);
-                    MovePanels(pos, head);
-                }
-            }
-            else
-            {
-                main.AttachedTo = null;
-            }
+            needPlace = false;
+            InputFrame f = VrAnchor.Now(input.Frame);
+            Vector3 spot = VrAnchor.Spot(f, 0.9f, 0.2f);
+            main.FaceFrom(spot, f.HeadPosition, 0.55f);
+            anchor.SetPositionAndRotation(main.transform.position, main.transform.rotation);
+            main.transform.localPosition = Vector3.zero;
+            main.transform.localRotation = Quaternion.identity;
+        }
 
-            // lists to the side of the main panel (in its own frame)
-            float side = input.Dominant == Hand.Right ? -1f : 1f; // away from the off hand: toward the pointing hand's arm is crowded
-            side = -side;
+        void PlaceListsAndSelection(VrInput input)
+        {
+            // lists to the side of the main panel (in its own frame), fixed with it
+            float side = input.Dominant == Hand.Right ? 1f : -1f;
             float mainHalf = PanelW * 0.5f * MmToM;
             PlaceList(ChaptersList, mainHalf, side);
             PlaceList(ViewsList, mainHalf, side);
@@ -411,14 +389,6 @@ namespace HmVr
             }
 
             if (ShowViews) ViewsList.RefreshSelection();
-        }
-
-        void MovePanels(Vector3 pos, Vector3 head)
-        {
-            main.FaceFrom(pos, head, 0.9f);
-            anchor.SetPositionAndRotation(main.transform.position, main.transform.rotation);
-            main.transform.localPosition = Vector3.zero;
-            main.transform.localRotation = Quaternion.identity;
         }
 
         void PlaceList(VrListPanel list, float mainHalfM, float side)
@@ -461,7 +431,7 @@ namespace HmVr
             pauseB.gameObject.SetActive(playing);
             for (int i = 0; i < rateBtns.Length; i++) rateBtns[i].Toggled = Mathf.Abs(VrFilm.Rate - VrFilm.SlowRates[i]) < 0.001f;
             tabChapters.Toggled = ShowChapters;
-            tabViews.Toggled = PassthroughNow ? VrPlacement.Instance != null && VrPlacement.Instance.PlaceMode : ShowViews;
+            tabViews.Toggled = ShowViews;
             VrCaptions caps = VrCaptions.Instance;
             cc.Toggled = caps != null && caps.Enabled && caps.HasTranscript;
             string ccLabel = caps == null || !caps.Enabled ? "CC off" : caps.High ? "CC up" : "CC";
@@ -498,7 +468,7 @@ namespace HmVr
 
         public Dictionary<string, object> State() => new()
         {
-            ["shown"] = Shown, ["alpha"] = Math.Round(alpha, 3), ["pinned"] = Pinned, ["chapters"] = ShowChapters, ["views"] = ShowViews,
+            ["shown"] = Shown, ["alpha"] = Math.Round(alpha, 3), ["anchored"] = open, ["recalls"] = Recalls, ["chapters"] = ShowChapters, ["views"] = ShowViews,
             ["position"] = main != null ? new[] { main.transform.position.x, main.transform.position.y, main.transform.position.z } : null
         };
     }

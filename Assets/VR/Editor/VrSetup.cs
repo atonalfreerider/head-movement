@@ -60,7 +60,7 @@ namespace HmVr.Editor
                     general = perTarget.SettingsForBuildTarget(group);
                 }
 
-                XRManagerSettings manager = general.AssignedSettings;
+                XRManagerSettings manager = general.Manager;
                 if (manager == null)
                 {
                     log.AppendLine($"{group}: no manager settings");
@@ -116,6 +116,7 @@ namespace HmVr.Editor
             }
 
             ApplyAndroidPlayer(log);
+            VrBranding.Apply(log);
             AssetDatabase.SaveAssets();
             return log.ToString();
         }
@@ -168,7 +169,7 @@ namespace HmVr.Editor
             foreach (BuildTargetGroup group in new[] { BuildTargetGroup.Standalone, BuildTargetGroup.Android })
             {
                 XRGeneralSettings g = Store()?.SettingsForBuildTarget(group);
-                sb.AppendLine($"[{group}] initializeOnStart={g?.InitManagerOnStart} loaders=" + string.Join(",", g?.AssignedSettings?.activeLoaders?.Select(l => l.name) ?? new string[0]));
+                sb.AppendLine($"[{group}] initializeOnStart={g?.InitManagerOnStart} loaders=" + string.Join(",", g?.Manager?.activeLoaders?.Select(l => l.name) ?? new string[0]));
                 OpenXRSettings oxr = OpenXRSettings.GetSettingsForBuildTargetGroup(group);
                 if (oxr == null) continue;
                 sb.AppendLine($"  render mode {oxr.renderMode}, depth submission {oxr.depthSubmissionMode}");

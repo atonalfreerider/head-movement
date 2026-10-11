@@ -53,7 +53,36 @@ namespace HmVr
     {
         public static VrCaptions Instance { get; private set; }
 
-        public bool Enabled = true;
+        /// <summary>captions are OFF by default in VR (the choice is remembered: PlayerPrefs hm_vr_captions)</summary>
+        public bool Enabled
+        {
+            get => enabled_;
+            set
+            {
+                if (enabled_ == value) return;
+                enabled_ = value;
+                try
+                {
+                    PlayerPrefs.SetInt("hm_vr_captions", value ? 1 : 0);
+                    PlayerPrefs.Save();
+                }
+                catch (System.Exception)
+                {
+                    // no preferences store
+                }
+            }
+        }
+
+        bool enabled_;
+        bool placed;
+        public int Recalls { get; private set; }
+
+        /// <summary>place the panel again, in front of the user (anchored: it stays where it is put)</summary>
+        public void Recall()
+        {
+            placed = false;
+            Recalls++;
+        }
         public string CurrentText { get; private set; } = "";
         public string CurrentWord { get; private set; }
         public string CurrentSpeaker { get; private set; }
@@ -83,6 +112,14 @@ namespace HmVr
             speakerTag = VrPanel.NewText(panel.Content, "Speaker", "", 30f, Color.white, TextAnchor.MiddleLeft, true);
             VrPanel.Place(speakerTag.rectTransform, new Rect(-WidthMm * 0.5f + 40f, 70f, 500f, 40f));
             panel.Alpha = 0f;
+            try
+            {
+                enabled_ = PlayerPrefs.GetInt("hm_vr_captions", 0) == 1;
+            }
+            catch (System.Exception)
+            {
+                enabled_ = false;
+            }
         }
 
         void OnDestroy()
@@ -101,7 +138,7 @@ namespace HmVr
                 chunks = d != null ? VrFilm.CaptionChunks() : null;
                 shownChunk = -1;
                 shownWord = -2;
-                Follow.Reset();
+                placed = false;
             }
 
             VrInput input = VrInput.Instance;
@@ -140,10 +177,13 @@ namespace HmVr
             panel.Alpha = Alpha;
             if (Alpha > 0.002f)
             {
-                InputFrame f = input.Frame;
-                Follow.DropM = High ? -0.42f : 0.52f;
-                Vector3 p = Follow.Step(panel.transform.position, f.HeadPosition, f.HeadRotation, f.HeadYaw, Time.unscaledDeltaTime);
-                panel.FaceFrom(p, f.HeadPosition, 0.6f);
+                InputFrame f = VrAnchor.Now(input.Frame);
+                if (!placed)
+                {
+                    placed = true; // anchored: placed once (in front of the user, below the dancers' view line, or above with CC up), then it stays
+                    Vector3 spot = VrAnchor.Spot(f, 1.6f, High ? -0.42f : 0.52f);
+                    panel.FaceFrom(spot, f.HeadPosition, 0.6f);
+                }
             }
         }
 

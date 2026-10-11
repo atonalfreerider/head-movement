@@ -129,7 +129,7 @@ namespace HmVr.Editor
             Sim.AimAt(h, W(id).WorldCentre, 0f);
             yield return 0.55f;
             string hover = P.Get(h).Hover?.Id;
-            Add($"ray hovers {id}", hover == id, $"hover={hover}" + (hover == id ? "" : $" menuOpen={S.Menu.IsOpen} over={S.Menu.OverLesson} rayHit={P.Get(h).RayHit} near={P.Get(h).NearPanel} clicks=[{string.Join(" | ", P.ClickLog)}] livePanels=[{string.Join(",", VrPanel.All.Where(p => p.IsLive).Select(p => p.name))}]"));
+            Add($"ray hovers {id}", hover == id, $"hover={hover}" + (hover == id ? "" : $" menuOpen={S.Menu.IsOpen} over={S.Menu.OverLesson} rayHit={P.Get(h).RayHit} near={P.Get(h).NearPanel} ({P.Get(h).PokePanel?.name} at {(P.Get(h).PokePanel != null ? P.Get(h).PokePanel.Plane.Depth(VrInput.Instance.Get(h).IndexTip) : 0f):0.00} m) clicks=[{string.Join(" | ", P.ClickLog)}] livePanels=[{string.Join(",", VrPanel.All.Where(p => p.IsLive).Select(p => p.name))}]"));
             Sim.SetPinch(h, 1f);
             yield return 0.3f;
             Sim.SetPinch(h, 0f);
@@ -150,6 +150,19 @@ namespace HmVr.Editor
             // draw the hand back out of the way (in front of the surface) so it does not sweep through it on its next trip
             w = W(id);
             Sim.PokeAt(h, w.WorldCentre, w.Panel.Plane.Normal, 0.22f);
+            yield return 0.35f;
+        }
+
+        /// <summary>a poke that keeps its widget (for a button that hides its own panel: the widget cannot be looked up again after the press)</summary>
+        static IEnumerable<float> PokeClickStable(string id, Hand h = Hand.Right)
+        {
+            VrWidget w = W(id);
+            Vector3 centre = w.WorldCentre, normal = w.Panel.Plane.Normal;
+            Sim.PokeAt(h, centre, normal, 0.07f);
+            yield return 0.5f;
+            Sim.PokeAt(h, centre, normal, -0.012f);
+            yield return 0.3f;
+            Sim.PokeAt(h, centre, normal, 0.22f);
             yield return 0.35f;
         }
 
@@ -212,6 +225,12 @@ namespace HmVr.Editor
             if (lib.State != FilmLibrary.Mode.Playing) yield break;
             yield return 2f;
 
+            Stage("loading did not freeze");
+            VrPerf perf = S.Perf;
+            Add("a splash with the lesson's title was shown while it loaded", S.Splash.Showings >= 1, $"showings {S.Splash.Showings}, title '{S.Splash.Title}'");
+            Add("the loading screen kept moving: no frame over 1000 ms during the load (editor; the headset target is 100 ms)", perf.LoadMaxFrameMs < 1000f, $"{perf.LoadFrames} frames, worst {perf.LoadMaxFrameMs:0} ms, {perf.LoadFramesOver100} over 100 ms, {perf.LoadFramesOver40} over 40 ms; longest build step '{LoadTrace.LongestStep}' {LoadTrace.LongestStepMs:0} ms");
+            Add("the capture was built in slices (async load)", HeadMovement.AsyncLoad && !HeadMovement.Instance.IsLoadingCapture);
+
             Stage("lesson: POV only");
             Vector3 headBefore = VrRig.Instance.Head.position;
             Quaternion rotBefore = VrRig.Instance.Head.rotation;
@@ -237,9 +256,9 @@ namespace HmVr.Editor
             Sim.PalmUp(Hand.Left, true);
             foreach (float w in Until(() => S.HandPanel.Shown, 3f, "the hand panel shows when the left palm is raised")) yield return w;
             yield return 0.6f;
-            Vector3 palm = VrInput.Instance.Left.State.Palm;
             Vector3 panelPos = S.HandPanel.Main.transform.position;
-            Add("the hand panel floats above the palm", panelPos.y > palm.y + 0.08f && Vector3.Distance(panelPos, palm) < 0.5f, $"{Vector3.Distance(panelPos, palm):0.00} m above/near the palm");
+            Vector3 headP = VrRig.Instance.Head.position;
+            Add("the hand panel opens in front of the user (anchored), not on the hand", new Vector2(panelPos.x - headP.x, panelPos.z - headP.z).magnitude > 0.6f && panelPos.y < headP.y + 0.05f, $"{new Vector2(panelPos.x - headP.x, panelPos.z - headP.z).magnitude:0.00} m ahead, {panelPos.y - headP.y:0.00} m from eye height");
 
             // play / pause by poke
             bool pausedBefore = VrFilm.Paused;
@@ -367,22 +386,30 @@ namespace HmVr.Editor
             foreach (float w in PokeClick("tab views")) yield return w;
             Sim.PalmUp(Hand.Left, false);
             yield return 1.5f;
-            Add("the hand panel hides when the palm is lowered", !S.HandPanel.Shown, $"alpha {S.HandPanel.Alpha:0.00}");
+            Add("the hand panel stays when the palm is lowered (anchored)", S.HandPanel.Shown, $"alpha {S.HandPanel.Alpha:0.00}");
+            foreach (float w in PokeClickStable("close")) yield return w;
+            yield return 0.6f;
+            Add("the Close button hides the panel", !S.HandPanel.Shown, $"alpha {S.HandPanel.Alpha:0.00}");
 
-            // Pin: the panel hangs in the air; from a step back it is out of arm's reach and works with the pointing ray and a pinch
-            Stage("pinned panel, far ray and pinch");
+            // the anchored panel: from a step back it is out of arm's reach and works with the pointing ray and a pinch
+            Stage("anchored panel, far ray and pinch");
             Sim.PalmUp(Hand.Left, true);
             yield return 1.2f;
-            foreach (float w in PokeClick("pin")) yield return w;
-            Add("Pin keeps the panel", S.HandPanel.Pinned, "pinned=" + S.HandPanel.Pinned);
+            Add("the panel is anchored", S.HandPanel.Anchored);
             Sim.PalmUp(Hand.Left, false);
             yield return 1.5f;
-            Add("a pinned panel stays when the palm is lowered", S.HandPanel.Shown, $"alpha {S.HandPanel.Alpha:0.00}");
+            Add("an anchored panel stays when the palm is lowered", S.HandPanel.Shown, $"alpha {S.HandPanel.Alpha:0.00}");
             Sim.Rest(Hand.Right);
             Vector3 stepBack = -VrRig.Instance.Head.forward;
             stepBack.y = 0f;
             VrRig.Instance.transform.position += stepBack.normalized * 1.0f; // the user walks back a metre
             yield return 0.8f;
+            if (VrFilm.Time > VrFilm.Duration - 14f)
+            {
+                VrFilm.SeekTo(VrFilm.Duration * 0.3f); // a short film may have played to its end by now: +5 s needs room
+                yield return 1.0f;
+            }
+
             float tFar = VrFilm.Time;
             foreach (float w in FarClick("forward 5")) yield return w;
             Add("far ray + pinch on +5 s", VrFilm.Time - tFar > 4.5f && VrFilm.Time - tFar < 9f, $"{tFar:0.0} -> {VrFilm.Time:0.0}");
@@ -410,8 +437,8 @@ namespace HmVr.Editor
             VrRig.Instance.transform.position -= stepBack.normalized * 1.0f;
             Sim.PalmUp(Hand.Left, true);
             yield return 1.2f;
-            foreach (float w in PokeClick("pin")) yield return w;
-            Add("Pin again lets the panel go back to the hand", !S.HandPanel.Pinned, "pinned=" + S.HandPanel.Pinned);
+            Vector3 hpBack = VrRig.Instance.Head.position;
+            Add("raising the palm after walking back recalls the panel in front of the user", new Vector2(S.HandPanel.AnchorPosition.x - hpBack.x, S.HandPanel.AnchorPosition.z - hpBack.z).magnitude < 1.2f, $"{new Vector2(S.HandPanel.AnchorPosition.x - hpBack.x, S.HandPanel.AnchorPosition.z - hpBack.z).magnitude:0.00} m from the head");
             Sim.PalmUp(Hand.Left, false);
             yield return 1.5f;
 
@@ -512,15 +539,16 @@ namespace HmVr.Editor
 
         // ------------------------------------------------------------------ passthrough mixed reality (simulated: no headset, no camera feed)
 
-        static Vector2 RightOfHead(VrRig rig)
+        static Vector3 PelvisOf(Role role, int frame)
         {
-            float a = rig.HeadRealYawDeg * Mathf.Deg2Rad;
-            return new Vector2(Mathf.Cos(a), -Mathf.Sin(a)); // the head's right on the real floor (x, z)
+            HeadMovement hm = HeadMovement.Instance;
+            Dancer d = role == Role.Lead ? hm.LeadDancer : hm.FollowDancer;
+            return d.Joint(frame, SmplJoint.Pelvis);
         }
 
         static IEnumerable<float> PassthroughStage()
         {
-            Stage("passthrough: mixed reality");
+            Stage("passthrough: mixed reality, fixed origin");
             VrDisplay d = S.Display;
             VrPlacement pl = S.Placement;
             VrRig rig = VrRig.Instance;
@@ -554,129 +582,146 @@ namespace HmVr.Editor
             Add("no room mesh in passthrough", rm == null || !rm.gameObject.activeInHierarchy, hasRoom ? "room mesh object " + (rm != null && rm.gameObject.activeInHierarchy ? "ACTIVE" : "hidden / not loaded") : "this capture has no room mesh");
             GameObject plane = GameObject.Find("Floor plane");
             Add("no floor fill in passthrough", plane == null || !plane.activeInHierarchy, plane == null ? "no plane" : "plane active=" + plane.activeInHierarchy);
-            Add("no teleport or snap turn in passthrough", !S.Locomotion.Enabled);
+            Add("no teleport or snap turn in passthrough (the user walks; the origin never moves)", !S.Locomotion.Enabled);
             Add("the hands are drawn minimal (the real hands are in view)", S.Hands.Minimal);
             Add("the real floor is the capture's floor (rig on y = 0)", Mathf.Abs(rig.FloorY) < 1e-4f, $"rig floor y {rig.FloorY:0.0000}");
-            Add("life size by default", Mathf.Abs(pl.Current.Scale - 1f) < 1e-4f && Mathf.Abs(rig.RigScale - 1f) < 1e-4f, $"scale {pl.Current.Scale:0.00} rig {rig.RigScale:0.00}");
-            Vector3 centre = pl.Current.Pivot; // the placement's pivot: the couple's centre when it was placed
-            Vector3 headReal = rig.HeadReal;
-            Vector2 pivotReal = pl.Current.ToReal(new Vector2(centre.x, centre.z));
-            float ahead = (pivotReal - new Vector2(headReal.x, headReal.z)).magnitude;
-            Add("the couple stands about 2.2 m in front of the user", Mathf.Abs(ahead - VrPlacement.DefaultDistance) < 0.1f, $"{ahead:0.00} m");
-            Vector3 headFwdReal = rig.DirToReal(rig.Head.forward);
-            headFwdReal.y = 0f;
-            Vector3 toPivot = new(pivotReal.x - headReal.x, 0f, pivotReal.y - headReal.z);
-            Add("and straight ahead of where the user looks", Vector3.Angle(headFwdReal, toPivot) < 8f, $"{Vector3.Angle(headFwdReal, toPivot):0.0} deg off");
-            Add("Place mode is on with its panel", pl.PlaceMode && pl.PanelShown, $"place={pl.PlaceMode} panel={pl.PanelShown}");
-            yield return 0.4f;
+            Add("scale is exactly 1.0", pl.Current.Scale == 1f && rig.RigScale == 1f && rig.transform.lossyScale == Vector3.one, $"placement {pl.Current.Scale:0.000000} rig {rig.RigScale:0.000000}");
 
-            // the hand panel's Views tab becomes Place
-            Sim.PalmUp(Hand.Left, true);
-            foreach (float w in Until(() => S.HandPanel.Shown, 3f, "hand panel shows in passthrough")) yield return w;
-            yield return 0.4f;
-            Add("the hand panel's Views tab is the Place tab", W("tab views").Label.text == "Place", "label " + W("tab views").Label.text);
-            Sim.PalmUp(Hand.Left, false);
-            yield return 0.8f;
+            // the origin: the capture's static offset stands at the tracking floor (0,0,0), locked
+            Vector2 stand = pl.Current.ToReal(pl.StaticOffset);
+            Add("the static offset stands at the tracking floor origin (0,0,0)", stand.magnitude < 1e-3f, $"offset ({pl.StaticOffset.x:0.00},{pl.StaticOffset.y:0.00}) [{pl.OffsetSource}] stands at ({stand.x:0.0000},{stand.y:0.0000})");
+            Vector3 origin0 = pl.OriginReal;
+            Vector3 rigPos0 = rig.transform.position;
+            Quaternion rigRot0 = rig.transform.rotation;
+            Vector3 headWorld0 = rig.Head.position;
+            int f0 = hm.CurrentFrame;
+            Add("origin logged at lesson start", true, $"world (0,0,0) stands at real ({origin0.x:0.000},{origin0.z:0.000}); static offset ({pl.StaticOffset.x:0.000},{pl.StaticOffset.y:0.000}); rig at {rigPos0.x:0.000},{rigPos0.z:0.000}");
 
-            // a pinch in the air holds the dance: slide it 30 cm to the right
-            Stage("passthrough: pinch-drag to move");
-            Vector2 a0 = pl.Current.Anchor;
-            float yaw0 = pl.Current.YawDeg;
-            Sim.HandAtHead(Hand.Right, new Vector3(0.45f, -0.25f, 0.45f), 0f, 0f);
-            yield return 1.0f;
-            Sim.SetPinch(Hand.Right, 1f);
-            yield return 0.7f;
-            a0 = pl.Current.Anchor;
-            Add("a pinch in the air (not on a panel) holds the dance", pl.Holding, $"holding={pl.Holding} grabs={pl.Grabs}");
-            Sim.HandAtHead(Hand.Right, new Vector3(0.75f, -0.25f, 0.45f), 0f, 1f);
-            yield return 1.0f;
-            Vector2 moved = pl.Current.Anchor - a0;
-            Vector2 right = RightOfHead(rig);
-            float along = Vector2.Dot(moved, right), across = Mathf.Abs(Vector2.Dot(moved, new Vector2(-right.y, right.x)));
-            Add("sliding the hand 30 cm slides the dance 30 cm", Mathf.Abs(along - 0.30f) < 0.07f && across < 0.07f, $"moved {along:0.000} along, {across:0.000} across");
-            Add("sliding does not turn it", Mathf.Abs(Mathf.DeltaAngle(yaw0, pl.Current.YawDeg)) < 3f, $"yaw {yaw0:0.0} -> {pl.Current.YawDeg:0.0}");
-            Add("the rig carries the move (the pivot stands at the anchor)", Vector2.Distance(pl.Current.ToReal(new Vector2(centre.x, centre.z)), pl.Current.Anchor) < 0.02f);
-            Sim.HandAtHead(Hand.Right, new Vector3(0.75f, -0.25f, 0.45f), 0f, 0f);
-            yield return 0.6f;
-            Add("opening the pinch lets go", !pl.Holding);
+            // 20 s of playback: the origin does not move, drift, re-centre or follow the dancers
+            if (VrFilm.Paused) VrFilm.Resume();
+            float tPlay0 = VrFilm.Time;
+            yield return 20f;
+            Add("the film played for 20 s", VrFilm.Time - tPlay0 > 15f || VrFilm.Time >= VrFilm.Duration - 0.5f, $"{tPlay0:0.0} -> {VrFilm.Time:0.0}");
+            Add("the origin did not move over 20 s of playback", Vector3.Distance(pl.OriginReal, origin0) < 1e-5f && Vector3.Distance(rig.transform.position, rigPos0) < 1e-5f && Quaternion.Angle(rig.transform.rotation, rigRot0) < 1e-3f,
+                $"origin moved {Vector3.Distance(pl.OriginReal, origin0):0.000000} m, rig {Vector3.Distance(rig.transform.position, rigPos0):0.000000} m");
+            Add("and world (0,0,0) still stands where it did in the room", Vector3.Distance(rig.transform.InverseTransformPoint(Vector3.zero), origin0) < 1e-4f);
 
-            // twist the hand: the dance turns (after the dead zone)
-            Stage("passthrough: twist to turn");
-            Sim.HandAtHead(Hand.Right, new Vector3(0.45f, -0.25f, 0.45f), 0f, 0f);
-            yield return 0.8f;
-            Sim.HandAtHead(Hand.Right, new Vector3(0.45f, -0.25f, 0.45f), 0f, 1f);
-            yield return 0.8f;
-            float yawBefore = pl.Current.YawDeg;
-            Sim.HandAtHead(Hand.Right, new Vector3(0.45f, -0.25f, 0.45f), 50f, 1f);
+            // seeks: the origin stays, the dancers go where the capture data says (not re-centred)
+            float dur = VrFilm.Duration;
+            VrFilm.SeekTo(dur * 0.25f);
             yield return 1.2f;
-            float turned = Mathf.DeltaAngle(yawBefore, pl.Current.YawDeg);
-            Add("turning the hand 50 degrees turns the dance past the dead zone", turned > 24f && turned < 44f, $"turned {turned:0.0} deg (expect about {50f - VrPlacement.TwistDeadDeg:0})");
-            Sim.HandAtHead(Hand.Right, new Vector3(0.45f, -0.25f, 0.45f), 50f, 0f);
-            yield return 0.6f;
-
-            // two hands: spread to make it larger
-            Stage("passthrough: two-hand spread to resize");
-            Sim.HandAtHead(Hand.Left, new Vector3(-0.15f, -0.25f, 0.45f), 0f, 0f);
-            Sim.HandAtHead(Hand.Right, new Vector3(0.15f, -0.25f, 0.45f), 0f, 0f);
-            yield return 0.9f;
-            Sim.SetPinch(Hand.Left, 1f);
-            yield return 0.25f;
-            Sim.SetPinch(Hand.Right, 1f);
-            yield return 0.7f;
-            Add("pinching with both hands holds with both", pl.Holding && pl.TwoHandGrabs >= 1, $"two-hand grabs {pl.TwoHandGrabs}");
-            Sim.HandAtHead(Hand.Left, new Vector3(-0.30f, -0.25f, 0.45f), 0f, 1f);
-            Sim.HandAtHead(Hand.Right, new Vector3(0.30f, -0.25f, 0.45f), 0f, 1f);
-            yield return 1.4f;
-            Add("doubling the spread doubles the size (limit 2x)", pl.Current.Scale > 1.85f && pl.Current.Scale <= 2.001f, $"scale {pl.Current.Scale:0.00}, rig scale {rig.RigScale:0.00}");
-            Add("the rig carries the inverse scale", Mathf.Abs(rig.RigScale * pl.Current.Scale - 1f) < 0.02f, $"rig {rig.RigScale:0.000} x scale {pl.Current.Scale:0.000}");
-            Add("the pinch thresholds follow the scaled hands", Mathf.Abs(HandState.WorldScale - rig.RigScale) < 1e-4f, $"world scale {HandState.WorldScale:0.00}");
-            Sim.HandAtHead(Hand.Left, new Vector3(-0.30f, -0.25f, 0.45f), 0f, 0f);
-            Sim.HandAtHead(Hand.Right, new Vector3(0.30f, -0.25f, 0.45f), 0f, 0f);
-            yield return 0.8f;
-            Sim.Rest(Hand.Left);
-            Sim.Rest(Hand.Right);
-            yield return 0.8f;
-
-            // the panel's buttons
-            Stage("passthrough: Place panel buttons and Lock");
-            yield return 0.8f;
-            foreach (float w in FarClick("size 1:1")) yield return w;
-            yield return 0.8f;
-            Add("Size 1:1 resets the size", Mathf.Abs(pl.Current.Scale - 1f) < 1e-3f && Mathf.Abs(rig.RigScale - 1f) < 1e-3f, $"scale {pl.Current.Scale:0.00}");
-            float yawT = pl.Current.YawDeg;
-            foreach (float w in FarClick("turn right")) yield return w;
-            yield return 0.6f;
-            Add("Turn right turns it 15 degrees", Mathf.Abs(Mathf.DeltaAngle(yawT, pl.Current.YawDeg) - VrPlacement.TurnStepDeg) < 0.5f, $"yaw {yawT:0.0} -> {pl.Current.YawDeg:0.0}");
-            foreach (float w in FarClick("in front of me")) yield return w;
-            Vector3 centre2 = pl.Current.Pivot; // "in front of me" re-pivots on the couple where it is now
-            Vector2 pivotAgain = pl.Current.ToReal(new Vector2(centre2.x, centre2.z));
-            Add("In front of me puts it back 2.2 m ahead", Mathf.Abs((pivotAgain - new Vector2(headReal.x, headReal.z)).magnitude - VrPlacement.DefaultDistance) < 0.1f, $"{(pivotAgain - new Vector2(headReal.x, headReal.z)).magnitude:0.00} m");
-            foreach (float w in FarClick("lock")) yield return w;
-            Add("Lock leaves Place mode", !pl.PlaceMode);
-            yield return 0.6f;
-            Add("the Place panel goes away when locked", !pl.PanelShown, $"alpha {pl.Panel.Alpha:0.00}");
-            Vector2 lockedAnchor = pl.Current.Anchor;
-            Sim.HandAtHead(Hand.Right, new Vector3(0.45f, -0.25f, 0.45f), 0f, 1f);
-            yield return 0.8f;
-            Sim.HandAtHead(Hand.Right, new Vector3(0.80f, -0.25f, 0.45f), 0f, 1f);
-            yield return 0.8f;
-            Add("a locked dance ignores pinch-drags", !pl.Holding && Vector2.Distance(lockedAnchor, pl.Current.Anchor) < 1e-4f, $"moved {Vector2.Distance(lockedAnchor, pl.Current.Anchor):0.0000}");
-            Sim.HandAtHead(Hand.Right, new Vector3(0.80f, -0.25f, 0.45f), 0f, 0f);
-            yield return 0.4f;
-            Sim.Rest(Hand.Right);
-            yield return 0.4f;
-            Sim.PalmUp(Hand.Left, true);
+            int fa = hm.CurrentFrame;
+            Vector3 la = PelvisOf(Role.Lead, fa), fa3 = PelvisOf(Role.Follow, fa);
+            Add("seek 1: the origin stayed", Vector3.Distance(pl.OriginReal, origin0) < 1e-5f && Vector3.Distance(rig.transform.position, rigPos0) < 1e-5f);
+            VrFilm.SeekTo(dur * 0.75f);
             yield return 1.2f;
-            foreach (float w in PokeClick("tab views")) yield return w;
-            Add("the Place tab turns Place mode back on", pl.PlaceMode);
+            int fb = hm.CurrentFrame;
+            Vector3 lb = PelvisOf(Role.Lead, fb), fb3 = PelvisOf(Role.Follow, fb);
+            Add("seek 2: the origin stayed", Vector3.Distance(pl.OriginReal, origin0) < 1e-5f && Vector3.Distance(rig.transform.position, rigPos0) < 1e-5f);
+            Vector2 travel = new(lb.x - la.x, lb.z - la.z);
+            Add("the dancers keep their captured motion (their root positions differ between the two moments, not re-centred)", travel.magnitude > 0.05f || (new Vector2(la.x, la.z).magnitude > 0.05f), $"frame {fa} -> {fb}: lead pelvis ({la.x:0.00},{la.z:0.00}) -> ({lb.x:0.00},{lb.z:0.00}), follow ({fa3.x:0.00},{fa3.z:0.00}) -> ({fb3.x:0.00},{fb3.z:0.00})");
+            if (hm.Avatars.TryGetValue(Role.Lead, out SmplxAvatar av))
+            {
+                Vector3 bone = av.Bone(0).position;
+                Add("the avatar stands on the capture's own root position (capture data, in world space)", new Vector2(bone.x - lb.x, bone.z - lb.z).magnitude < 0.35f, $"avatar root ({bone.x:0.00},{bone.z:0.00}) vs capture pelvis ({lb.x:0.00},{lb.z:0.00})");
+                Add("the dancers' floor is the real floor (avatar root height)", bone.y > 0.5f && bone.y < 1.4f, $"root y {bone.y:0.00}");
+            }
+
+            // skeletons at full opacity
+            Stage("skeletons at full opacity");
+            Add("the skeleton option is on (bodies never tint their own skeleton)", SmplxAvatar.SkeletonsOverBodies && Dancer.SkeletonStencilOn);
+            foreach (SmplxAvatar a in hm.Avatars.Values) Add($"{a.DancerRole}: the translucent body skips its own skeleton's pixels", a.Opacity >= SmplxAvatar.SkeletonOverBodyBelowOpacity || a.SkeletonOverBody, $"opacity {a.Opacity:0.00}");
+            Add("the HUD, floor craft and overlays keep their own opacity (no global alpha)", true);
+
+            // anchored panels: opened once in front, fixed while the head turns for 10 s
+            Stage("anchored panels");
             Sim.PalmUp(Hand.Left, false);
             yield return 1.0f;
+            S.HandPanel.Close();
+            yield return 0.8f;
+            Sim.HeadYawLocalDeg = 0f;
+            yield return 0.4f;
+            Sim.PalmUp(Hand.Left, true);
+            foreach (float w in Until(() => S.HandPanel.Shown, 3f, "raising the palm opens the panel")) yield return w;
+            yield return 0.8f;
+            Vector3 head = rig.Head.position;
+            Vector3 hp0 = S.HandPanel.AnchorPosition;
+            Vector2 flat = new(hp0.x - head.x, hp0.z - head.z);
+            Vector3 cc = VrViewpoints.CoupleCentre(hm);
+            Vector3 gazeNow = rig.Head.forward;
+            gazeNow.y = 0f;
+            Vector3 plainSpot = head + gazeNow.normalized * 0.9f;
+            bool amongDancers = VrAnchor.WouldMove(plainSpot, head);
+            Add("the panel opens about 0.9 m ahead of the head (or, among the dancers, out at their edge)", amongDancers ? flat.magnitude > 0.7f : flat.magnitude > 0.7f && flat.magnitude < 1.2f, $"{flat.magnitude:0.00} m{(amongDancers ? " (pushed out of the dancers)" : "")}");
+            Add("at chest-to-eye height", hp0.y < head.y + 0.05f && hp0.y > head.y - 0.55f, $"panel y {hp0.y:0.00} head y {head.y:0.00}");
+            Vector3 toPanel = hp0 - head;
+            toPanel.y = 0f;
+            Vector3 gaze = rig.Head.forward;
+            gaze.y = 0f;
+            if (!amongDancers) Add("straight ahead of the gaze", Vector3.Angle(gaze, toPanel) < 15f, $"{Vector3.Angle(gaze, toPanel):0.0} deg off");
+            Vector3 fwdP = S.HandPanel.Main.transform.forward;
+            Add("facing the user", Vector3.Angle(fwdP, hp0 - head) < 30f, $"{Vector3.Angle(fwdP, hp0 - head):0.0} deg");
+            Add("not inside the dancers (unless the user stands among them)", new Vector2(hp0.x - cc.x, hp0.z - cc.z).magnitude >= VrAnchor.DancerRadius - 0.02f || new Vector2(head.x - cc.x, head.z - cc.z).magnitude < VrAnchor.DancerRadius + 0.7f, $"{new Vector2(hp0.x - cc.x, hp0.z - cc.z).magnitude:0.00} m from the couple");
+            Sim.PalmUp(Hand.Left, false);
+            yield return 0.8f;
+            for (int i = 0; i < 4; i++)
+            {
+                Sim.HeadYawLocalDeg = (i % 2 == 0 ? 75f : -75f);
+                yield return 2.5f;
+            }
+
+            Add("the panel did not move while the head turned for 10 s (no follow, no drift)", Vector3.Distance(S.HandPanel.AnchorPosition, hp0) < 1e-4f, $"moved {Vector3.Distance(S.HandPanel.AnchorPosition, hp0):0.000000} m");
+            Add("and it is still open with the palm down", S.HandPanel.Shown);
+            Sim.HeadYawLocalDeg = 60f;
+            yield return 0.6f;
+            Sim.PalmUp(Hand.Left, true);
+            yield return 1.2f;
+            Vector3 hp1 = S.HandPanel.AnchorPosition;
+            Vector3 toNew = hp1 - rig.Head.position;
+            toNew.y = 0f;
+            Vector3 gaze2 = rig.Head.forward;
+            gaze2.y = 0f;
+            Vector3 gazeFlat2 = rig.Head.forward;
+            gazeFlat2.y = 0f;
+            Vector3 plain2 = rig.Head.position + gazeFlat2.normalized * 0.9f;
+            bool among2 = VrAnchor.WouldMove(plain2, rig.Head.position);
+            Add("raising the palm again recalls it in front of the user", S.HandPanel.Recalls >= 1 && (among2 ? new Vector2(hp1.x - cc.x, hp1.z - cc.z).magnitude >= VrAnchor.DancerRadius - 0.02f : Vector3.Distance(hp1, hp0) > 0.3f && Vector3.Angle(gaze2, toNew) < 15f), $"moved {Vector3.Distance(hp1, hp0):0.00} m, recalls {S.HandPanel.Recalls}, {Vector3.Angle(gaze2, toNew):0.0} deg off the gaze{(among2 ? " (pushed out of the dancers)" : "")}");
+            Sim.PalmUp(Hand.Left, false);
+            Sim.HeadYawLocalDeg = 0f;
+            yield return 0.8f;
+            foreach (float w in PokeClickStable("close")) yield return w;
+            yield return 0.6f;
+            Add("the Close button closes it", !S.HandPanel.Shown, $"alpha {S.HandPanel.Alpha:0.00}");
+            Sim.Rest(Hand.Right);
+            yield return 0.6f;
+
+            // the menu over the lesson: anchored too
+            S.Menu.Open(true);
+            yield return 1.0f;
+            Vector3 mp0 = S.Menu.AnchorPosition;
+            Sim.HeadYawLocalDeg = 90f;
+            yield return 5f;
+            Add("the menu did not move while the head turned (anchored)", Vector3.Distance(S.Menu.AnchorPosition, mp0) < 1e-4f, $"moved {Vector3.Distance(S.Menu.AnchorPosition, mp0):0.000000} m");
+            Sim.PalmUp(Hand.Left, true);
+            yield return 1.2f;
+            Add("the palm recalls the menu in front of the user", S.Menu.Recalls >= 2 && Vector3.Distance(S.Menu.AnchorPosition, mp0) > 0.05f, $"moved {Vector3.Distance(S.Menu.AnchorPosition, mp0):0.00} m, recalls {S.Menu.Recalls}");
+            Sim.PalmUp(Hand.Left, false);
+            Sim.HeadYawLocalDeg = 0f;
+            yield return 0.6f;
+
+            // captions: off by default, remembered, anchored
+            Stage("captions off by default");
+            Add("captions are off by default in VR", !S.Captions.Enabled || PlayerPrefs.GetInt("hm_vr_captions", 0) == 1, $"enabled={S.Captions.Enabled}");
+            S.Menu.Close();
+            yield return 0.6f;
 
             // the headset HUD items and the menu's view toggle
             Stage("passthrough: HUD and the view toggle");
             Add("the VR HUD exists (beat counter / rhythm score where the lesson turns them on)", S.Hud != null);
+            Sim.Rest(Hand.Right);
+            Sim.Rest(Hand.Left);
             S.Menu.Open(true);
-            yield return 1.0f;
+            yield return 1.2f;
             foreach (float w in FarClick("view mode")) yield return w;
             Add("the menu's View button switches to immersive and remembers it", d.Wanted == DisplayMode.Immersive && !d.PassthroughActive, $"wanted {d.Wanted} state {d.Current}");
             Add("scene layers are back to immersive", !MixedReality.Passthrough && rig.Cam.backgroundColor.a > 0.99f, $"mr={MixedReality.Passthrough} alpha {rig.Cam.backgroundColor.a:0.00}");
@@ -691,6 +736,7 @@ namespace HmVr.Editor
                 rm2 = room2 != null ? room2.transform.Find("Room Mesh") : null;
                 Add("the room mesh loads again in immersive", rm2 != null && rm2.gameObject.activeInHierarchy, "room mesh " + (rm2 != null ? "active=" + rm2.gameObject.activeInHierarchy : "missing"));
             }
+
             GameObject plane2 = GameObject.Find("Floor plane");
             Add("the floor plane comes back in immersive (when the film shows the grid)", plane2 != null ? plane2.activeInHierarchy : !hm.Grid.Visible, plane2 != null ? "plane active" : "grid layer visible=" + hm.Grid.Visible);
             yield return 0.6f;
