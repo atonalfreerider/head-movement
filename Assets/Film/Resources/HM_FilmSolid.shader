@@ -17,7 +17,7 @@ Shader "HeadMovement/FilmSolid"
         {
             Name "FilmSolid"
             Tags { "LightMode" = "UniversalForward" }
-            Blend SrcAlpha OneMinusSrcAlpha
+            Blend SrcAlpha OneMinusSrcAlpha, One OneMinusSrcAlpha
             ZWrite Off
             ZTest [_ZTest]
             Cull Off

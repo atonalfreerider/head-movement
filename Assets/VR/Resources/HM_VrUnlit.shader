@@ -15,7 +15,7 @@ Shader "HeadMovement/VrUnlit"
         {
             Name "VrUnlit"
             Tags { "LightMode" = "UniversalForward" }
-            Blend SrcAlpha OneMinusSrcAlpha
+            Blend SrcAlpha OneMinusSrcAlpha, One OneMinusSrcAlpha
             ZWrite Off
             ZTest [_ZTest]
             Cull Off

@@ -253,6 +253,9 @@ public class RhythmScoreHud : MonoBehaviour
 
     public bool Loaded => data != null;
     public RhythmData Data => data;
+    /// <summary>the layer's switch (also when nothing is drawn because the head is the camera: the VR HUD reads it)</summary>
+    public bool WantedVisible => visible;
+    public CaptureTimeline Timeline => timeline;
     public bool Visible { get; private set; }
     public float Shown { get; private set; } = float.NaN;
     public float CardAlpha { get; private set; }

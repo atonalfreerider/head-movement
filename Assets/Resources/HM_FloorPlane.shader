@@ -15,7 +15,7 @@ Shader "HeadMovement/FloorPlane"
         {
             Name "FloorPlane"
             Tags { "LightMode" = "UniversalForward" }
-            Blend SrcAlpha OneMinusSrcAlpha
+            Blend SrcAlpha OneMinusSrcAlpha, One OneMinusSrcAlpha
             ZWrite Off
             ZTest LEqual
             Cull Off

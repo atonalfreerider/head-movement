@@ -88,8 +88,11 @@ public class FloorGrid : MonoBehaviour
         built = true;
 
         // the lattice rectangle: the world dance area plus its margin (and the minimum extent), seen in the lattice frame (u, v)
-        float wx0 = Mathf.Min(danceArea.xMin - Margin, -MinHalfExtent), wx1 = Mathf.Max(danceArea.xMax + Margin, MinHalfExtent);
-        float wz0 = Mathf.Min(danceArea.yMin - Margin, -MinHalfExtent), wz1 = Mathf.Max(danceArea.yMax + Margin, MinHalfExtent);
+        // passthrough (the real floor is the background): only the dance area and a half metre around it, fainter, and no plane
+        bool mr = MixedReality.Passthrough;
+        float margin = mr ? 0.5f : Margin, minHalf = mr ? 1.5f : MinHalfExtent;
+        float wx0 = Mathf.Min(danceArea.xMin - margin, -minHalf), wx1 = Mathf.Max(danceArea.xMax + margin, minHalf);
+        float wz0 = Mathf.Min(danceArea.yMin - margin, -minHalf), wz1 = Mathf.Max(danceArea.yMax + margin, minHalf);
         float u0 = float.MaxValue, u1 = float.MinValue, v0 = float.MaxValue, v1 = float.MinValue;
         foreach (Vector2 corner in new[] { new Vector2(wx0, wz0), new Vector2(wx0, wz1), new Vector2(wx1, wz0), new Vector2(wx1, wz1) })
         {
@@ -120,7 +123,8 @@ public class FloorGrid : MonoBehaviour
         crosses.Viewer = null;
         crosses.Begin();
         CrossCount = 0;
-        Color c = new(Teal.r * Brightness, Teal.g * Brightness, Teal.b * Brightness, 1f);
+        float brightness = mr ? Brightness * 0.8f : Brightness;
+        Color c = new(Teal.r * brightness, Teal.g * brightness, Teal.b * brightness, 1f);
         Vector2 au = AxisU, av = AxisV;
         Vector3 armU = new Vector3(au.x, 0f, au.y) * CrossArm, armV = new Vector3(av.x, 0f, av.y) * CrossArm;
         for (float u = u0; u <= u1 + 1e-3f; u += 1f)
@@ -175,7 +179,14 @@ public class FloorGrid : MonoBehaviour
     {
         visible = on;
         if (crosses != null) crosses.SetVisible(on);
-        if (plane != null) plane.SetActive(on);
+        if (plane != null) plane.SetActive(on && !MixedReality.Passthrough); // never a dark fill over the real floor
+    }
+
+    /// <summary>the display mode changed (passthrough / immersive): rebuild the marks for it and show or hide the plane</summary>
+    public void ApplyMixedReality()
+    {
+        if (built) Build(lastArea);
+        else SetVisible(visible);
     }
 
     void OnDestroy()

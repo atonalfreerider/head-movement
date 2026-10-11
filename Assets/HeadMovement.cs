@@ -115,8 +115,22 @@ public class HeadMovement : MonoBehaviour
         FindRig();
     }
 
+    void OnMixedRealityChanged()
+    {
+        // passthrough hides the room mesh and the floor fill; immersive / desktop bring back whatever the layers say
+        if (roomMesh != null)
+        {
+            if (!MixedReality.Passthrough && showRoom && !roomMesh.HasContent && manifest != null) LoadRoom();
+            else if (MixedReality.Passthrough) roomMesh.Clear();
+            roomMesh.SetVisible(showRoom && !MixedReality.Passthrough);
+        }
+
+        if (floorGrid != null) floorGrid.ApplyMixedReality();
+    }
+
     void OnEnable()
     {
+        MixedReality.Changed += OnMixedRealityChanged;
         Instance = this;
         // a script reload in Play mode keeps the serialisable flags (audioLoaded) but drops the capture (timeline,
         // poses): fall back to "nothing loaded" so the HUD and the CLI ask for hm_load instead of throwing every frame
@@ -125,6 +139,11 @@ public class HeadMovement : MonoBehaviour
             audioLoaded = false;
             playing = false;
         }
+    }
+
+    void OnDisable()
+    {
+        MixedReality.Changed -= OnMixedRealityChanged;
     }
 
     float nextRigSearch;
@@ -596,7 +615,7 @@ public class HeadMovement : MonoBehaviour
     /// <summary>the room mesh loads on demand (the layer starts off; its textures are large)</summary>
     void LoadRoom()
     {
-        if (!showRoom)
+        if (!showRoom || MixedReality.Passthrough) // in passthrough the real room is the background: no room mesh (not even loaded)
         {
             roomMesh.Clear();
             return;
@@ -904,7 +923,7 @@ public class HeadMovement : MonoBehaviour
             case "room":
                 showRoom = visible;
                 if (visible && !roomMesh.HasContent && manifest != null) LoadRoom();
-                roomMesh.SetVisible(visible);
+                roomMesh.SetVisible(visible && !MixedReality.Passthrough);
                 break;
             case "cameras": virtualCameraRig.SetVisible(showCameras = visible); break;
             case "hud": showHud = visible; break;
