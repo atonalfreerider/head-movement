@@ -51,7 +51,10 @@ if (Test-Path $hairGroomPath) {
     Assert ($h.legacyHairObjects -eq 0) "old LineRenderer HairSimulation disabled on this v3 capture"
     Assert ($h.defaultLineRenderers -eq 0) "no LineRenderer left at its default bar from the origin ($($h.defaultLineRenderers))"
     Assert ($h.rootMismatchMm -lt 5) ("roots on the exported skin's scalp (groom vs skin {0:0.000} mm)" -f $h.rootMismatchMm)
-    if ($groomH.cards.cap.hairline_el_deg_vs_abs_az) {
+    if ($groomH.style.type -eq "ponytail") {
+        # ponytail style (HairPonytail.cs): the cards start at the tie, so no front card roots are dropped to the hairline; the tie + barrette are drawn
+        Assert ($h.ponytail -and [double]$h.ponytail.tailLengthMeanM -gt 0.2 -and [double]$h.ponytail.tieS -gt 0.05 -and [double]$h.ponytail.tieS -lt 0.6) ("ponytail: tie at {0:0} deg elevation, tail {1:0.00} m, tie at {2:P0} of the strand length, hair tie + barrette drawn {3}" -f $h.ponytail.tieElDeg, $h.ponytail.tailLengthMeanM, $h.ponytail.tieS, $h.ponytail.propDrawn)
+    } elseif ($groomH.cards.cap.hairline_el_deg_vs_abs_az) {
         Assert ($h.cardsRootDropped -gt 0 -and $h.glowAnchored -eq $h.glowRibbons) ("cap down to the painted hairline ({0}), {1} front card roots dropped toward it, {2} of {3} tip glows on atlas strands" -f `
             (($groomH.cards.cap.hairline_el_deg_vs_abs_az | Select-Object -First 3 | ForEach-Object { "|az| $($_[0]): $($_[1]) deg" }) -join ", "), $h.cardsRootDropped, $h.glowAnchored, $h.glowRibbons)
     }
