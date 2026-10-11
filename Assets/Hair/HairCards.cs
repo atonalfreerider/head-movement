@@ -42,6 +42,15 @@ public sealed class HairCardLayout
         public bool EdgeFade, MidOdd;
     }
 
+    /// <summary>ponytail style (HairPonytail.cs): per guide the card start (just above the tie: the scalp cap covers the
+    /// scalp), the tie's guide parameter (cards turn around the tail axis from there) and the tube angle; Blend scales the
+    /// neighbour blend (a blend pulls the cards toward the bundle axis)</summary>
+    public sealed class PonytailCards
+    {
+        public float[] S0, TieS, Phi;
+        public float Blend = 1f;
+    }
+
     public Card[] Cards;
     public GlowDesc[] Glows;
     /// <summary>glows drawn at LOD 1 / 2 (one per outer card)</summary>
@@ -135,7 +144,8 @@ public sealed class HairCardLayout
     /// behind the hairline, the hair in front of it is pulled back (style part_start_back_m)</param>
     public static HairCardLayout Build(Layer[] layers, Vector3[] roots, Vector3[] rest, int points, float[] az, float[] el, int[] side,
         float[] length, float partX, float scale, int seed, int glowsPerOuterCard = 1, int outerStride = 1,
-        Func<int, Vector2> glowAnchor = null, float glowSpacing = 0f, float glowMinAbsAz = 0f, float partMinZ = float.NegativeInfinity)
+        Func<int, Vector2> glowAnchor = null, float glowSpacing = 0f, float glowMinAbsAz = 0f, float partMinZ = float.NegativeInfinity,
+        PonytailCards ponytail = null)
     {
         System.Random rng = new(seed);
         List<Card> cards = new();
@@ -192,14 +202,17 @@ public sealed class HairCardLayout
                 foreach (int g in Farthest(cand, roots, region.Count, rng))
                 {
                     (int a, int b) = Neighbours(g, roots, rest, points, side, scale);
-                    float wa = a >= 0 ? (float)rng.NextDouble() * 0.4f : 0f;
-                    float wb = b >= 0 ? (float)rng.NextDouble() * (0.45f - wa * 0.5f) : 0f;
+                    float blend = ponytail?.Blend ?? 1f;
+                    float wa = a >= 0 ? (float)rng.NextDouble() * 0.4f * blend : 0f;
+                    float wb = b >= 0 ? (float)rng.NextDouble() * (0.45f - wa * 0.5f) * blend : 0f;
                     float w0 = 1f - wa - wb;
                     float len = w0 * length[g] + (a >= 0 ? wa * length[a] : 0f) + (b >= 0 ? wb * length[b] : 0f);
                     float sEnd;
                     if (l.Id == LayerPart) sEnd = Mathf.Min(1f, Mathf.Lerp(l.LenLo, l.LenHi, (float)rng.NextDouble()) * scale / Mathf.Max(len, 1e-3f));
                     else if (isShort) sEnd = Mathf.Min(1f, Mathf.Lerp(l.ShortLo, l.ShortHi, (float)rng.NextDouble()) * scale / Mathf.Max(len, 1e-3f));
                     else sEnd = Mathf.Lerp(l.LfLo, l.LfHi, (float)rng.NextDouble());
+                    bool tail = ponytail != null && l.Id != LayerPart && !isShort;
+                    float s0 = tail ? ponytail.S0[g] : 0f;
                     float wobble = l.Id == LayerFlyaway && !isShort ? Mathf.Lerp(l.WobbleLo, l.WobbleHi, (float)rng.NextDouble()) * scale * (rng.NextDouble() < 0.5 ? -1f : 1f) : 0f;
                     cards.Add(new Card
                     {
@@ -207,10 +220,11 @@ public sealed class HairCardLayout
                         {
                             guide = new int3(g, Mathf.Max(a, 0), Mathf.Max(b, 0)), weight = new float3(w0, wa, wb),
                             widthRoot = l.WidthRoot * scale, widthTip = l.WidthTip * scale, offset = l.Offset * scale,
-                            bulge = l.Bulge, sStart = 0f, sEnd = sEnd, wobble = wobble, wobblePhase = (float)(rng.NextDouble() * Math.PI * 2)
+                            bulge = l.Bulge, sStart = s0, sEnd = sEnd, wobble = wobble, wobblePhase = (float)(rng.NextDouble() * Math.PI * 2),
+                            tubeS = tail ? ponytail.TieS[g] : -1f, tubePhi = tail ? ponytail.Phi[g] : 0f
                         },
                         Layer = l.Id, Tile = rng.Next(l.TileLo, l.TileHi + 1), Random = (float)rng.NextDouble(), Ao = l.Ao,
-                        Length = len * sEnd, EdgeFade = l.EdgeFade, MidOdd = l.Id == LayerMid && (midIndex++ & 1) == 1
+                        Length = len * (sEnd - s0), EdgeFade = l.EdgeFade, MidOdd = l.Id == LayerMid && (midIndex++ & 1) == 1
                     });
                 }
             }

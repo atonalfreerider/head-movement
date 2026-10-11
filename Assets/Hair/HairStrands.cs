@@ -339,6 +339,8 @@ public partial class HairStrands : MonoBehaviour
             frontRightDrape = style.Value<string>("front_right") ?? frontRightDrape;
         }
 
+        ReadPonytail(g["style"] as JObject); // style.type "ponytail": a different rest shape / cards / dynamics (HairPonytail.cs)
+
         hugVolume *= LengthScale;
         faceClear *= LengthScale;
         if (g["cards"]?["lod_head_px"] is JArray lodPx && lodPx.Count == 2) (lod0Px, lod1Px) = (lodPx[0].Value<float>(), lodPx[1].Value<float>());
@@ -437,11 +439,13 @@ public partial class HairStrands : MonoBehaviour
             };
         }
 
+        if (ponytail) BuildPonytailRest(roots, skin.RestJoints); // analytic rest shapes + lengths (before the arrays are sized / settled)
         Allocate();
         for (int k = 0; k < guides; k++) segLen[k] = guideLength[k] / (points - 1);
         Settle(roots, normals, skin.RestJoints);
         BuildCards(roots, skin);
         BuildMaterials();
+        if (ponytail) BuildPonytailProps();
         kinPrev = NewKin();
         kinCur = NewKin();
         BuildMs = buildWatch.Elapsed.TotalMilliseconds;
@@ -519,6 +523,12 @@ public partial class HairStrands : MonoBehaviour
 
         for (int k = 0; k < guides; k++)
         {
+            if (ponytail)
+            {
+                PonytailFillRest(k);
+                continue;
+            }
+
             Vector3 n = normals[k];
             Vector3 comb = Comb(guideAz[k], guideSide[k]);
             comb -= n * Vector3.Dot(comb, n);
@@ -603,7 +613,8 @@ public partial class HairStrands : MonoBehaviour
             for (int i = 0; i < points; i++)
             {
                 float s = (float)i / (points - 1);
-                shapeK[k * points + i] = i < 2 ? 0f : Mathf.Clamp01(settleShapeRoot * Mathf.Exp(-s / Mathf.Max(falloff, 1e-3f)));
+                shapeK[k * points + i] = ponytail ? PonytailSettleK(k, i)
+                    : i < 2 ? 0f : Mathf.Clamp01(settleShapeRoot * Mathf.Exp(-s / Mathf.Max(falloff, 1e-3f)));
             }
         }
 
@@ -692,6 +703,12 @@ public partial class HairStrands : MonoBehaviour
     /// of curling into hooks under the chin.</summary>
     void UpdateShapeStiffness()
     {
+        if (ponytail)
+        {
+            PonytailShape();
+            return;
+        }
+
         int n = Mathf.Max(1, Substeps * Iterations);
         for (int g = 0; g < guides; g++)
         {
@@ -720,7 +737,7 @@ public partial class HairStrands : MonoBehaviour
         }
     }
 
-    float DeviationOf(int k) => dynZone != null && dynZone[k] == 1 ? MaxDeviationFrontRight
+    float DeviationOf(int k) => ponytail ? pt.Deviation : dynZone != null && dynZone[k] == 1 ? MaxDeviationFrontRight
         : dynZone != null && dynZone[k] == 2 ? MaxDeviationSide
         : Mathf.Abs(guideAz[k]) < frontDevAz ? MaxDeviationFront : MaxDeviationBack;
 
@@ -748,7 +765,7 @@ public partial class HairStrands : MonoBehaviour
         bool anchored = tg?["anchor_to_strands"] == null || tg.Value<bool>("anchor_to_strands");
         layout = HairCardLayout.Build(layers, roots, rest, points, guideAz, guideEl, guideSide, guideLength, partX, LengthScale, 7,
             (int)F(tg, "per_outer_card", 1), (int)F(tg, "outer_card_stride", 1), anchored ? HairAtlas.GlowAnchor : null, F(tg, "spacing_m", 0f),
-            F(tg, "min_abs_az_deg", 0f), PartMinZ(roots));
+            F(tg, "min_abs_az_deg", 0f), PartMinZ(roots), ponytail ? PonytailCardData() : null);
         GlowsAnchored = layout.Glows.Count(gd => gd.vEnd > 0f);
         cardCount = layout.Cards.Length;
         BuildCap(skin);
@@ -891,6 +908,7 @@ public partial class HairStrands : MonoBehaviour
     void RootDrops(Vector3[] roots)
     {
         CardsDropped = 0;
+        if (ponytail) return; // the cards start at the tie: no front card roots to drop to the hairline
         JToken cfg = groom["cards"]?["root_drop"];
         if (cfg == null || headVerts.Count == 0 || (cfg["enabled"] != null && !cfg.Value<bool>("enabled"))) return;
         (float[] ga, float[] ge) = ReadTable(groom["model"]?["hairline_el_deg_vs_abs_az"], DefaultHairline);
@@ -1053,7 +1071,10 @@ public partial class HairStrands : MonoBehaviour
             headVerts.Add((local, n, az, el));
             float x = 0.5f + (el - h) / fade;
             if (x < -1f) continue;
-            Vector3 comb = Comb(az, local.x >= partX ? 1 : -1);
+            Vector3 comb;
+            float ptCross = 0f;
+            if (ponytail) PonytailCapComb(d, n, out comb, out ptCross);
+            else comb = Comb(az, local.x >= partX ? 1 : -1);
             comb -= n * Vector3.Dot(comb, n);
             map[v] = P.Count;
             P.Add(local + n * offset);
@@ -1062,7 +1083,7 @@ public partial class HairStrands : MonoBehaviour
             alpha.Add(x);
             // strands across the comb: height where the comb runs sideways / back (front), sideways where it runs down (back)
             float wb = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(frontAz0, frontAz1, Mathf.Abs(az)));
-            float cross = Mathf.Lerp(d.y, d.x, wb); // metres (the shader: strands_per_m / LengthScale)
+            float cross = ponytail ? ptCross : Mathf.Lerp(d.y, d.x, wb); // metres (the shader: strands_per_m / LengthScale)
             float ao = Mathf.Lerp(aoHairline, aoDeep, Mathf.SmoothStep(0f, 1f, Mathf.Clamp01((x - 0.5f) / 3f)));
             uv0.Add(new float4(cross, 0.5f, 0.5f, HairCardLayout.LayerCap));
             uv1.Add(new float4(0.1f, 0f, ao, x));
@@ -1145,6 +1166,7 @@ public partial class HairStrands : MonoBehaviour
 
         if (render?["copper_lift"] is JArray cl)
             colourMaterial.SetVector("_CopperLift", new Vector4(cl[0].Value<float>(), cl[1].Value<float>(), cl[2].Value<float>(), F(render, "copper_lift_m", 0.1f) * LengthScale));
+        colourMaterial.SetVector("_CapTint", render?["cap_tint"] is JArray capTint && capTint.Count >= 3 ? (Vector4)V3(capTint) : Vector4.one);
         colourMaterial.SetFloat("_VarLo", F(render, "var_lo", 0.88f));
         colourMaterial.SetFloat("_VarHi", F(render, "var_hi", 1.12f));
         if (groom["cards"]?["cap"] is JObject capCfg)
@@ -1363,6 +1385,7 @@ public partial class HairStrands : MonoBehaviour
         GlowFade = OpacityOverride >= 0f ? 1f : Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(avatar.Opacity / GlowFadeRamp));
         bool show = Visible && avatar.Visible && Opacity > 0.005f && avatar.CurrentFrame >= 0;
         UpdateRenderers(show);
+        if (ptRenderer != null) PonytailAppearance(avatar);
     }
 
     void UpdateRenderers(bool show)
@@ -1886,7 +1909,7 @@ public partial class HairStrands : MonoBehaviour
             ["tipsBelowHeadFraction"] = guides > 0 ? (float)tipsBelowHead / guides : 0f,
             ["rootPinErrorMm"] = maxRootErr * 1000f, ["rootMismatchMm"] = RootMismatchMm, ["lengthScale"] = LengthScale,
             ["faceIntrusions"] = FaceIntrusions(head, hrot), ["faceIntrusionsCards"] = FaceIntrusionsCards(head, hrot),
-            ["faceGuard"] = FaceGuard, ["armCollisions"] = ArmCollisions, ["rest"] = restStats,
+            ["faceGuard"] = FaceGuard, ["armCollisions"] = ArmCollisions, ["rest"] = restStats, ["ponytail"] = PonytailState(),
             ["substeps"] = Substeps, ["iterations"] = Iterations, ["damping"] = Damping, ["bendCompliance"] = BendCompliance,
             ["shapeRoot"] = ShapeRoot, ["shapeFalloff"] = ShapeFalloff, ["tipGlow"] = TipGlow,
             ["opacity"] = Opacity, ["opacitySource"] = OpacitySource, ["opacityOverride"] = OpacityOverride, ["glowFade"] = GlowFade,
@@ -2094,6 +2117,7 @@ public partial class HairStrands : MonoBehaviour
     {
         if (Active == this) Active = null;
         StopBake();
+        DestroyPonytailProps();
         foreach (IDisposable d in new IDisposable[]
                  {
                      pos, prev, restLocal, segLen, bendRest, shapeK, guideInfo, resets, capsules, cardDescs, cardVertices, chunkMin,

@@ -157,6 +157,15 @@ optional layer exists.
   the stray dark "blade" across the neck / collarbone (strands slipping through the trapezius and folding in
   front of the collarbone): the hair's shoulder-bar collider is sized at the 65th percentile of the mesh distance (was
   the 35th) and the inner card layer is shorter (0.86-0.90 of the strand) and lighter than the outer layers.
+  **Ponytail style** (groom `style.type = "ponytail"`, `style.ponytail`; the loose style above stays the default and is
+  untouched): the hair is gathered at a tie on the crown / back of the head. The scalp part is swept back and smooth toward
+  the tie (the scalp cap's comb and every guide run along great circles over the head collider to it, pinned to the head),
+  the tail leaves the tie along the tie normal, droops under gravity and fans out into a sheet (each strand is offset in the
+  bundle toward the side it entered from; cards start just above the tie, their normals turn around the tail axis so it reads
+  as a tube from every side), soft, simulated by the same guide solver and body colliders, so it swings with the head and
+  the back. A small hair tie (a bumpy ring) and an optional barrette are drawn at the tie as vertex-coloured meshes on the head
+  bone with the avatar's translucent attachment materials. Everything (tie position, tail length, bundle, flare, stiffness,
+  colours, `render.cap_tint` for darker hair at the scalp) comes from the groom file; `HairPonytail.cs`.
 - **Faces**: photoreal faces from the dancers' portrait photos (identity shape + frontal face texture),
   blended with the video-baked texture, plus per-frame **facial expressions** (jaw + expression
   coefficients) estimated from the closest cameras where the face is visible enough; neutral otherwise.

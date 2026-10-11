@@ -43,6 +43,7 @@ Shader "HeadMovement/HairCards"
         _TTBeta ("Transmission longitudinal width", Float) = 0.10
         _TTAlpha ("Transmission longitudinal shift", Float) = 0.035
         _CopperLift ("Tip lift rgb, w = metres from the tip", Vector) = (1.12, 1.18, 1, 0.10)
+        _CapTint ("Scalp cap colour multiplier (ponytail: the hair at the scalp is darker)", Vector) = (1, 1, 1, 1)
         _ClampKnee ("Soft clamp knee (linear)", Float) = 0.45
         _ClampMax ("Soft clamp max (linear)", Float) = 0.6
         _Ambient ("Ambient", Float) = 1
@@ -67,7 +68,7 @@ Shader "HeadMovement/HairCards"
         SAMPLER(sampler_Atlas);
 
         CBUFFER_START(UnityPerMaterial)
-            float4 _BaseColor, _HighlightColor, _Tint1, _TTColor, _CopperLift;
+            float4 _BaseColor, _HighlightColor, _Tint1, _TTColor, _CopperLift, _CapTint;
             float _VarLo, _VarHi, _Shift1, _Exp1, _Spec1, _Shift2, _Exp2, _Spec2, _ShiftJitter, _SparkleLo;
             float _TTStrength, _TTBeta, _TTAlpha, _ClampKnee, _ClampMax, _Ambient, _Exposure, _Opacity, _AlphaToMask, _Fill, _ViewSpec;
             float _CapStrands, _CapJitter, _CapSoft, _RootFade;
@@ -216,6 +217,7 @@ Shader "HeadMovement/HairCards"
                 float3 albedo = _BaseColor.rgb * lerp(_VarLo, _VarHi, id);
                 float fromTip = (1.0 - s) * len;
                 albedo *= lerp(float3(1, 1, 1), _CopperLift.rgb, cap ? 0.0 : 1.0 - smoothstep(0.0, max(_CopperLift.w, 1e-3), fromTip));
+                if (cap) albedo *= _CapTint.rgb;
 
                 // occlusion: layer x atlas depth x root
                 float ao = i.uv1.z * lerp(0.75, 1.0, at.b) * (cap ? 1.0 : lerp(0.8, 1.0, smoothstep(0.0, 0.06, s * len)));

@@ -493,6 +493,9 @@ namespace HeadMovementHair
         /// by guide parameter sStart + dropS (0 = none)</summary>
         public float3 rootDrop;
         public float dropS;
+        /// <summary>ponytail: from guide parameter tubeS (the tie) the card's normal turns around the tail axis by tubePhi
+        /// (its offset direction in the bundle), so the tail reads as a tube from every side; tubeS &lt; 0 = off</summary>
+        public float tubeS, tubePhi;
     }
 
     /// <summary>
@@ -589,6 +592,12 @@ namespace HeadMovementHair
                 float nl = math.length(n);
                 n = nl > 1e-6f ? n / nl : (k > 0 ? nPrev : math.normalize(math.cross(t, new float3(1, 0, 0)) + 1e-4f));
                 nPrev = n;
+                if (c.tubeS >= 0f && s > c.tubeS)
+                {
+                    float ph = c.tubePhi * math.smoothstep(c.tubeS, c.tubeS + 0.10f, s);
+                    n = n * math.cos(ph) + math.cross(t, n) * math.sin(ph);
+                }
+
                 float3 w = math.normalize(math.cross(t, n));
 
                 float width = math.lerp(c.widthRoot, c.widthTip, u);
