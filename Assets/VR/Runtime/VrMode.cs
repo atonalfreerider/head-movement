@@ -114,7 +114,7 @@ namespace HmVr
             return p;
 #else
             string path = Environment.GetEnvironmentVariable("XR_RUNTIME_JSON");
-#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+#if UNITY_STANDALONE_WIN || (UNITY_EDITOR_WIN && !UNITY_ANDROID) // the registry type is not in the Android API profile (editor on the Android target)
             if (string.IsNullOrEmpty(path))
             {
                 try
