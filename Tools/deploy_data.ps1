@@ -135,7 +135,10 @@ if ($Push) {
     Write-Host "headset $Serial"
     & $adb @a shell "df -h /sdcard | tail -n 1"
     $target = "/sdcard/Android/data/$Package/files/hm_data"
-    & $adb @a shell "mkdir -p $target"
+    # a clean push: folders and files left by an earlier push cannot be reused ("fchown failed": chmod 755 took the setgid bit off the folder, so new files get the
+    # wrong group) - the whole folder is made again under the app's own setgid folder, keeping quest_settings.json
+    $keep = "$target/../hm_settings.keep"
+    & $adb @a shell "if [ -f $target/quest_settings.json ]; then cp $target/quest_settings.json $keep; fi; rm -rf $target; mkdir -p $target; if [ -f $keep ]; then mv $keep $target/quest_settings.json; fi"
     # Android 11+ (scoped storage): adb push cannot create sub-folders under Android/data/<package>, but the shell can
     $dirs = @(Get-ChildItem $out -Recurse -Directory | ForEach-Object { $_.FullName.Substring($out.Length).TrimStart("\", "/").Replace("\", "/") })
     foreach ($chunk in ($dirs | ForEach-Object -Begin { $batch = @() } -Process { $batch += "$target/$_"; if ($batch.Count -ge 20) { ,$batch; $batch = @() } } -End { if ($batch.Count) { ,$batch } })) {
