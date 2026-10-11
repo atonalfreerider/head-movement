@@ -68,6 +68,7 @@ The workspace tool is the one writer (`dancecap/dancecap/film_library.py`):
 python -m dancecap.film_library build --demo       # preset "demo" of dancecap/takes/library/films.toml
 python -m dancecap.film_library build --recap      # preset "recap": a card, "Processing" until its film exists
 python -m dancecap.film_library build --carlos-aline   # a heat without narration: writes its auto-direction first (section 6)
+python -m dancecap.film_library build --john-lula       # another heat (one song, one phone); --heat <preset> builds any heat preset
 python -m dancecap.film_library build --id x --title T --subtitle S --capture C --direction <path> [--thumbnail <img>] [--chapters-file <plan>] [--copy-film] [--hold]
 python -m dancecap.film_library chapters --direction <path> [--plan <plan>]     # preview the chapters
 python -m dancecap.film_library list | check
@@ -90,7 +91,8 @@ line "Choose a film" and one card per film:
   soon as it is ready." and a grey, disabled button;
 - landscape windows put the cards side by side, portrait windows stack them; everything scales with the window. With three or more cards in a
   landscape window each card is too narrow for a poster with the text beside it: the poster goes above the title, subtitle, length and Play
-  button (the cards' rectangles and Play buttons never overlap or leave their card: checked by the playtest).
+  button (the cards' rectangles and Play buttons never overlap or leave their card: checked by the playtest). Four cards (the demo, the
+  class recap and two heats) fit both a 1920x1080 and a 1080x1920 window with this layout; no change was needed.
 
 Input: the mouse (move over a card to select it, click the card or its Play button), a touch screen (tap), the keyboard (arrow keys or
 Tab choose, Enter or Space plays). Clicking a film that is not ready only shows why.
@@ -165,7 +167,7 @@ its drift against the film clock). `hm_film_show` without `--audio true` starts 
 | `Assets/FilmLibrary/Editor/FilmLibraryCli.cs` | `hm_library` |
 | `Assets/Film/FilmDirector.cs`, `FilmSoundtrack.cs` | seek, pause, scrub and rate; the soundtrack's hold / seek |
 | `Assets/HeadMovement.cs` | the library folder is not a capture; the HUD list and the digit keys offer the library's captures only |
-| `Tools/playtest_library.ps1` | the acceptance test (VIEWER_SPEC section 14); `-Film <id>` runs it on any film |
+| `Tools/playtest_library.ps1` | the acceptance test (VIEWER_SPEC section 14); `-Film <id>` runs it on any film (the key and button probes sit at 45 % / 30 % of a film shorter than 5.5 minutes) |
 
 ## 6. Films without narration (an auto-directed performance)
 
@@ -176,11 +178,16 @@ treats it like the others. What such a direction looks like:
 - **Film time = dance time**, speed 1.0, no cuts, no captions, no call-outs. The film's mix `audio/<name>_mix.wav` beside the direction is a
   copy of the capture's own soundtrack, so the sound, the beat grid and every analysis layer stay in step however the viewer seeks.
 - **Chapters** are the performance's structure (entrance, each song, the transition between songs, the bow), one per state of the
-  song timeline, each anchored at a segment start (a `chapter` field on the segment).
+  song timeline, each anchored at a segment start (a `chapter` field on the segment). A heat with a single long song can cut that state into
+  equal runs (the preset's `split`, e.g. three eight-bar phrases) so the scrubber still has a few marks; a heat is a short film and the
+  scrubber reads best with five to fourteen chapters, five being enough for a 1.5-minute film.
 - **Camera**: `orbit` shots with `azimuth_deg` + `drift_deg_s` (an absolute eye azimuth that glides: a slow arc on one side of the room, so a
   room that is modelled on one side only is never seen from behind), `fit_span` (both dancers always inside the frame), a close `radius_m`
   (and `radius_vertical_m` for a portrait window, instead of the default 1.25x), alternating with `overhead_floorcraft` shots (`fill`) every
   half minute. No hand close-ups, no phone point-of-view shots.
+- **Looks of a heat**: no room (`room` false), the avatars at 75 percent transparency read literally (`avatar_opacity` 0.25: the one number at the top
+  of the direction to change for the other reading), the skeleton lines on, the live rhythm score on (`rhythm_score`), no overhead view in the
+  closing applause (`no_overhead_after_s`).
 - **Layers** (keys the director reads, all optional, absent = the viewer's own setting): `room` (the capture's room mesh), `skeleton_lines`
   (0 to 1, the skeleton lines' width only; the avatars stay), `beat_counter`, `avatars`, the floor-craft keys of the other films.
 

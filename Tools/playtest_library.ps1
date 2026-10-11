@@ -492,25 +492,27 @@ Assert (Key-Effect "Space" { -not [bool](State).film.paused }) "Space plays agai
 Lib @("--action", "pause") | Out-Null
 # Left / Right step 5 s and REPEAT while held (the editor tool holds a key for as long as its two calls are apart: a second or more),
 # so the keys are checked for whole 5 s steps in the right direction; the exact single step is checked with the +5 s / -5 s buttons
-Lib @("--action", "seek", "--at", "150") | Out-Null
+# the key and button probes sit well inside the film (150 s / 100 s for a long film; a short heat scales them: 45 % / 30 % of its length, whole seconds)
+$kA = [math]::Min(150.0, [math]::Floor($filmDur * 0.45)); $kB = [math]::Min(100.0, [math]::Floor($filmDur * 0.30))
+Lib @("--action", "seek", "--at", "$kA") | Out-Null
 Start-Sleep -Milliseconds 300
-Key-Effect "RightArrow" { [double](State).film.filmTime -gt 150.9 } | Out-Null
+Key-Effect "RightArrow" { [double](State).film.filmTime -gt $kA + 0.9 } | Out-Null
 $t1 = [double](State).film.filmTime
-$steps = ($t1 - 150.0) / 5.0
+$steps = ($t1 - $kA) / 5.0
 Assert ($steps -ge 0.99 -and [math]::Abs($steps - [math]::Round($steps)) -lt 0.05) ("Right arrow: whole 5 s steps forward ({0:0} step(s), film at {1:0.0})" -f [math]::Round($steps), $t1)
-Lib @("--action", "seek", "--at", "150") | Out-Null
+Lib @("--action", "seek", "--at", "$kA") | Out-Null
 Start-Sleep -Milliseconds 300
-Key-Effect "LeftArrow" { [double](State).film.filmTime -lt 149.1 } | Out-Null
+Key-Effect "LeftArrow" { [double](State).film.filmTime -lt $kA - 0.9 } | Out-Null
 $t1 = [double](State).film.filmTime
-$steps = (150.0 - $t1) / 5.0
+$steps = ($kA - $t1) / 5.0
 Assert (($steps -ge 0.99 -and [math]::Abs($steps - [math]::Round($steps)) -lt 0.05) -or $t1 -lt 0.1) ("Left arrow: whole 5 s steps back ({0:0} step(s), film at {1:0.0})" -f [math]::Round($steps), $t1)
-Lib @("--action", "seek", "--at", "100") | Out-Null
+Lib @("--action", "seek", "--at", "$kB") | Out-Null
 Start-Sleep -Milliseconds 300
 $bb = (State).bar.buttons
 $fw = $bb.'Forward 5 s'.rect; $bw = $bb.'Back 5 s'.rect
-Assert (Click-Effect ($fw[0] + $fw[2] / 2) ($fw[1] + $fw[3] / 2) { [math]::Abs([double](State).film.filmTime - 105.0) -lt 0.2 }) "the +5 s button: exactly 105.0"
-Assert (Click-Effect ($bw[0] + $bw[2] / 2) ($bw[1] + $bw[3] / 2) { [math]::Abs([double](State).film.filmTime - 100.0) -lt 0.2 }) "the -5 s button: exactly 100.0"
-Assert (Click-Effect ($bw[0] + $bw[2] / 2) ($bw[1] + $bw[3] / 2) { [math]::Abs([double](State).film.filmTime - 95.0) -lt 0.2 }) "the -5 s button again: exactly 95.0"
+Assert (Click-Effect ($fw[0] + $fw[2] / 2) ($fw[1] + $fw[3] / 2) { [math]::Abs([double](State).film.filmTime - ($kB + 5.0)) -lt 0.2 }) ("the +5 s button: exactly {0}" -f ($kB + 5.0))
+Assert (Click-Effect ($bw[0] + $bw[2] / 2) ($bw[1] + $bw[3] / 2) { [math]::Abs([double](State).film.filmTime - $kB) -lt 0.2 }) ("the -5 s button: exactly {0}" -f $kB)
+Assert (Click-Effect ($bw[0] + $bw[2] / 2) ($bw[1] + $bw[3] / 2) { [math]::Abs([double](State).film.filmTime - ($kB - 5.0)) -lt 0.2 }) ("the -5 s button again: exactly {0}" -f ($kB - 5.0))
 Lib @("--action", "seek", "--at", "60") | Out-Null
 $cIdx = (State).bar.chapter
 Assert (Key-Effect "RightBracket" { (State).bar.chapter -eq $cIdx + 1 }) "] goes to the next chapter (chapter $($cIdx + 2))"
