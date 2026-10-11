@@ -138,12 +138,34 @@ namespace HmVr
     /// </summary>
     public static class VrArgs
     {
+        static string[] fileArgs;
+
+        /// <summary>the switches of a test run: the command line, else hm_data/quest_args.txt (words, one switch and its value after another: adb push a file; the Android intent extra is not always delivered)</summary>
         public static string Get(string name)
         {
             string[] args = Environment.GetCommandLineArgs();
             for (int i = 0; i < args.Length - 1; i++)
             {
                 if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase)) return args[i + 1];
+            }
+
+            if (fileArgs == null)
+            {
+                try
+                {
+                    string path = Path.Combine(HmData.Root, "quest_args.txt");
+                    fileArgs = File.Exists(path) ? File.ReadAllText(path).Split(new[] { ' ', '\n', '\r', '\t' }, StringSplitOptions.RemoveEmptyEntries) : new string[0];
+                    if (fileArgs.Length > 0) Debug.Log("VrArgs: " + string.Join(" ", fileArgs) + " (from quest_args.txt)");
+                }
+                catch (Exception)
+                {
+                    fileArgs = new string[0];
+                }
+            }
+
+            for (int i = 0; i < fileArgs.Length - 1; i++)
+            {
+                if (string.Equals(fileArgs[i], name, StringComparison.OrdinalIgnoreCase)) return fileArgs[i + 1];
             }
 
             return null;

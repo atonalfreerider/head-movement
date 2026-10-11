@@ -213,6 +213,7 @@ namespace HmVr
         {
             if (!Wanted)
             {
+                Debug.Log("VrSplash: shown" + (string.IsNullOrEmpty(title) ? " (app start)" : " for '" + title + "'"));
                 Wanted = true;
                 placed = false;
                 shownAt = Time.unscaledTime;
@@ -232,7 +233,11 @@ namespace HmVr
             stage = stageName ?? "";
         }
 
-        public void Hide() => Wanted = false;
+        public void Hide()
+        {
+            if (Wanted) Debug.Log($"VrSplash: hidden after {Time.unscaledTime - shownAt:0.0} s");
+            Wanted = false;
+        }
 
         public void Recall() => placed = false;
 
@@ -254,6 +259,7 @@ namespace HmVr
                 InputFrame f = VrAnchor.Now(input.Frame);
                 Vector3 spot = VrAnchor.Spot(f, 1.4f, 0.05f);
                 content.FaceFrom(spot, f.HeadPosition, 0.35f);
+                VrAnchor.Log("splash \"" + Title + "\"", spot, f);
                 Vector3 away = (content.transform.position - f.HeadPosition);
                 away.y = 0f;
                 backdrop.FaceFrom(content.transform.position + away.normalized * 0.8f, f.HeadPosition, 0.1f);

@@ -58,6 +58,15 @@ namespace HmVr
         /// <summary>true when KeepOutOfDancers would move this spot</summary>
         public static bool WouldMove(Vector3 p, Vector3 head) => (KeepOutOfDancers(p, head) - p).sqrMagnitude > 1e-6f;
 
+        /// <summary>a log line for every placement (adb logcat -s Unity | grep VrAnchor): what was placed, where, how far from the head and the couple</summary>
+        public static void Log(string what, Vector3 spot, InputFrame f)
+        {
+            HeadMovement hm = HeadMovement.Instance;
+            Vector3 c = hm != null && hm.LeadDancer != null ? VrViewpoints.CoupleCentre(hm) : Vector3.zero;
+            Debug.Log($"VrAnchor: {what} placed at ({spot.x:0.00}, {spot.y:0.00}, {spot.z:0.00}), {new Vector2(spot.x - f.HeadPosition.x, spot.z - f.HeadPosition.z).magnitude:0.00} m ahead of the head " +
+                $"({f.HeadPosition.x:0.00}, {f.HeadPosition.y:0.00}, {f.HeadPosition.z:0.00}), {new Vector2(spot.x - c.x, spot.z - c.z).magnitude:0.00} m from the couple");
+        }
+
         /// <summary>stand the panel at the spot, facing the user's head (upright, with a slight tilt toward the eyes)</summary>
         public static void PlaceFacing(VrPanel panel, Vector3 spot, Vector3 head, float pitchFollow = 0.55f)
         {

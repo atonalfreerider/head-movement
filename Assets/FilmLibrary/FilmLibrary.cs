@@ -195,6 +195,7 @@ public class FilmLibrary : MonoBehaviour
         aspectUsed = Screen.height > Screen.width ? "vertical" : "horizontal";
         HeadMovement.LibraryOwnsScreen = true;
         FilmDirector d = FilmDirector.Prepare(e.DirectionPath, aspectUsed);
+        LoadTrace.Mark("FilmLibrary.Play: director prepared");
         if (d == null)
         {
             Fail($"{e.Title}: {FilmDirector.LastStaticError ?? "the film could not be prepared"}");
@@ -203,7 +204,9 @@ public class FilmLibrary : MonoBehaviour
 
         string mix = d.MixPath;
         if (mix != null && File.Exists(mix)) FilmSoundtrack.Preload(mix);
+        LoadTrace.Mark("FilmLibrary.Play: soundtrack preload started");
         ShowLoadingScreen();
+        LoadTrace.Mark("FilmLibrary.Play: loading screen");
         return true;
     }
 

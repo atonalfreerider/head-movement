@@ -408,6 +408,7 @@ namespace HmVr
                 Vector3 front = new(menuHead.x + d0.x * Radius, menuY - 0.12f, menuHead.z + d0.z * Radius);
                 menuShift = VrAnchor.KeepOutOfDancers(front, menuHead) - front; // never opens among the dancers
                 Recalls++;
+                VrAnchor.Log("library menu (recall " + Recalls + ")", front + menuShift, f);
             }
 
             Vector3 head = menuHead;

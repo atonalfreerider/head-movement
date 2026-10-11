@@ -366,6 +366,7 @@ namespace HmVr
             InputFrame f = VrAnchor.Now(input.Frame);
             Vector3 spot = VrAnchor.Spot(f, 0.9f, 0.2f);
             main.FaceFrom(spot, f.HeadPosition, 0.55f);
+            VrAnchor.Log("hand panel", spot, f);
             anchor.SetPositionAndRotation(main.transform.position, main.transform.rotation);
             main.transform.localPosition = Vector3.zero;
             main.transform.localRotation = Quaternion.identity;

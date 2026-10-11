@@ -183,6 +183,7 @@ namespace HmVr
                     placed = true; // anchored: placed once (in front of the user, below the dancers' view line, or above with CC up), then it stays
                     Vector3 spot = VrAnchor.Spot(f, 1.6f, High ? -0.42f : 0.52f);
                     panel.FaceFrom(spot, f.HeadPosition, 0.6f);
+                    VrAnchor.Log("captions", spot, f);
                 }
             }
         }

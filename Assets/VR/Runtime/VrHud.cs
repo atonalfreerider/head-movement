@@ -85,7 +85,9 @@ namespace HmVr
             {
                 placed = true; // anchored, like every panel: placed once a little to the right of the gaze, then it stays (a recall places it again)
                 InputFrame f = VrAnchor.Now(input.Frame);
-                panel.FaceFrom(VrAnchor.Spot(f, 1.45f, 0.42f, 24f), f.HeadPosition, 0.5f);
+                Vector3 hudSpot = VrAnchor.Spot(f, 1.45f, 0.42f, 24f);
+                panel.FaceFrom(hudSpot, f.HeadPosition, 0.5f);
+                VrAnchor.Log("beat / rhythm HUD", hudSpot, f);
             }
         }
 
