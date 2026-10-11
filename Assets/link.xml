@@ -1,0 +1,5 @@
+<linker>
+  <!-- the engine's physics module is otherwise stripped from a player build (nothing references it from managed code), and
+       GameObject.CreatePrimitive(Capsule) - the physics overlay's markers - then fails with "class CapsuleCollider doesn't exist" -->
+  <assembly fullname="UnityEngine.PhysicsModule" preserve="all"/>
+</linker>

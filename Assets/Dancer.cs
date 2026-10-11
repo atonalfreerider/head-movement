@@ -118,13 +118,47 @@ public class Dancer : MonoBehaviour
     
     #endregion
 
+    /// <summary>the jerk series of one dancer (per SMPL joint, per frame) and where it came from</summary>
+    public sealed class JerkResult
+    {
+        public readonly Dictionary<SmplJoint, float[]> ByJoint = new();
+        public string Source = "central differences";
+    }
+
+    /// <summary>jerk per joint from the timing.json series when it covers the take, else by central differences on the frame times; touches no Unity object (may run on a worker thread)</summary>
+    public static JerkResult ComputeJerk(IReadOnlyList<List<Vector3>> poses, float[] frameTimes, float[][] precomputedJerk)
+    {
+        JerkResult r = new();
+        IReadOnlyList<List<Vector3>> used = poses.Count > frameTimes.Length ? poses.Take(frameTimes.Length).ToList() : poses;
+        int jointCount = Enum.GetNames(typeof(SmplJoint)).Length;
+        bool usePrecomputed = precomputedJerk != null && precomputedJerk.Length >= used.Count &&
+                              precomputedJerk.Take(used.Count).All(f => f != null && f.Length >= jointCount);
+        if (usePrecomputed) r.Source = "timing.json spline";
+        float[] times = frameTimes.Take(used.Count).ToArray();
+        for (int j = 0; j < jointCount; j++)
+        {
+            SmplJoint joint = (SmplJoint)j;
+            if (usePrecomputed)
+            {
+                int jj = j;
+                r.ByJoint[joint] = precomputedJerk.Take(used.Count).Select(f => f[jj]).ToArray();
+                continue;
+            }
+
+            Vector3[] jointPositions = used.Select(pose => pose[j]).ToArray();
+            r.ByJoint[joint] = RhythmPhysics.CalculateJerk(jointPositions, times);
+        }
+
+        return r;
+    }
+
     /// <param name="frameTimes">seconds of every pose frame (real timestamps; only differences matter)</param>
     /// <param name="precomputedJerk">optional |jerk| per frame per SMPL-24 joint (timing.json spline jerk); when
     /// null or the wrong size, jerk comes from central differences on frameTimes</param>
     /// <param name="legacyHair">the original LineRenderer HairSimulation on the follow (v1/v2 captures). v3 captures
     /// pass false: their skinned avatar carries the groomed hair (Assets/Hair/HairStrands)</param>
     public void Init(Role role, List<List<Vector3>> posesByFrame, Material bloomMat, float[] frameTimes,
-        float[][] precomputedJerk = null, bool legacyHair = true)
+        float[][] precomputedJerk = null, bool legacyHair = true, JerkResult preparedJerk = null)
     {
         BloomMat = bloomMat;
         BuildSmpl(role);
@@ -132,27 +166,10 @@ public class Dancer : MonoBehaviour
         Role = role;
         PosesByFrame = posesByFrame.Take(frameTimes.Length).ToArray();
         if (followSpineBeads != null) followSpineBeads.SetTypicalLength(MedianSpineLength());
-        JerkSource = "central differences";
-
-        int jointCount = Enum.GetNames(typeof(SmplJoint)).Length;
-        bool usePrecomputed = precomputedJerk != null && precomputedJerk.Length >= PosesByFrame.Length &&
-                              precomputedJerk.Take(PosesByFrame.Length).All(f => f != null && f.Length >= jointCount);
-        if (usePrecomputed) JerkSource = "timing.json spline";
-        float[] times = frameTimes.Take(PosesByFrame.Length).ToArray();
-
-        for (int j = 0; j < jointCount; j++)
-        {
-            SmplJoint joint = (SmplJoint)j;
-            if (usePrecomputed)
-            {
-                int jj = j;
-                jerkByFrameByJoint[joint] = precomputedJerk.Take(PosesByFrame.Length).Select(f => f[jj]).ToArray();
-                continue;
-            }
-
-            Vector3[] jointPositions = PosesByFrame.Select(pose => pose[j]).ToArray();
-            jerkByFrameByJoint[joint] = RhythmPhysics.CalculateJerk(jointPositions, times);
-        }
+        // the jerk series (pure maths over the poses): computed here, or by a worker thread beforehand (preparedJerk, the headset's lesson load)
+        JerkResult jerk = preparedJerk ?? ComputeJerk(PosesByFrame, frameTimes, precomputedJerk);
+        JerkSource = jerk.Source;
+        foreach (KeyValuePair<SmplJoint, float[]> kv in jerk.ByJoint) jerkByFrameByJoint[kv.Key] = kv.Value;
 
         const int colorScale = 40;
         switch (role)

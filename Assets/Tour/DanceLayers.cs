@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using Newtonsoft.Json.Linq;
@@ -205,6 +206,7 @@ public class DanceLayers : MonoBehaviour
     public void Refresh()
     {
         if (hm == null || hm.Manifest == null || hm.Timeline == null || hm.LeadDancer == null || hm.FollowDancer == null) return;
+        if (hm.IsLoadingCapture) return; // the capture builds the layers itself, in slices (BuildNow)
         if (!ReferenceEquals(hm.Manifest, loaded) || !ReferenceEquals(hm.LeadDancer, loadedLead)) Rebuild();
         int frame = hm.CurrentFrame;
         if (frame < 0) return;
@@ -288,6 +290,40 @@ public class DanceLayers : MonoBehaviour
 
     void Rebuild()
     {
+        IEnumerator r = RebuildRoutine(false);
+        while (r.MoveNext())
+        {
+        }
+    }
+
+    /// <summary>the capture's load builds the layers here (async: one layer per frame, their data parsed on worker threads beforehand)</summary>
+    public IEnumerator BuildNow(bool async)
+    {
+        if (hm == null) hm = HeadMovement.Instance;
+        if (hm == null || hm.Manifest == null || hm.Timeline == null || hm.LeadDancer == null || hm.FollowDancer == null) yield break;
+        if (ReferenceEquals(hm.Manifest, loaded) && ReferenceEquals(hm.LeadDancer, loadedLead)) yield break;
+        yield return RebuildRoutine(async);
+    }
+
+    /// <summary>start parsing the layers' data files on worker threads (needs the timeline and the dance origin); Rebuild takes the results</summary>
+    public static void PrefetchFor(CaptureManifest manifest, CaptureTimeline timeline)
+    {
+        JObject capture = ReadCaptureJson(manifest);
+        Vector3 off = DanceOrigin.Offset;
+        string cb = FileIn(manifest, capture, "counterbalance", "counterbalance.json");
+        if (cb != null) LoadPrefetch.Start("cb:" + cb, () => CounterbalanceData.Load(cb, timeline, off));
+        string fc = FileIn(manifest, capture, "floorcraft", "floorcraft.json");
+        if (fc != null) LoadPrefetch.Start("fc:" + fc, () => FloorCraftData.Load(fc, timeline, off));
+        string moves = FolderIn(manifest, capture, "moves", "moves");
+        if (moves != null && File.Exists(Path.Combine(moves, "graph.json"))) LoadPrefetch.Start("graph:" + moves, () => DanceGraphData.Load(moves, timeline));
+        string rh = FileIn(manifest, capture, "rhythm", "rhythm.json");
+        if (rh != null) LoadPrefetch.Start("rhythm:" + rh, () => RhythmData.Load(rh));
+    }
+
+    static bool Pending(string key) => LoadPrefetch.Has(key) && !LoadPrefetch.IsDone(key);
+
+    IEnumerator RebuildRoutine(bool async)
+    {
         hiddenKey = -1;
         followGoneKey = -1;
         loaded = hm.Manifest;
@@ -302,7 +338,7 @@ public class DanceLayers : MonoBehaviour
         graph = null;
         rhythm = null;
         hud.Clear();
-        if (loaded == null || hm.LeadDancer == null || hm.FollowDancer == null || hm.Timeline == null) return;
+        if (loaded == null || hm.LeadDancer == null || hm.FollowDancer == null || hm.Timeline == null) yield break;
 
         root = new GameObject($"Dance layers ({loaded.DisplayName})").transform;
         root.SetParent(transform, false);
@@ -313,9 +349,10 @@ public class DanceLayers : MonoBehaviour
         string cbPath = FileFromCapture(capture, "counterbalance", "counterbalance.json");
         if (cbPath != null)
         {
+            while (Pending("cb:" + cbPath)) yield return null;
             try
             {
-                CounterbalanceData data = CounterbalanceData.Load(cbPath, hm.Timeline, DanceOrigin.Offset);
+                CounterbalanceData data = LoadPrefetch.Take("cb:" + cbPath, () => CounterbalanceData.Load(cbPath, hm.Timeline, DanceOrigin.Offset));
                 counterbalance = new GameObject("Counterbalance").AddComponent<CounterbalanceOverlay>();
                 counterbalance.transform.SetParent(root, false);
                 counterbalance.Init(data, hm.LeadDancer, hm.FollowDancer, MeasureSeconds);
@@ -326,6 +363,8 @@ public class DanceLayers : MonoBehaviour
             }
         }
 
+        LoadTrace.Mark("layer counterbalance");
+        if (async) yield return null;
         try
         {
             traces = new GameObject("Follower traces").AddComponent<FollowerTraces>();
@@ -337,6 +376,8 @@ public class DanceLayers : MonoBehaviour
             Warn($"follower traces failed ({e.Message})");
         }
 
+        LoadTrace.Mark("layer follower traces");
+        if (async) yield return null;
         try
         {
             neckAxis = new GameObject("Follower neck axis").AddComponent<NeckAxisOverlay>();
@@ -352,6 +393,10 @@ public class DanceLayers : MonoBehaviour
             Warn($"follower neck axis failed ({e.Message})");
         }
 
+        LoadTrace.Mark("layer neck axis");
+        if (async) yield return null;
+        string fcPrefetch = FileFromCapture(capture, "floorcraft", "floorcraft.json");
+        while (fcPrefetch != null && Pending("fc:" + fcPrefetch)) yield return null;
         try
         {
             string fcPath = FileFromCapture(capture, "floorcraft", "floorcraft.json");
@@ -360,7 +405,7 @@ public class DanceLayers : MonoBehaviour
             {
                 try
                 {
-                    fc = FloorCraftData.Load(fcPath, hm.Timeline, DanceOrigin.Offset);
+                    fc = LoadPrefetch.Take("fc:" + fcPath, () => FloorCraftData.Load(fcPath, hm.Timeline, DanceOrigin.Offset));
                 }
                 catch (Exception e)
                 {
@@ -384,12 +429,15 @@ public class DanceLayers : MonoBehaviour
             Warn($"floor craft failed ({e.Message})");
         }
 
+        LoadTrace.Mark("layer floor craft");
+        if (async) yield return null;
         string movesDir = FolderFromCapture(capture, "moves", "moves");
         if (movesDir != null && File.Exists(Path.Combine(movesDir, "graph.json")))
         {
+            while (Pending("graph:" + movesDir)) yield return null;
             try
             {
-                DanceGraphData data = DanceGraphData.Load(movesDir, hm.Timeline);
+                DanceGraphData data = LoadPrefetch.Take("graph:" + movesDir, () => DanceGraphData.Load(movesDir, hm.Timeline));
                 graph = new GameObject("Dance graph layer").AddComponent<DanceGraphLayer>();
                 graph.transform.SetParent(root, false);
                 graph.Init(data, hm.LeadDancer, hm.FollowDancer, loaded, hm.Timeline, hm.Beats, hud);
@@ -403,12 +451,15 @@ public class DanceLayers : MonoBehaviour
             }
         }
 
+        LoadTrace.Mark("layer dance graph");
+        if (async) yield return null;
         string rhythmPath = FileFromCapture(capture, "rhythm", "rhythm.json");
         if (rhythmPath != null)
         {
+            while (Pending("rhythm:" + rhythmPath)) yield return null;
             try
             {
-                RhythmData rhythmData = RhythmData.Load(rhythmPath);
+                RhythmData rhythmData = LoadPrefetch.Take("rhythm:" + rhythmPath, () => RhythmData.Load(rhythmPath));
                 rhythm = new GameObject("Rhythm score").AddComponent<RhythmScoreHud>();
                 rhythm.transform.SetParent(root, false);
                 rhythm.Init(rhythmData, hm.Timeline);
@@ -444,17 +495,21 @@ public class DanceLayers : MonoBehaviour
         }
     }
 
-    string FileFromCapture(JObject capture, string key, string fallback)
+    string FileFromCapture(JObject capture, string key, string fallback) => FileIn(loaded, capture, key, fallback);
+
+    string FolderFromCapture(JObject capture, string key, string fallback) => FolderIn(loaded, capture, key, fallback);
+
+    static string FileIn(CaptureManifest m, JObject capture, string key, string fallback)
     {
         string rel = capture?[key]?.Type == JTokenType.String ? capture.Value<string>(key) : fallback;
-        string path = Path.Combine(loaded.Folder, rel);
+        string path = Path.Combine(m.Folder, rel);
         return File.Exists(path) ? path : null;
     }
 
-    string FolderFromCapture(JObject capture, string key, string fallback)
+    static string FolderIn(CaptureManifest m, JObject capture, string key, string fallback)
     {
         string rel = capture?[key]?.Type == JTokenType.String ? capture.Value<string>(key) : fallback;
-        string path = Path.Combine(loaded.Folder, rel);
+        string path = Path.Combine(m.Folder, rel);
         return Directory.Exists(path) ? path : null;
     }
 

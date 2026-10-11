@@ -67,7 +67,15 @@ public sealed class DisplayTransparency
     /// area-weighted, binned by luminance (log-spaced; a subsample biased the median by up to 15 %)</summary>
     public static DisplayTransparency FromTexture(Texture2D readable, Vector3[] vertices, int[] triangles, Vector2[] uv, Color tint)
     {
+        LuminanceBins(readable, vertices, triangles, uv, tint, out float[] ys, out float[] ws, out int tris);
+        return ys == null ? FromColour(tint) : new DisplayTransparency(ys, ws) { Triangles = tris };
+    }
+
+    /// <summary>the luminance bins of a textured body (the expensive part of FromTexture: every triangle samples the texture); ys null = a one-colour body</summary>
+    public static void LuminanceBins(Texture2D readable, Vector3[] vertices, int[] triangles, Vector2[] uv, Color tint, out float[] ys, out float[] ws, out int triangleCount)
+    {
         int tris = triangles.Length / 3;
+        triangleCount = tris;
         double[] sw = new double[Bins], swy = new double[Bins];
         Color tl = tint.linear;
         float logMin = Mathf.Log(BinMin), logSpan = Mathf.Log(BinMax) - logMin;
@@ -86,17 +94,24 @@ public sealed class DisplayTransparency
         int n = 0;
         for (int i = 0; i < Bins; i++)
             if (sw[i] > 0) n++;
-        if (n == 0) return FromColour(tint);
-        float[] ys = new float[n], ws = new float[n];
+        if (n == 0)
+        {
+            ys = ws = null;
+            return;
+        }
+
+        ys = new float[n];
+        ws = new float[n];
         for (int i = 0, k = 0; i < Bins; i++)
         {
             if (sw[i] <= 0) continue;
             ys[k] = (float)(swy[i] / sw[i]);
             ws[k++] = (float)sw[i];
         }
-
-        return new DisplayTransparency(ys, ws) { Triangles = tris };
     }
+
+    /// <summary>a textured body from luminance bins computed earlier (baked next to the albedo by the deploy step: no texture sampling at load)</summary>
+    public static DisplayTransparency FromSamples(float[] ys, float[] ws, int triangles) => new(ys, ws) { Triangles = triangles };
 
     /// <summary>triangles sampled (0 for a one-colour body)</summary>
     public int Triangles { get; private set; }

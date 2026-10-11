@@ -178,12 +178,17 @@ public class FilmDirector : MonoBehaviour
             if (Instance != null) Instance.Stop();
             HeadMovement head = HeadMovement.Instance != null ? HeadMovement.Instance : Object.FindAnyObjectByType<HeadMovement>();
             if (head == null) throw new InvalidOperationException("no HeadMovement in the scene (enter Play mode in head-movement.unity)");
+            LoadTrace.Begin("film " + Path.GetFileName(Path.GetDirectoryName(full)));
+            if (HeadMovement.AsyncLoad) LoadPrefetch.Clear();
             FilmDirection d = FilmDirection.Load(full);
+            LoadTrace.Mark("film direction json");
+            if (HeadMovement.AsyncLoad) FilmCameraSource.PrefetchTracks(d);
             if (d.Segments.Count == 0) throw new InvalidOperationException($"{Path.GetFileName(full)} has no segments");
             if (string.IsNullOrEmpty(d.Capture)) throw new InvalidOperationException($"{Path.GetFileName(full)} names no capture");
             GameObject go = new("Film Director");
             FilmDirector fd = go.AddComponent<FilmDirector>();
             fd.Init(head, d, full, asp);
+            LoadTrace.Mark("film director init (overlay, camera, annotations)");
             LastStaticError = null;
             return fd;
         }
@@ -365,10 +370,17 @@ public class FilmDirector : MonoBehaviour
             return;
         }
 
-        if (!controlTaken) TakeControl();
+        if (!controlTaken)
+        {
+            LoadTrace.Mark("(waiting for the capture)");
+            TakeControl();
+            LoadTrace.Mark("film takes control");
+        }
+
         if (!sourcesPrepared)
         {
             sources.Prepare(hm.Manifest.Folder, direction, transform);
+            LoadTrace.Mark("phone sources prepare");
             sourcesPrepared = true;
             if (!sources.HasFeature) Warnings.Add($"no FilmCameraVideo: phone glyphs + POV flights from {sources.Status}; no source video");
         }
@@ -385,6 +397,12 @@ public class FilmDirector : MonoBehaviour
 
         if (filmTime >= FilmDuration) filmTime = FilmDuration;
         Apply(filmTime);
+        if (appliedFrames <= 3) LoadTrace.Mark("film apply #" + appliedFrames);
+        if (appliedFrames == 3)
+        {
+            LoadTrace.End();
+            LoadPrefetch.Clear();
+        }
         if (running && filmTime >= FilmDuration) finished = true;
 
         if (playSoundtrack && FilmSoundtrack.Current != null && !Mathf.Approximately(FilmSoundtrack.Current.Pitch, Rate)) FilmSoundtrack.Current.Pitch = Rate;

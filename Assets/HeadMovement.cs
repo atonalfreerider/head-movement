@@ -356,10 +356,77 @@ public class HeadMovement : MonoBehaviour
         return true;
     }
 
+    /// <summary>
+    /// true (set by the headset's VR mode): LoadCapture returns at once and the capture builds over many frames - the big file reads and
+    /// parses run on worker threads (LoadPrefetch), the main thread builds one piece per frame - so a loading screen keeps animating
+    /// and head-tracking stays smooth. false (the desktop viewer, the recorder, the CLI): the same steps run in one call, as always.
+    /// </summary>
+    public static bool AsyncLoad;
+
+    /// <summary>a capture is being built (async load)</summary>
+    public bool IsLoadingCapture => loadRoutine != null;
+    public float LoadProgress { get; private set; } = 1f;
+    public string LoadStage { get; private set; } = "";
+    Coroutine loadRoutine;
+
     public void LoadCapture(int selection)
     {
         if (selection < 0 || selection >= captures.Length) return;
+        if (loadRoutine != null)
+        {
+            StopCoroutine(loadRoutine);
+            loadRoutine = null;
+        }
 
+        if (AsyncLoad && Application.isPlaying) loadRoutine = StartCoroutine(Guarded(LoadCaptureRoutine(selection, true)));
+        else Drain(LoadCaptureRoutine(selection, false));
+    }
+
+    static void Drain(IEnumerator r)
+    {
+        while (r.MoveNext())
+        {
+            if (r.Current is IEnumerator inner) Drain(inner);
+        }
+    }
+
+    /// <summary>runs an iterator and reports an exception the way a synchronous load would (to the log), ending the load</summary>
+    IEnumerator Guarded(IEnumerator inner)
+    {
+        while (true)
+        {
+            object cur;
+            try
+            {
+                if (!inner.MoveNext()) break;
+                cur = inner.Current;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"HeadMovement: loading the capture failed: {e.Message}\n{e.StackTrace}");
+                LoadPrefetch.Clear();
+                loadRoutine = null;
+                LoadStage = "failed: " + e.Message;
+                yield break;
+            }
+
+            yield return cur;
+        }
+
+        loadRoutine = null;
+    }
+
+    static bool Pending(string key) => LoadPrefetch.Has(key) && !LoadPrefetch.IsDone(key);
+
+    void Stage(float progress, string what)
+    {
+        LoadProgress = progress;
+        LoadStage = what;
+        LoadTrace.Mark(what);
+    }
+
+    IEnumerator LoadCaptureRoutine(int selection, bool async)
+    {
         try
         {
             CaptureLoading?.Invoke(Path.GetFileName(captures[selection]));
@@ -371,6 +438,8 @@ public class HeadMovement : MonoBehaviour
 
         Pause();
         audioLoaded = false;
+        LoadProgress = 0f;
+        LoadStage = "starting";
 
         if (Lead != null)
         {
@@ -390,12 +459,51 @@ public class HeadMovement : MonoBehaviour
         externalAudioTime = float.NaN; // a new capture is never externally driven until its director says so
         loopMeasure = false;
 
+        LoadTrace.Begin(Path.GetFileName(captures[selection]));
+        if (!async) LoadPrefetch.Clear();
         manifest = CaptureManifest.Load(captures[currentFolder]);
         Fps = manifest.fps;
+        Stage(0.02f, "capture manifest");
+        string leadJoints = manifest.JointsPath(Role.Lead), followJoints = manifest.JointsPath(Role.Follow);
+        string timingPath = manifest.OptionalPath(manifest.timing);
+        string physicsPath = manifest.OptionalPath(manifest.physics);
+        if (async)
+        {
+            // everything that is pure data starts on worker threads now and is taken when the main thread gets to it
+            LoadPrefetch.Start("poses:" + leadJoints, () => ReadPoses(leadJoints));
+            LoadPrefetch.Start("poses:" + followJoints, () => ReadPoses(followJoints));
+            if (timingPath != null) LoadPrefetch.Start("timing:" + timingPath, () => TimingData.Load(timingPath));
+            if (physicsPath != null) LoadPrefetch.Start("physics:" + physicsPath, () => PhysicsData.Load(physicsPath));
+            foreach (Role role in new[] { Role.Lead, Role.Follow })
+            {
+                string skin = manifest.RolePath(manifest.smplx_skin, role), motion = manifest.RolePath(manifest.smplx, role);
+                if (skin == null || motion == null) continue;
+                LoadPrefetch.Start("skin:" + skin, () => SmplxData.ReadSkin(skin));
+                LoadPrefetch.Start("motion:" + motion, () => SmplxData.ReadMotion(motion));
+                if (role == Role.Follow)
+                {
+                    string groom = manifest.OptionalPath("hair_groom.json");
+                    if (groom != null)
+                    {
+                        LoadPrefetch.Start("groom:" + groom, () => Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(groom)));
+                        LoadPrefetch.Start("hairskin:" + skin, () => SmplxData.ReadSkin(skin));
+                    }
+                }
+            }
 
-        List<List<Vector3>> leadPoses = ReadPoses(manifest.JointsPath(Role.Lead));
-        List<List<Vector3>> followPoses = ReadPoses(manifest.JointsPath(Role.Follow));
+            yield return null;
+            while (Pending("poses:" + leadJoints) || Pending("poses:" + followJoints))
+            {
+                LoadStage = "reading the dancers' poses";
+                yield return null;
+            }
+        }
+
+        List<List<Vector3>> leadPoses = LoadPrefetch.Take("poses:" + leadJoints, () => ReadPoses(leadJoints));
+        List<List<Vector3>> followPoses = LoadPrefetch.Take("poses:" + followJoints, () => ReadPoses(followJoints));
+        Stage(0.12f, "poses");
         DanceOrigin.Begin(manifest, leadPoses, followPoses); // VIEWER_SPEC 3.0: the dance starts at (0,0) and travels
+        Stage(0.14f, "dance origin");
         FrameCount = Mathf.Min(manifest.frame_count, Mathf.Min(leadPoses.Count, followPoses.Count));
         timeline = manifest.BuildTimeline(FrameCount);
         FrameCount = timeline.Count;
@@ -403,14 +511,22 @@ public class HeadMovement : MonoBehaviour
         roleHidden.Reset(manifest, (float)timeline.First); // capture.json role_hidden (capture seconds); the song starts at the first frame
         roleAlpha[0] = roleHidden.AlphaAtAudio(Role.Lead, timeline.First);
         roleAlpha[1] = roleHidden.AlphaAtAudio(Role.Follow, timeline.First);
+        Stage(0.16f, "timeline + role spans");
+        if (async)
+        {
+            // the layers' data needs the timeline: its parsing starts now, behind the dancers and avatars
+            DanceLayers.PrefetchFor(manifest, timeline);
+            CameraVideoRig.PrefetchTracks(manifest.Folder);
+            yield return null;
+            while (timingPath != null && Pending("timing:" + timingPath)) yield return null;
+        }
 
-        string timingPath = manifest.OptionalPath(manifest.timing);
         timingData = null;
         if (timingPath != null)
         {
             try
             {
-                timingData = TimingData.Load(timingPath);
+                timingData = LoadPrefetch.Take("timing:" + timingPath, () => TimingData.Load(timingPath));
             }
             catch (Exception e)
             {
@@ -419,8 +535,30 @@ public class HeadMovement : MonoBehaviour
         }
 
         float[] frameSeconds = timeline.RelativeSeconds();
-        Lead = NewDancer(Role.Lead, leadPoses, frameSeconds);
-        Follow = NewDancer(Role.Follow, followPoses, frameSeconds);
+        Dancer.JerkResult leadJerk = null, followJerk = null;
+        if (async)
+        {
+            // the jerk series of both dancers (the heavy part of a dancer's setup) on worker threads
+            float[][] lj = timingData != null && timingData.Jerk.TryGetValue(Role.Lead, out float[][] a) && a.Length >= frameSeconds.Length ? a : null;
+            float[][] fj = timingData != null && timingData.Jerk.TryGetValue(Role.Follow, out float[][] b) && b.Length >= frameSeconds.Length ? b : null;
+            LoadPrefetch.Start("jerk:lead", () => Dancer.ComputeJerk(leadPoses.Take(frameSeconds.Length).ToArray(), frameSeconds, lj));
+            LoadPrefetch.Start("jerk:follow", () => Dancer.ComputeJerk(followPoses.Take(frameSeconds.Length).ToArray(), frameSeconds, fj));
+            yield return null;
+            while (Pending("jerk:lead") || Pending("jerk:follow"))
+            {
+                LoadStage = "preparing the dancers";
+                yield return null;
+            }
+
+            leadJerk = LoadPrefetch.Take<Dancer.JerkResult>("jerk:lead", null);
+            followJerk = LoadPrefetch.Take<Dancer.JerkResult>("jerk:follow", null);
+        }
+
+        Lead = NewDancer(Role.Lead, leadPoses, frameSeconds, leadJerk);
+        if (async) yield return null;
+        Follow = NewDancer(Role.Follow, followPoses, frameSeconds, followJerk);
+        Stage(0.26f, "dancers (skeleton line objects)");
+        if (async) yield return null;
 
         beatGrid = null;
         if (manifest.beats != null)
@@ -436,21 +574,30 @@ public class HeadMovement : MonoBehaviour
         contactDetection = GetComponent<ContactDetection>();
         contactDetection.Reset();
         contactDetection.Init(Lead, Follow, BloomMaterial);
+        if (async) yield return null;
 
         floorPatterns.Init(Lead, Follow, BloomMaterial, beatGrid, Fps, AudioOffset);
         floorPatterns.SetVisible(showFloor);
+        if (async) yield return null;
         partnerConnection.Init(Lead, Follow, BloomMaterial, Fps);
         partnerConnection.SetVisible(showConnection);
+        Stage(0.32f, "contact / floor patterns / partner connection init");
+        if (async) yield return null;
         virtualCameraRig.Load(manifest.PathOf(manifest.virtual_cameras), BloomMaterial);
         DanceOrigin.ShiftWorldLines(virtualCameraRig.transform);
         virtualCameraRig.SetVisible(showCameras);
         DanceOrigin.Place(splatCloud.transform);
         LoadRoom();
         StartCoroutine(LoadSplats());
+        Stage(0.36f, "room + cameras + splats start");
+        if (async) yield return null;
 
-        LoadV3();
+        yield return LoadV3Routine(async);
+        Stage(0.74f, "avatars + hair + timing + physics (LoadV3)");
 
         BuildGrid();
+        Stage(0.76f, "floor grid");
+        if (async) yield return null;
         skeletonStyle = new SkeletonStyle { Current = SkeletonMode };
         try
         {
@@ -464,8 +611,14 @@ public class HeadMovement : MonoBehaviour
 
         skeletonLegend.Show = showPhysics && skeletonStyle != null;
         skeletonLegend.Source = skeletonStyle?.LoadSource ?? "";
+        Stage(0.8f, "skeleton style");
+        if (async) yield return null;
         ApplyRoleHidden(); // the new dancers / avatars start at their alpha at the first frame (the spans were reloaded above)
 
+        // the dance layers (counterbalance, floor craft, rhythm, graph ...), built here in slices so no frame has to carry them all
+        if (DanceLayers.Instance != null) yield return DanceLayers.Instance.BuildNow(async);
+        Stage(0.94f, "dance layers");
+        LoadStage = "decoding the soundtrack";
         StartCoroutine(LoadAudio());
     }
 
@@ -508,7 +661,9 @@ public class HeadMovement : MonoBehaviour
     }
 
     /// <summary>skinned SMPL-X avatars + timing/physics overlays, each only when the capture has its files</summary>
-    void LoadV3()
+    void LoadV3() => Drain(LoadV3Routine(false));
+
+    IEnumerator LoadV3Routine(bool async)
     {
         foreach (Role role in new[] { Role.Lead, Role.Follow })
         {
@@ -520,6 +675,12 @@ public class HeadMovement : MonoBehaviour
                 continue;
             }
 
+            while (Pending("skin:" + skin) || Pending("motion:" + motion))
+            {
+                LoadStage = "reading the avatars";
+                yield return null;
+            }
+
             try
             {
                 SmplxAvatar avatar = SmplxAvatar.Create(skin, motion, role, null, manifest.RolePath(manifest.smplx_albedo, role));
@@ -529,14 +690,25 @@ public class HeadMovement : MonoBehaviour
                 avatar.Opacity = EffectiveAvatarOpacity * roleAlpha[(int)role & 1];
                 avatar.SetVisible(showAvatars);
                 avatars[role] = avatar;
+                Stage(role == Role.Lead ? 0.46f : 0.56f, "avatar " + role);
             }
             catch (Exception e)
             {
                 Warn($"{role} avatar failed to load: {e.Message}");
             }
+
+            if (async) yield return null;
+        }
+
+        string groomPath = manifest.OptionalPath("hair_groom.json");
+        if (groomPath != null)
+        {
+            while (Pending("groom:" + groomPath) || Pending("hairskin:" + manifest.RolePath(manifest.smplx_skin, Role.Follow))) yield return null;
         }
 
         LoadHair();
+        Stage(0.62f, "hair");
+        if (async) yield return null;
         try
         {
             AvatarsLoaded?.Invoke(this);
@@ -546,6 +718,9 @@ public class HeadMovement : MonoBehaviour
             Warn($"avatar attachments failed: {e.Message}");
         }
 
+        Stage(0.66f, "avatar attachments (shoes, head props)");
+        if (async) yield return null;
+
         if (timingData != null)
         {
             timingOverlay = new GameObject("Timing Overlay").AddComponent<TimingOverlay>();
@@ -553,17 +728,27 @@ public class HeadMovement : MonoBehaviour
             timingOverlay.SetVisible(showTiming);
         }
 
+        Stage(0.68f, "timing overlay");
+        if (async) yield return null;
+
         string physicsPath = manifest.OptionalPath(manifest.physics);
         if (physicsPath != null)
         {
+            while (Pending("physics:" + physicsPath))
+            {
+                LoadStage = "reading the physics data";
+                yield return null;
+            }
+
             try
             {
-                PhysicsData physics = PhysicsData.Load(physicsPath);
+                PhysicsData physics = LoadPrefetch.Take("physics:" + physicsPath, () => PhysicsData.Load(physicsPath));
                 DanceOrigin.Shift(physics);
                 physicsData = physics;
                 physicsOverlay = new GameObject("Physics Overlay").AddComponent<PhysicsOverlay>();
                 physicsOverlay.Init(physics, timeline, BloomMaterial);
                 physicsOverlay.SetVisible(showPhysics);
+                Stage(0.72f, "physics (data + overlay)");
             }
             catch (Exception e)
             {
@@ -704,6 +889,7 @@ public class HeadMovement : MonoBehaviour
         audioSource.pitch = Speeds[speedIndex];
         audioSource.time = Mathf.Clamp(AudioOffset, 0, clip.length - 0.01f);
         audioLoaded = true;
+        LoadTrace.Mark("audio clip decoded");
 
         HashSet<int> framesWithUpOrDownbeat = new();
         if (beatGrid != null)
@@ -741,18 +927,61 @@ public class HeadMovement : MonoBehaviour
 
     static List<List<Vector3>> ReadPoses(string jsonPath)
     {
+        try
+        {
+            return ReadPosesStreaming(jsonPath);
+        }
+        catch (Exception)
+        {
+            // an unexpected layout: the general reader below knows more shapes
+        }
+
         string jsonString = File.ReadAllText(jsonPath);
         List<List<Float3>> allPoses = JsonConvert.DeserializeObject<List<List<Float3>>>(jsonString);
         return allPoses.Select(pose => pose.Select(float3 => new Vector3(float3.x, float3.y, float3.z)).ToList()).ToList();
     }
 
-    Dancer NewDancer(Role role, List<List<Vector3>> poses, float[] frameSeconds)
+    /// <summary>[[{"x":..,"y":..,"z":..}, ...], ...] read token by token, straight into the vectors: a fraction of the time and garbage of the object reader (a 10 MB file of a take)</summary>
+    static List<List<Vector3>> ReadPosesStreaming(string jsonPath)
+    {
+        using StreamReader sr = new(jsonPath);
+        using Newtonsoft.Json.JsonTextReader r = new(sr);
+        List<List<Vector3>> frames = new(12000);
+        if (!r.Read() || r.TokenType != Newtonsoft.Json.JsonToken.StartArray) throw new InvalidDataException("not an array");
+        while (r.Read() && r.TokenType != Newtonsoft.Json.JsonToken.EndArray)
+        {
+            if (r.TokenType != Newtonsoft.Json.JsonToken.StartArray) throw new InvalidDataException("not a frame");
+            List<Vector3> pose = new(52);
+            while (r.Read() && r.TokenType != Newtonsoft.Json.JsonToken.EndArray)
+            {
+                if (r.TokenType != Newtonsoft.Json.JsonToken.StartObject) throw new InvalidDataException("not a joint");
+                float x = 0f, y = 0f, z = 0f;
+                while (r.Read() && r.TokenType != Newtonsoft.Json.JsonToken.EndObject)
+                {
+                    string name = (string)r.Value;
+                    double? v = r.ReadAsDouble();
+                    float f = v.HasValue ? (float)v.Value : 0f;
+                    if (name == "x") x = f;
+                    else if (name == "y") y = f;
+                    else if (name == "z") z = f;
+                }
+
+                pose.Add(new Vector3(x, y, z));
+            }
+
+            frames.Add(pose);
+        }
+
+        return frames;
+    }
+
+    Dancer NewDancer(Role role, List<List<Vector3>> poses, float[] frameSeconds, Dancer.JerkResult preparedJerk = null)
     {
         Dancer dancer = new GameObject(role.ToString()).AddComponent<Dancer>();
         float[][] jerk = null;
         if (timingData != null && timingData.Jerk.TryGetValue(role, out float[][] j) && j.Length >= frameSeconds.Length) jerk = j;
         // v3 captures: the skinned follow avatar carries the groomed hair; the old LineRenderer hair is off
-        dancer.Init(role, poses, BloomMaterial, frameSeconds, jerk, legacyHair: manifest.version < 3);
+        dancer.Init(role, poses, BloomMaterial, frameSeconds, jerk, legacyHair: manifest.version < 3, preparedJerk: preparedJerk);
         return dancer;
     }
 

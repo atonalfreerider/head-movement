@@ -252,10 +252,10 @@ public partial class HairStrands : MonoBehaviour
     /// <param name="frameTime">audio-clock seconds of a capture frame (CaptureTimeline.AudioTimeOf)</param>
     public static HairStrands Create(SmplxAvatar avatar, string skinPath, string groomPath, Func<int, float> frameTime)
     {
-        JObject groom = JObject.Parse(File.ReadAllText(groomPath));
+        JObject groom = LoadPrefetch.Take("groom:" + groomPath, () => JObject.Parse(File.ReadAllText(groomPath)));
         int version = groom.Value<int>("version");
         if (version != 1 && version != 2) throw new InvalidDataException($"{groomPath}: unsupported version {groom["version"]}");
-        SmplxData.Skin skin = SmplxData.ReadSkin(skinPath);
+        SmplxData.Skin skin = LoadPrefetch.Take("hairskin:" + skinPath, () => SmplxData.ReadSkin(skinPath));
         GameObject go = new($"{avatar.DancerRole} Hair") { layer = avatar.gameObject.layer };
         go.transform.SetParent(avatar.transform, false);
         HairStrands hair = go.AddComponent<HairStrands>();

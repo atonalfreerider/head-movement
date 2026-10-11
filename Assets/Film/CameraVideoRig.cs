@@ -95,6 +95,29 @@ public sealed class CameraVideoRig : MonoBehaviour
     // ------------------------------------------------------------------ loading
 
     /// <summary>read &lt;capture&gt;/cameras/cameras.json and every phone's track (strips open on first use)</summary>
+    /// <summary>start parsing every phone's track file on worker threads (the headset's lesson load); Load takes the results</summary>
+    public static void PrefetchTracks(string captureFolder)
+    {
+        try
+        {
+            string dir = Path.Combine(captureFolder ?? "", "cameras");
+            string manifest = Path.Combine(dir, "cameras.json");
+            if (!File.Exists(manifest)) return;
+            JObject m = JObject.Parse(File.ReadAllText(manifest));
+            foreach (JToken c in m["cameras"] ?? new JArray())
+            {
+                string trackFile = c["track"]?.Value<string>("file");
+                if (string.IsNullOrEmpty(trackFile)) continue;
+                string trackPath = Path.Combine(dir, trackFile);
+                if (File.Exists(trackPath)) LoadPrefetch.Start("camtrack:" + trackPath, () => CameraVideoTrack.Load(trackPath));
+            }
+        }
+        catch (Exception)
+        {
+            // the load itself reports what is wrong
+        }
+    }
+
     public void Load(string captureFolder)
     {
         Unload();
@@ -123,7 +146,8 @@ public sealed class CameraVideoRig : MonoBehaviour
                 string id = c.Value<string>("id");
                 string trackFile = c["track"]?.Value<string>("file");
                 if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(trackFile) || !File.Exists(Path.Combine(dir, trackFile))) continue;
-                CameraVideoTrack tr = CameraVideoTrack.Load(Path.Combine(dir, trackFile));
+                string trackPath = Path.Combine(dir, trackFile);
+                CameraVideoTrack tr = LoadPrefetch.Take("camtrack:" + trackPath, () => CameraVideoTrack.Load(trackPath));
                 if (tr.Count == 0) continue;
                 tr.Id = id;
                 Phone p = new() { Id = id, Track = tr, Colour = ColourOf(id) };

@@ -248,8 +248,8 @@ public class SmplxAvatar : MonoBehaviour
     public static SmplxAvatar Create(string skinPath, string motionPath, Role role, Transform parent = null,
         string albedoPath = null)
     {
-        SmplxData.Skin skin = SmplxData.ReadSkin(skinPath);
-        SmplxData.Motion motion = SmplxData.ReadMotion(motionPath);
+        SmplxData.Skin skin = LoadPrefetch.Take("skin:" + skinPath, () => SmplxData.ReadSkin(skinPath));
+        SmplxData.Motion motion = LoadPrefetch.Take("motion:" + motionPath, () => SmplxData.ReadMotion(motionPath));
 
         GameObject go = new($"{role} SMPL-X Avatar");
         if (parent != null) go.transform.SetParent(parent, false);
@@ -280,6 +280,7 @@ public class SmplxAvatar : MonoBehaviour
 
         restRoot = skin.RestJoints[0];
         restJoints = (Vector3[])skin.RestJoints.Clone();
+        LoadTrace.Mark("  avatar bones");
 
         Mesh mesh = new() { name = $"{role} SMPL-X", indexFormat = IndexFormat.UInt32 };
         mesh.vertices = skin.RestVertices;
@@ -289,11 +290,14 @@ public class SmplxAvatar : MonoBehaviour
         // the seam-split mesh carries the unsplit normals; recalculating would crease every UV seam
         if (skin.Normals != null) mesh.normals = skin.Normals;
         else mesh.RecalculateNormals();
+        LoadTrace.Mark("  avatar mesh arrays");
         SetBoneWeights(mesh, skin.Weights, skin.RestVertices.Length);
+        LoadTrace.Mark("  avatar bone weights");
         footMask = FootMask(skin);
         mesh.SetUVs(1, footMask);
         mesh.bindposes = bindposes;
         mesh.RecalculateBounds();
+        LoadTrace.Mark("  avatar foot mask + bounds");
         VertexCount = skin.RestVertices.Length;
 
         skinned = gameObject.AddComponent<SkinnedMeshRenderer>();
@@ -308,8 +312,18 @@ public class SmplxAvatar : MonoBehaviour
         float lightInfluence = 0.35f; // the photo albedo carries the studio lighting
         if (skin.Textured && !string.IsNullOrEmpty(albedoPath) && System.IO.File.Exists(albedoPath))
         {
-            albedo = LoadTexture(albedoPath, $"{role} albedo",
-                readable => display = DisplayTransparency.FromTexture(readable, skin.RestVertices, skin.Triangles, skin.Uv, Color.white));
+            if (BakedTexture.TryLoad(albedoPath, $"{role} albedo", out Texture2D baked, out DisplayTransparency bakedDisplay) && bakedDisplay != null)
+            {
+                // the deploy step compressed the albedo for the GPU and measured its transparency model beforehand: nothing to decode or sample here
+                albedo = baked;
+                display = bakedDisplay;
+            }
+            else
+            {
+                albedo = LoadTexture(albedoPath, $"{role} albedo",
+                    readable => display = DisplayTransparency.FromTexture(readable, skin.RestVertices, skin.Triangles, skin.Uv, Color.white));
+            }
+
             tex = albedo;
         }
         else
@@ -324,6 +338,7 @@ public class SmplxAvatar : MonoBehaviour
             lightInfluence = 0.9f;
         }
 
+        LoadTrace.Mark("  avatar albedo (png decode + transparency model)");
         display ??= DisplayTransparency.FromColour(tint);
 
         (depthMaterial, colourMaterial) = NewMaterials($"{role} avatar{(albedo != null ? " (textured)" : "")}", tex, tint, lightInfluence);
@@ -592,6 +607,7 @@ public class SmplxAvatar : MonoBehaviour
     /// Quest) and released from CPU memory</summary>
     public static Texture2D LoadTexture(string path, string name, Action<Texture2D> whileReadable = null)
     {
+        if (whileReadable == null && BakedTexture.TryLoad(path, name, out Texture2D bakedTex, out _)) return bakedTex;
         Texture2D tex = new(2, 2, TextureFormat.RGBA32, true, false) { name = name };
         if (!tex.LoadImage(System.IO.File.ReadAllBytes(path), false))
         {

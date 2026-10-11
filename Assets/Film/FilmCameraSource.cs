@@ -304,17 +304,37 @@ public class FilmCameraSource
         cameraIds.Sort(StringComparer.Ordinal);
     }
 
+    static string TracksFile(FilmDirection d)
+    {
+        string dir = Path.Combine(d.Dir, "cameras");
+        if (!Directory.Exists(dir)) return null;
+        string file = Path.Combine(dir, $"{d.Take}_cameras.json");
+        if (!File.Exists(file)) file = Directory.GetFiles(dir, "*_cameras.json").FirstOrDefault();
+        return file;
+    }
+
+    /// <summary>start parsing the film's own camera tracks on a worker thread (the headset's lesson load)</summary>
+    public static void PrefetchTracks(FilmDirection d)
+    {
+        try
+        {
+            string file = TracksFile(d);
+            if (file != null) LoadPrefetch.Start("filmcams:" + file, () => JObject.Parse(File.ReadAllText(file)));
+        }
+        catch (Exception)
+        {
+            // LoadTracks reports it
+        }
+    }
+
     void LoadTracks(FilmDirection d)
     {
         if (tracks.Count > 0) return;
-        string dir = Path.Combine(d.Dir, "cameras");
-        if (!Directory.Exists(dir)) return;
-        string file = Path.Combine(dir, $"{d.Take}_cameras.json");
-        if (!File.Exists(file)) file = Directory.GetFiles(dir, "*_cameras.json").FirstOrDefault();
+        string file = TracksFile(d);
         if (file == null) return;
         try
         {
-            JObject j = JObject.Parse(File.ReadAllText(file));
+            JObject j = LoadPrefetch.Take("filmcams:" + file, () => JObject.Parse(File.ReadAllText(file)));
             foreach (JToken c in j["cameras"] ?? new JArray())
             {
                 Track t = new()
