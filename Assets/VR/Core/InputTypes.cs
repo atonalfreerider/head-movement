@@ -76,8 +76,11 @@ namespace HmVr
         /// <summary>distance between the thumb tip and the index tip</summary>
         public float PinchDistance => Vector3.Distance(ThumbTip, IndexTip);
 
-        /// <summary>hand size relative to an average adult hand (wrist to middle knuckle = 9 cm), clamped</summary>
-        public float Scale => Mathf.Clamp(Vector3.Distance(Wrist, MiddleKnuckle) / 0.09f, 0.7f, 1.3f);
+        /// <summary>world metres per real metre while the whole dance is scaled (the rig carries the inverse of the dance's size; 1 = life size)</summary>
+        public static float WorldScale = 1f;
+
+        /// <summary>hand size relative to an average adult hand (wrist to middle knuckle = 9 cm), clamped; in world units (follows WorldScale)</summary>
+        public float Scale => Mathf.Clamp(Vector3.Distance(Wrist, MiddleKnuckle) / (0.09f * WorldScale), 0.7f, 1.3f) * WorldScale;
 
         /// <summary>
         /// The direction out of the palm, from the joints themselves (so it does not depend on a runtime's joint-axis convention):
