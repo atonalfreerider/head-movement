@@ -5,10 +5,12 @@ build placed anywhere, or the Quest (Android: StreamingAssets is inside the APK,
     powershell -File Tools/deploy_data.ps1 -Out Builds/data                  # lay the data out in a folder
     powershell -File Tools/deploy_data.ps1 -Out Builds/data -Push            # ... and push it to a Quest over adb
     powershell -File Tools/deploy_data.ps1 -Out Builds/data -Only demo,recap # some films only
-    powershell -File Tools/deploy_data.ps1 -Out Builds/data -PhoneVideo      # include the phones' frame strips (hundreds of MB; VR does not draw them)
+    powershell -File Tools/deploy_data.ps1 -Out Builds/data -PhoneVideo      # include the phones' frame strips and clips (hundreds of MB; VR does not draw them)
+    powershell -File Tools/deploy_data.ps1 -Out Builds/data -Push -Serial <adb serial>   # with several headsets attached, name the one (adb devices)
 
 What it copies, for every film of StreamingAssets/library/library.json that is ready:
-  <capture>/                  the capture folder without .meta files (and without the phones' *.hmj frame strips unless -PhoneVideo)
+  <capture>/                  the capture folder without .meta files: avatars (smplx bins, albedo), hair groom, shoes / head props, room mesh, audio,
+                              physics / timing data - and without the phones' *.hmj frame strips and *.mp4 clips unless -PhoneVideo
   library/films/<id>/         the film: direction.json, narration/timeline*.json, audio/<name>_mix.wav (the soundtrack), emoji, chapters
   library/thumbs/             the posters
   library/library.json        rewritten so every path is relative to the library folder
@@ -22,7 +24,8 @@ param(
     [string[]]$Only = @(),
     [switch]$PhoneVideo,
     [switch]$Push,
-    [string]$Package = "com.headmovement.viewer"
+    [string]$Package = "com.headmovement.viewer",
+    [string]$Serial = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -61,7 +64,7 @@ foreach ($f in $lib.films) {
     $dir = Resolve-Data $f.direction
     if (-not (Test-Path $capDir) -or -not $dir -or -not (Test-Path $dir)) { Write-Host "skip $($f.id): capture or film not ready"; continue }
     Write-Host "== $($f.id)  ($($f.capture))"
-    $exclude = if ($PhoneVideo) { @() } else { @("*.hmj") }
+    $exclude = if ($PhoneVideo) { @() } else { @("*.hmj", "*.mp4") }
     Copy-Tree $capDir (Join-Path $out $f.capture) $exclude
 
     $film = Split-Path $dir -Parent
@@ -110,9 +113,21 @@ Write-Host ("deployed {0} film(s) to {1} ({2:0} MB)" -f $films.Count, $out, $siz
 if ($Push) {
     $adb = (Get-ChildItem "C:/Program Files/Unity/Hub/Editor/*/Editor/Data/PlaybackEngines/AndroidPlayer/SDK/platform-tools/adb.exe" | Select-Object -Last 1).FullName
     if (-not $adb) { throw "adb not found in the Unity editor's Android module" }
-    & $adb devices
+    $devs = @(& $adb devices | Select-Object -Skip 1 | Where-Object { $_ -match "\sdevice$" } | ForEach-Object { ($_ -split "\s+")[0] })
+    if ($devs.Count -eq 0) { throw "no authorised headset in 'adb devices'" }
+    if (-not $Serial) {
+        if ($devs.Count -gt 1) { throw "several devices attached ($($devs -join ', ')): pass -Serial <serial>" }
+        $Serial = $devs[0]
+    }
+    elseif ($devs -notcontains $Serial) { throw "device $Serial is not attached and authorised ($($devs -join ', '))" }
+    $a = @("-s", $Serial)
+    $env:MSYS_NO_PATHCONV = "1"
+    Write-Host "headset $Serial"
+    & $adb @a shell "df -h /sdcard | tail -n 1"
     $target = "/sdcard/Android/data/$Package/files/hm_data"
-    & $adb shell "mkdir -p $target"
-    & $adb push "$out/." $target
-    Write-Host "pushed to $target"
+    & $adb @a shell "mkdir -p $target"
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    & $adb @a push "$out/." $target
+    Write-Host ("pushed {0:0} MB to {1} in {2:0} s" -f $size, $target, $sw.Elapsed.TotalSeconds)
+    & $adb @a shell "df -h /sdcard | tail -n 1"
 }

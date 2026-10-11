@@ -30,7 +30,7 @@ namespace HmVr.Editor
     {
         [CliCommand("hm_vr", "VR mode (Play mode, simulated hands): state | enter | exit | widgets | aim | poke | palm | pinch | hold | rest | look | head | dominant | lost | selftest | result")]
         public static string Vr(
-            [CliArg("action", "state | enter | exit | widgets | aim | poke | palm | pinch | hold | rest | look | head | dominant | lost | instant | selftest | result")] string action = "state",
+            [CliArg("action", "state | enter | exit | widgets | aim | poke | palm | pinch | hold | handat | rest | look | head | dominant | lost | instant | display | place | hair | tier | selftest | result")] string action = "state",
             [CliArg("hand", "left | right")] string hand = "right",
             [CliArg("widget", "widget id (see widgets)")] string widget = null,
             [CliArg("value", "pinch 0..1 / lateral metres / yaw")] float value = 0f,
@@ -39,7 +39,10 @@ namespace HmVr.Editor
             [CliArg("u", "aim at a slider: position 0..1 along it")] float u = -1f,
             [CliArg("yaw", "head yaw (degrees, world)")] float yaw = 0f,
             [CliArg("pitch", "head pitch (degrees, down positive)")] float pitch = 0f,
-            [CliArg("flag", "enter: simulated; palm: raised; instant/lost: on")] bool flag = true)
+            [CliArg("flag", "enter: simulated; palm: raised; instant/lost: on")] bool flag = true,
+            [CliArg("x", "handat: metres right of the head")] float x = 0f,
+            [CliArg("y", "handat: metres above the head (negative = below)")] float y = -0.35f,
+            [CliArg("z", "handat: metres in front of the head")] float z = 0.45f)
         {
             string a = (action ?? "state").Trim().ToLowerInvariant();
             if (!EditorApplication.isPlaying && a != "state") throw new InvalidOperationException("enter Play mode first (unity command editor_play)");
@@ -105,6 +108,35 @@ namespace HmVr.Editor
                     break;
                 case "instant":
                     Sim().Instant = flag;
+                    break;
+                case "handat":
+                    Sim().HandAtHead(h, new Vector3(x, y, z), yaw, pinch);
+                    break;
+                case "display": // --widget passthrough | immersive | toggle
+                {
+                    VrDisplay d = Need(mode).Session?.Display ?? throw new InvalidOperationException("no VR session");
+                    string want = (widget ?? "toggle").ToLowerInvariant();
+                    if (want == "toggle") d.Toggle();
+                    else d.Set(want == "passthrough" ? DisplayMode.Passthrough : DisplayMode.Immersive, false);
+                    break;
+                }
+                case "place": // --widget reset | lock | unlock | turn | size1   (--value = degrees for turn)
+                {
+                    VrPlacement p = Need(mode).Session?.Placement ?? throw new InvalidOperationException("no VR session");
+                    switch ((widget ?? "reset").ToLowerInvariant())
+                    {
+                        case "reset": p.ResetInFront(); break;
+                        case "lock": p.SetPlaceMode(false); break;
+                        case "unlock": p.SetPlaceMode(true); break;
+                        case "turn": p.TurnBy(value); break;
+                        case "size1": p.ResetSize(); break;
+                        default: throw new ArgumentException("place: reset | lock | unlock | turn | size1");
+                    }
+
+                    break;
+                }
+                case "hair": // --widget full | light | off
+                    VrQuality.SetHair(VrSettings.ParseLevel(widget, HairLevel.Full), false);
                     break;
                 case "tier":
                     VrQuality.Apply(Need(mode).Session != null && !Need(mode).Session.Input.Source.IsSimulated, flag ? VrQuality.Tier.Quest : VrQuality.Tier.Pc);

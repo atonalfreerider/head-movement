@@ -454,6 +454,8 @@ namespace HmVr.Editor
             Sim.Rest(Hand.Left);
             yield return 0.8f;
 
+            foreach (float w in PassthroughStage()) yield return w;
+
             // wrist button
             Stage("wrist menu button and back to the library");
             Sim.Rest(Hand.Left);
@@ -506,6 +508,222 @@ namespace HmVr.Editor
             Add("no VR objects remain", GameObject.Find("VR Rig") == null && GameObject.Find("VR Session") == null && VrPanel.All.Count == 0, $"panels left: {VrPanel.All.Count}");
             Add("the director's camera is free again", !FilmDirector.HeadIsCamera);
             Stage("done");
+        }
+
+        // ------------------------------------------------------------------ passthrough mixed reality (simulated: no headset, no camera feed)
+
+        static Vector2 RightOfHead(VrRig rig)
+        {
+            float a = rig.HeadRealYawDeg * Mathf.Deg2Rad;
+            return new Vector2(Mathf.Cos(a), -Mathf.Sin(a)); // the head's right on the real floor (x, z)
+        }
+
+        static IEnumerable<float> PassthroughStage()
+        {
+            Stage("passthrough: mixed reality");
+            VrDisplay d = S.Display;
+            VrPlacement pl = S.Placement;
+            VrRig rig = VrRig.Instance;
+            HeadMovement hm = HeadMovement.Instance;
+            Add("the display controller and the placement exist", d != null && pl != null);
+            if (d == null || pl == null) yield break;
+            Sim.Rest(Hand.Left);
+            Sim.Rest(Hand.Right);
+            // the room mesh on (if the capture has one) and the floor grid, so the passthrough has something to hide
+            bool hasRoom = false;
+            try
+            {
+                hm.SetLayerVisible("room", true);
+                hm.SetLayerVisible("grid", true);
+                GameObject room0 = GameObject.Find("Room");
+                hasRoom = room0 != null && room0.transform.Find("Room Mesh") != null;
+            }
+            catch (Exception)
+            {
+                // a capture without a room mesh
+            }
+
+            yield return 0.8f;
+            d.Set(DisplayMode.Passthrough, false);
+            foreach (float w in Until(() => d.PassthroughActive && pl.Active && pl.Current != null, 4f, "switching to passthrough (simulated)")) yield return w;
+            yield return 1.0f;
+            Add("mixed-reality flag is set for the scene layers", MixedReality.Passthrough);
+            Add("the camera clears to alpha 0 on a solid colour", rig.Cam.clearFlags == CameraClearFlags.SolidColor && rig.Cam.backgroundColor.a == 0f, $"flags {rig.Cam.clearFlags} alpha {rig.Cam.backgroundColor.a}");
+            GameObject room = GameObject.Find("Room");
+            Transform rm = room != null ? room.transform.Find("Room Mesh") : null;
+            Add("no room mesh in passthrough", rm == null || !rm.gameObject.activeInHierarchy, hasRoom ? "room mesh object " + (rm != null && rm.gameObject.activeInHierarchy ? "ACTIVE" : "hidden / not loaded") : "this capture has no room mesh");
+            GameObject plane = GameObject.Find("Floor plane");
+            Add("no floor fill in passthrough", plane == null || !plane.activeInHierarchy, plane == null ? "no plane" : "plane active=" + plane.activeInHierarchy);
+            Add("no teleport or snap turn in passthrough", !S.Locomotion.Enabled);
+            Add("the hands are drawn minimal (the real hands are in view)", S.Hands.Minimal);
+            Add("the real floor is the capture's floor (rig on y = 0)", Mathf.Abs(rig.FloorY) < 1e-4f, $"rig floor y {rig.FloorY:0.0000}");
+            Add("life size by default", Mathf.Abs(pl.Current.Scale - 1f) < 1e-4f && Mathf.Abs(rig.RigScale - 1f) < 1e-4f, $"scale {pl.Current.Scale:0.00} rig {rig.RigScale:0.00}");
+            Vector3 centre = pl.Current.Pivot; // the placement's pivot: the couple's centre when it was placed
+            Vector3 headReal = rig.HeadReal;
+            Vector2 pivotReal = pl.Current.ToReal(new Vector2(centre.x, centre.z));
+            float ahead = (pivotReal - new Vector2(headReal.x, headReal.z)).magnitude;
+            Add("the couple stands about 2.2 m in front of the user", Mathf.Abs(ahead - VrPlacement.DefaultDistance) < 0.1f, $"{ahead:0.00} m");
+            Vector3 headFwdReal = rig.DirToReal(rig.Head.forward);
+            headFwdReal.y = 0f;
+            Vector3 toPivot = new(pivotReal.x - headReal.x, 0f, pivotReal.y - headReal.z);
+            Add("and straight ahead of where the user looks", Vector3.Angle(headFwdReal, toPivot) < 8f, $"{Vector3.Angle(headFwdReal, toPivot):0.0} deg off");
+            Add("Place mode is on with its panel", pl.PlaceMode && pl.PanelShown, $"place={pl.PlaceMode} panel={pl.PanelShown}");
+            yield return 0.4f;
+
+            // the hand panel's Views tab becomes Place
+            Sim.PalmUp(Hand.Left, true);
+            foreach (float w in Until(() => S.HandPanel.Shown, 3f, "hand panel shows in passthrough")) yield return w;
+            yield return 0.4f;
+            Add("the hand panel's Views tab is the Place tab", W("tab views").Label.text == "Place", "label " + W("tab views").Label.text);
+            Sim.PalmUp(Hand.Left, false);
+            yield return 0.8f;
+
+            // a pinch in the air holds the dance: slide it 30 cm to the right
+            Stage("passthrough: pinch-drag to move");
+            Vector2 a0 = pl.Current.Anchor;
+            float yaw0 = pl.Current.YawDeg;
+            Sim.HandAtHead(Hand.Right, new Vector3(0.45f, -0.25f, 0.45f), 0f, 0f);
+            yield return 1.0f;
+            Sim.SetPinch(Hand.Right, 1f);
+            yield return 0.7f;
+            a0 = pl.Current.Anchor;
+            Add("a pinch in the air (not on a panel) holds the dance", pl.Holding, $"holding={pl.Holding} grabs={pl.Grabs}");
+            Sim.HandAtHead(Hand.Right, new Vector3(0.75f, -0.25f, 0.45f), 0f, 1f);
+            yield return 1.0f;
+            Vector2 moved = pl.Current.Anchor - a0;
+            Vector2 right = RightOfHead(rig);
+            float along = Vector2.Dot(moved, right), across = Mathf.Abs(Vector2.Dot(moved, new Vector2(-right.y, right.x)));
+            Add("sliding the hand 30 cm slides the dance 30 cm", Mathf.Abs(along - 0.30f) < 0.07f && across < 0.07f, $"moved {along:0.000} along, {across:0.000} across");
+            Add("sliding does not turn it", Mathf.Abs(Mathf.DeltaAngle(yaw0, pl.Current.YawDeg)) < 3f, $"yaw {yaw0:0.0} -> {pl.Current.YawDeg:0.0}");
+            Add("the rig carries the move (the pivot stands at the anchor)", Vector2.Distance(pl.Current.ToReal(new Vector2(centre.x, centre.z)), pl.Current.Anchor) < 0.02f);
+            Sim.HandAtHead(Hand.Right, new Vector3(0.75f, -0.25f, 0.45f), 0f, 0f);
+            yield return 0.6f;
+            Add("opening the pinch lets go", !pl.Holding);
+
+            // twist the hand: the dance turns (after the dead zone)
+            Stage("passthrough: twist to turn");
+            Sim.HandAtHead(Hand.Right, new Vector3(0.45f, -0.25f, 0.45f), 0f, 0f);
+            yield return 0.8f;
+            Sim.HandAtHead(Hand.Right, new Vector3(0.45f, -0.25f, 0.45f), 0f, 1f);
+            yield return 0.8f;
+            float yawBefore = pl.Current.YawDeg;
+            Sim.HandAtHead(Hand.Right, new Vector3(0.45f, -0.25f, 0.45f), 50f, 1f);
+            yield return 1.2f;
+            float turned = Mathf.DeltaAngle(yawBefore, pl.Current.YawDeg);
+            Add("turning the hand 50 degrees turns the dance past the dead zone", turned > 24f && turned < 44f, $"turned {turned:0.0} deg (expect about {50f - VrPlacement.TwistDeadDeg:0})");
+            Sim.HandAtHead(Hand.Right, new Vector3(0.45f, -0.25f, 0.45f), 50f, 0f);
+            yield return 0.6f;
+
+            // two hands: spread to make it larger
+            Stage("passthrough: two-hand spread to resize");
+            Sim.HandAtHead(Hand.Left, new Vector3(-0.15f, -0.25f, 0.45f), 0f, 0f);
+            Sim.HandAtHead(Hand.Right, new Vector3(0.15f, -0.25f, 0.45f), 0f, 0f);
+            yield return 0.9f;
+            Sim.SetPinch(Hand.Left, 1f);
+            yield return 0.25f;
+            Sim.SetPinch(Hand.Right, 1f);
+            yield return 0.7f;
+            Add("pinching with both hands holds with both", pl.Holding && pl.TwoHandGrabs >= 1, $"two-hand grabs {pl.TwoHandGrabs}");
+            Sim.HandAtHead(Hand.Left, new Vector3(-0.30f, -0.25f, 0.45f), 0f, 1f);
+            Sim.HandAtHead(Hand.Right, new Vector3(0.30f, -0.25f, 0.45f), 0f, 1f);
+            yield return 1.4f;
+            Add("doubling the spread doubles the size (limit 2x)", pl.Current.Scale > 1.85f && pl.Current.Scale <= 2.001f, $"scale {pl.Current.Scale:0.00}, rig scale {rig.RigScale:0.00}");
+            Add("the rig carries the inverse scale", Mathf.Abs(rig.RigScale * pl.Current.Scale - 1f) < 0.02f, $"rig {rig.RigScale:0.000} x scale {pl.Current.Scale:0.000}");
+            Add("the pinch thresholds follow the scaled hands", Mathf.Abs(HandState.WorldScale - rig.RigScale) < 1e-4f, $"world scale {HandState.WorldScale:0.00}");
+            Sim.HandAtHead(Hand.Left, new Vector3(-0.30f, -0.25f, 0.45f), 0f, 0f);
+            Sim.HandAtHead(Hand.Right, new Vector3(0.30f, -0.25f, 0.45f), 0f, 0f);
+            yield return 0.8f;
+            Sim.Rest(Hand.Left);
+            Sim.Rest(Hand.Right);
+            yield return 0.8f;
+
+            // the panel's buttons
+            Stage("passthrough: Place panel buttons and Lock");
+            yield return 0.8f;
+            foreach (float w in FarClick("size 1:1")) yield return w;
+            yield return 0.8f;
+            Add("Size 1:1 resets the size", Mathf.Abs(pl.Current.Scale - 1f) < 1e-3f && Mathf.Abs(rig.RigScale - 1f) < 1e-3f, $"scale {pl.Current.Scale:0.00}");
+            float yawT = pl.Current.YawDeg;
+            foreach (float w in FarClick("turn right")) yield return w;
+            yield return 0.6f;
+            Add("Turn right turns it 15 degrees", Mathf.Abs(Mathf.DeltaAngle(yawT, pl.Current.YawDeg) - VrPlacement.TurnStepDeg) < 0.5f, $"yaw {yawT:0.0} -> {pl.Current.YawDeg:0.0}");
+            foreach (float w in FarClick("in front of me")) yield return w;
+            Vector3 centre2 = pl.Current.Pivot; // "in front of me" re-pivots on the couple where it is now
+            Vector2 pivotAgain = pl.Current.ToReal(new Vector2(centre2.x, centre2.z));
+            Add("In front of me puts it back 2.2 m ahead", Mathf.Abs((pivotAgain - new Vector2(headReal.x, headReal.z)).magnitude - VrPlacement.DefaultDistance) < 0.1f, $"{(pivotAgain - new Vector2(headReal.x, headReal.z)).magnitude:0.00} m");
+            foreach (float w in FarClick("lock")) yield return w;
+            Add("Lock leaves Place mode", !pl.PlaceMode);
+            yield return 0.6f;
+            Add("the Place panel goes away when locked", !pl.PanelShown, $"alpha {pl.Panel.Alpha:0.00}");
+            Vector2 lockedAnchor = pl.Current.Anchor;
+            Sim.HandAtHead(Hand.Right, new Vector3(0.45f, -0.25f, 0.45f), 0f, 1f);
+            yield return 0.8f;
+            Sim.HandAtHead(Hand.Right, new Vector3(0.80f, -0.25f, 0.45f), 0f, 1f);
+            yield return 0.8f;
+            Add("a locked dance ignores pinch-drags", !pl.Holding && Vector2.Distance(lockedAnchor, pl.Current.Anchor) < 1e-4f, $"moved {Vector2.Distance(lockedAnchor, pl.Current.Anchor):0.0000}");
+            Sim.HandAtHead(Hand.Right, new Vector3(0.80f, -0.25f, 0.45f), 0f, 0f);
+            yield return 0.4f;
+            Sim.Rest(Hand.Right);
+            yield return 0.4f;
+            Sim.PalmUp(Hand.Left, true);
+            yield return 1.2f;
+            foreach (float w in PokeClick("tab views")) yield return w;
+            Add("the Place tab turns Place mode back on", pl.PlaceMode);
+            Sim.PalmUp(Hand.Left, false);
+            yield return 1.0f;
+
+            // the headset HUD items and the menu's view toggle
+            Stage("passthrough: HUD and the view toggle");
+            Add("the VR HUD exists (beat counter / rhythm score where the lesson turns them on)", S.Hud != null);
+            S.Menu.Open(true);
+            yield return 1.0f;
+            foreach (float w in FarClick("view mode")) yield return w;
+            Add("the menu's View button switches to immersive and remembers it", d.Wanted == DisplayMode.Immersive && !d.PassthroughActive, $"wanted {d.Wanted} state {d.Current}");
+            Add("scene layers are back to immersive", !MixedReality.Passthrough && rig.Cam.backgroundColor.a > 0.99f, $"mr={MixedReality.Passthrough} alpha {rig.Cam.backgroundColor.a:0.00}");
+            Add("the rig is back at scale 1", Mathf.Abs(rig.RigScale - 1f) < 1e-4f && Mathf.Abs(HandState.WorldScale - 1f) < 1e-4f);
+            GameObject room2 = GameObject.Find("Room");
+            Transform rm2 = room2 != null ? room2.transform.Find("Room Mesh") : null;
+            if (hasRoom)
+            {
+                hm.SetLayerVisible("room", true); // the film's own segment may have switched the room layer off meanwhile
+                yield return 0.6f;
+                room2 = GameObject.Find("Room");
+                rm2 = room2 != null ? room2.transform.Find("Room Mesh") : null;
+                Add("the room mesh loads again in immersive", rm2 != null && rm2.gameObject.activeInHierarchy, "room mesh " + (rm2 != null ? "active=" + rm2.gameObject.activeInHierarchy : "missing"));
+            }
+            GameObject plane2 = GameObject.Find("Floor plane");
+            Add("the floor plane comes back in immersive (when the film shows the grid)", plane2 != null ? plane2.activeInHierarchy : !hm.Grid.Visible, plane2 != null ? "plane active" : "grid layer visible=" + hm.Grid.Visible);
+            yield return 0.6f;
+            Add("viewpoints are back", S.Locomotion.Viewpoints.Count > 0, $"viewpoints {S.Locomotion.Viewpoints.Count}");
+            foreach (float w in FarClick("resume")) yield return w;
+
+            // the hair tier on the Quest settings (a PC run of the Quest tier)
+            Stage("quest tier: hair");
+            S.Perf.Adaptive = false; // an editor frame is slower than a headset's budget: the adaptive step-down is exercised on the device
+            VrQuality.Apply(false, VrQuality.Tier.Quest);
+            HairStrands hair = UnityEngine.Object.FindAnyObjectByType<HairStrands>();
+            if (hair == null)
+            {
+                Add("(this film has no groomed hair: the hair tier is not exercised)", true);
+            }
+            else
+            {
+                yield return 0.5f;
+                Add("hair stays ON in the Quest tier (Full)", hair.enabled && hair.Visible && VrQuality.Hair == HairLevel.Full, $"enabled={hair.enabled} level={VrQuality.Hair}");
+                VrQuality.SetHair(HairLevel.Light, false);
+                Add("Light: cheaper levels sooner, no tip glow", hair.enabled && hair.LodScale > 1.2f && hair.MinLod >= 1 && hair.TipGlow == 0f, $"lodScale {hair.LodScale} minLod {hair.MinLod} tips {hair.TipGlow}");
+                VrQuality.SetHair(HairLevel.Off, false);
+                yield return 0.3f;
+                Add("Off: nothing simulated or drawn", !hair.enabled && !hair.RendererVisible && !hair.GlowVisible, $"enabled={hair.enabled} drawn={hair.RendererVisible}");
+                VrQuality.SetHair(HairLevel.Full, false);
+                yield return 0.5f;
+                Add("Full again: hair back", hair.enabled && hair.Visible, $"enabled={hair.enabled}");
+            }
+
+            VrQuality.Restore();
+            Add("the PC tier is restored", VrQuality.Current == VrQuality.Tier.Pc);
+            hm.SetLayerVisible("room", false);
+            yield return 0.3f;
         }
 
         static int FindFlatCanvases() => UnityEngine.Object.FindObjectsByType<Canvas>().Count(c => c.renderMode == RenderMode.ScreenSpaceOverlay && c.enabled);

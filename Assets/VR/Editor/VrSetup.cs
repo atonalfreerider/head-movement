@@ -12,6 +12,7 @@ using UnityEngine.XR.Management;
 using UnityEngine.XR.OpenXR;
 using UnityEngine.XR.OpenXR.Features;
 using UnityEngine.XR.OpenXR.Features.Interactions;
+using UnityEngine.XR.OpenXR.Features.Meta;
 using UnityEngine.XR.OpenXR.Features.MetaQuestSupport;
 
 namespace HmVr.Editor
@@ -88,6 +89,24 @@ namespace HmVr.Editor
                 {
                     Enable<MetaQuestFeature>(oxr, group, log);
                     Enable<FoveatedRenderingFeature>(oxr, group, log);
+                    // passthrough mixed reality: AR Foundation's session + the Meta camera (passthrough) feature, and the refresh-rate request
+                    Enable<ARSessionFeature>(oxr, group, log);
+                    Enable<ARCameraFeature>(oxr, group, log);
+                    Enable<DisplayUtilitiesFeature>(oxr, group, log);
+                    ARCameraFeature cam = oxr.GetFeature<ARCameraFeature>();
+                    if (cam != null && cam.enabled)
+                    {
+                        SerializedObject so = new(cam);
+                        SerializedProperty pre = so.FindProperty("m_PassthroughPreSplashScreen");
+                        if (pre != null && !pre.boolValue)
+                        {
+                            pre.boolValue = true; // the system splash is the real room too: no black flash before the app
+                            so.ApplyModifiedProperties();
+                            EditorUtility.SetDirty(cam);
+                        }
+
+                        log.AppendLine($"{group}: passthrough pre-splash screen on");
+                    }
                 }
 
                 oxr.renderMode = OpenXRSettings.RenderMode.SinglePassInstanced;
@@ -104,6 +123,8 @@ namespace HmVr.Editor
         /// <summary>the Android player settings of a Quest 2 / 3 standalone build (they only matter for an Android build; the editor stays on its build target)</summary>
         static void ApplyAndroidPlayer(StringBuilder log)
         {
+            PlayerSettings.productName = "Head Movement"; // the name in the headset's library (Unknown Sources); was the project's template name
+            PlayerSettings.enableFrameTimingStats = true; // FrameTimingManager: GPU / CPU frame time for the on-device log (VrPerf)
             PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel29; // Quest 2 runs Android 10 and up
             PlayerSettings.Android.targetSdkVersion = AndroidSdkVersions.AndroidApiLevelAuto;
             PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
@@ -112,7 +133,7 @@ namespace HmVr.Editor
             PlayerSettings.SetUseDefaultGraphicsAPIs(BuildTarget.Android, false);
             PlayerSettings.SetGraphicsAPIs(BuildTarget.Android, new[] { UnityEngine.Rendering.GraphicsDeviceType.Vulkan, UnityEngine.Rendering.GraphicsDeviceType.OpenGLES3 });
             EditorUserBuildSettings.androidBuildSubtarget = MobileTextureSubtarget.ASTC;
-            log.AppendLine("Android player: min API 29, ARM64, IL2CPP, Vulkan then GLES3, ASTC textures, package com.headmovement.viewer");
+            log.AppendLine("Android player: product name 'Head Movement', min API 29, ARM64, IL2CPP, Vulkan then GLES3, ASTC textures, package com.headmovement.viewer, frame timing stats on");
         }
 
         static XRGeneralSettingsPerBuildTarget Store()
