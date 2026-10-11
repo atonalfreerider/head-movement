@@ -1,3 +1,4 @@
+using HmVr;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -23,6 +24,18 @@ public class LibraryEntry
     public string Id, Title, Subtitle, Capture, Thumbnail, Direction, ChaptersFile, Note;
     public float DurationS = float.NaN;
     public bool AvailableFlag = true;
+
+    /// <summary>the film's soundtrack carries speech (library.json "dialogue", default false): it is never heard in slow motion, the captions stay</summary>
+    public bool Dialogue;
+
+    /// <summary>"pitch" (default) | "mute": what a film WITHOUT dialogue does with its sound in slow motion (library.json "slowmoAudio" or "slowmo_audio")</summary>
+    public string SlowmoAudio = "pitch";
+
+    /// <summary>the sound's behaviour below 1x: dialogue always fades out; music follows slowmo_audio (pitch = it slows with the picture)</summary>
+    public SlowAudioMode SlowAudio => Dialogue || string.Equals(SlowmoAudio, "mute", StringComparison.OrdinalIgnoreCase) ? SlowAudioMode.Mute : SlowAudioMode.Pitch;
+
+    /// <summary>the small note the bar and the VR panel show while the sound is faded out for slow motion</summary>
+    public string SlowAudioHint => Dialogue ? "dialogue paused" : "sound paused";
     public readonly List<LibraryChapter> Chapters = new();
 
     // resolved by Probe() (absolute paths; null = not resolvable)
@@ -145,6 +158,9 @@ public class LibraryData
                 if (string.IsNullOrEmpty(e.Title)) e.Title = e.Id;
                 if (o["durationS"] is JToken dur && (dur.Type == JTokenType.Float || dur.Type == JTokenType.Integer)) e.DurationS = dur.Value<float>();
                 if (o["available"] is JToken av && av.Type == JTokenType.Boolean) e.AvailableFlag = av.Value<bool>();
+                if (o["dialogue"] is JToken dl && dl.Type == JTokenType.Boolean) e.Dialogue = dl.Value<bool>();
+                string slowmo = o.Value<string>("slowmoAudio") ?? o.Value<string>("slowmo_audio");
+                if (!string.IsNullOrWhiteSpace(slowmo)) e.SlowmoAudio = slowmo.Trim().ToLowerInvariant();
                 ReadChapters(o["chapters"] as JArray, e);
                 if (e.Chapters.Count == 0 && !string.IsNullOrEmpty(e.ChaptersFile)) ReadChaptersFile(e);
                 e.NormaliseChapters(e.DurationS);

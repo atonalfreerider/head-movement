@@ -141,7 +141,7 @@ The lesson starts; you stand about 3 m from the dancers at the floor's edge, fac
 | Press a button | poke it with the index finger, or point at it and pinch (thumb and index together); opening the pinch on the same button clicks |
 | Hand panel (play, slow motion, chapters, scrubber, viewpoints, library) | raise your **left** palm, facing up (or toward your face), in front of you; the panel floats above your hand. **Pin** keeps it in the air |
 | Seek | the scrubber on the hand panel: pinch and drag it (it sticks to chapter ticks); or +5 s / -5 s, previous / next chapter, **Chapters** list |
-| Slow motion | 1x, 0.5x, 0.25x, 0.1x on the panel (captions, 3D layers and the soundtrack follow) |
+| Slow motion | 1x, 0.5x, 0.25x, 0.1x on the panel (captions and 3D layers follow; music slows with the picture, a lesson with speech is silent in slow motion, the panel says "dialogue paused", and it is back at 1x) |
 | Teleport | with the **right** hand, pinch where no panel is, hold (an arc and a landing disc appear), open the pinch to go |
 | Turn 45 degrees | pinch with the **left** hand and flick it sideways; or Views > Turn 45 |
 | Another viewpoint | Chapters/Views tabs > Views: floor edge, front row, from the side, overhead, and each filming phone's real place in the room |

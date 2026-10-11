@@ -19,6 +19,9 @@ Checks, in order:
   scrub     a pointer drag on the scrubber follows the pointer, holds the sound, and restores playing / paused at the release; a click on a
             chapter tick jumps to the chapter's start
   keys      Space, Left / Right, [ and ] and Home / End act on the film
+  slowmo    the sound in slow motion (FILM_LIBRARY.md section 7): per the entry's flags a film with dialogue is silent below 1x (volume 0 within
+            200 ms, the player still running in step, the bar says "dialogue paused", captions still advance, a seek or a pause while slow keeps it
+            silent, 1.5x and 1x bring it back within 200 ms) and a music film keeps its pitch behaviour (pitch = rate, no note)
   back      the Back button (and Esc) stop the film and show the library again; nothing of the film's overlay remains
   heat      (a film without narration, the auto-directed heat) the beat counter follows the direction's layers at every seek; the cards do
             not overlap (three cards fit a landscape and a portrait window)
@@ -522,6 +525,107 @@ Assert (Key-Effect "End" { [double](State).film.filmTime -gt $filmDur - 0.1 }) "
 Lib @("--action", "rate", "--value", "1.5") | Out-Null
 Assert ([math]::Abs([double](State).film.rate - 1.5) -lt 0.01) "speed 1.5x"
 Lib @("--action", "rate", "--value", "1") | Out-Null
+
+# ------------------------------------------------------------------------------------------------ sound in slow motion
+$script:current = "slowmo"
+Write-Host "== sound in slow motion (docs/FILM_LIBRARY.md section 7)"
+# what the library says this film's sound does below 1x: "mute" (dialogue, or slowmo_audio mute) or "pitch" (it slows with the picture)
+$lf = @((State).library.films | Where-Object { $_.id -eq $entry.id })[0]
+$expectMute = ($lf.slowAudio -eq "mute")
+$expectNote = if ($lf.dialogue) { "dialogue paused" } else { "sound paused" }
+Write-Host ("  policy of {0}: dialogue={1} slowmoAudio={2} -> {3}" -f $entry.id, $lf.dialogue, $lf.slowmoAudio, $(if ($expectMute) { "silent below 1x" } else { "pitch follows the rate" }))
+$kS = [math]::Floor($filmDur * 0.30)
+Lib @("--action", "rate", "--value", "1") | Out-Null
+Lib @("--action", "seek", "--at", "$kS") | Out-Null
+Lib @("--action", "resume") | Out-Null
+Start-Sleep -Milliseconds 900
+$a = (State).film.audio
+Assert ($a.playing -and [double]$a.gain -gt 0.99 -and [double]$a.volume -gt 0.5 -and -not $a.slowMuted) ("1x: the sound is at full level (gain {0}, volume {1})" -f $a.gain, $a.volume)
+Assert ([math]::Abs([double]$a.effectivePitch - 1.0) -lt 0.01) "1x: normal pitch"
+
+Lib @("--action", "rate", "--value", "0.25") | Out-Null
+Start-Sleep -Milliseconds 900
+$x = State
+$a = $x.film.audio
+Assert ([math]::Abs([double]$x.film.rate - 0.25) -lt 0.001) "slow motion 0.25x"
+if ($expectMute) {
+    Assert ([double]$a.gain -lt 0.01 -and [double]$a.volume -lt 0.01) ("0.25x: the soundtrack volume is 0 (gain {0}, volume {1})" -f $a.gain, $a.volume)
+    Assert ([double]$a.fadeOutS -gt 0.0 -and [double]$a.fadeOutS -lt 0.2) ("0.25x: it reached 0 within 200 ms of the speed change (took {0:0} ms)" -f ([double]$a.fadeOutS * 1000))
+    Assert ($a.slowMuted -and $a.slowAudio -eq "mute") "0.25x: the sound is faded out by policy, not paused"
+    Assert ($a.playing) "0.25x: the player keeps running silent (it stays in step with the film clock)"
+    Assert ($x.bar.slowNote -eq $expectNote) ("0.25x: the bar says '{0}'" -f $x.bar.slowNote)
+} else {
+    Assert ([double]$a.gain -gt 0.99 -and -not $a.slowMuted) "0.25x: the sound stays audible (this film keeps the pitch behaviour)"
+    Assert ([math]::Abs([double]$a.pitch - 0.25) -lt 0.01 -and [math]::Abs([double]$a.effectivePitch - 0.25) -lt 0.01) ("0.25x: the pitch follows the rate ({0})" -f $a.effectivePitch)
+    Assert ([string]::IsNullOrEmpty($x.bar.slowNote)) "0.25x: no 'paused' note on the bar"
+}
+if ($a.playing) { Assert ([math]::Abs([double]$a.driftS) -lt 0.15) ("0.25x: the sound keeps its place against the film clock (drift {0} s)" -f $a.driftS) }
+$t0 = [double]$x.film.filmTime
+Start-Sleep -Seconds 2
+$t1 = [double](State).film.filmTime
+Assert (($t1 - $t0) -gt 0.25 -and ($t1 - $t0) -lt 0.9) ("0.25x: the film clock runs at a quarter speed ({0:0.00} film s in 2 real s)" -f ($t1 - $t0))
+
+# seeking while slow: the film lands on the target, the sound is where the policy puts it (still silent / still pitched), in step with the film
+$seekT = [math]::Floor($filmDur * 0.55)
+Lib @("--action", "seek", "--at", "$seekT") | Out-Null
+Start-Sleep -Milliseconds 800
+$x = State
+$a = $x.film.audio
+Assert ([double]$x.film.filmTime -ge $seekT - 0.05 -and [double]$x.film.filmTime -lt $seekT + 1.2) ("a seek while slow lands on the target ({0:0.00} s for {1})" -f [double]$x.film.filmTime, $seekT)
+if ($expectMute) { Assert ([double]$a.gain -lt 0.01 -and [double]$a.volume -lt 0.01) "a seek while slow keeps the dialogue silent" }
+else { Assert ([double]$a.gain -gt 0.99 -and [math]::Abs([double]$a.effectivePitch - 0.25) -lt 0.01) "a seek while slow keeps the music at the slow pitch" }
+if ($a.playing) { Assert ([math]::Abs([double]$a.driftS) -lt 0.15) ("a seek while slow: the sound is in step with the film (drift {0} s)" -f $a.driftS) }
+Lib @("--action", "pause") | Out-Null
+Start-Sleep -Milliseconds 500
+$a = (State).film.audio
+if ($expectMute) { Assert ([double]$a.gain -lt 0.01) "paused while slow: still silent" }
+Lib @("--action", "resume") | Out-Null
+Start-Sleep -Milliseconds 700
+$a = (State).film.audio
+if ($expectMute) { Assert ([double]$a.gain -lt 0.01 -and [double]$a.volume -lt 0.01) "resumed while slow: still silent" }
+
+# the captions are the film clock's: they still advance in slow motion (a caption's end is crossed at a quarter speed)
+if ($null -ne $timeline) {
+    $aspect = (State).film.aspect
+    $capPick = $null
+    foreach ($c in @($timeline.captions.$aspect)) {
+        if ([double]$c.show -gt $filmDur * 0.2 -and ([double]$c.hide - [double]$c.show) -gt 1.5 -and [double]$c.hide -lt $filmDur - 10) { $capPick = $c; break }
+    }
+    if ($null -ne $capPick) {
+        $before = [double]$capPick.hide - 0.5
+        Lib @("--action", "seek", "--at", (Num $before)) | Out-Null
+        Start-Sleep -Milliseconds 700
+        $ov0 = (State).film.overlay.caption
+        $want0 = CaptionAt ([double](State).film.filmTime) $aspect
+        if ($want0 -ne "?") { Assert (($null -ne $ov0) -and ($ov0 -eq $want0)) ("slow motion: the caption before the change is the narration timeline's ('{0}')" -f $(if ($null -ne $ov0) { $ov0.Substring(0, [math]::Min(36, $ov0.Length)) } else { "none" })) }
+        Start-Sleep -Seconds 3
+        $x = State
+        $ov1 = $x.film.overlay.caption
+        Assert ([double]$x.film.filmTime -gt [double]$capPick.hide) ("slow motion: the film passed the caption's end ({0:0.00} > {1:0.00})" -f [double]$x.film.filmTime, [double]$capPick.hide)
+        Assert ($ov1 -ne $ov0) "slow motion: the caption advanced with the film clock"
+        if ($expectMute) { Assert ([double]$x.film.audio.gain -lt 0.01) "slow motion: the captions advance while the sound stays silent" }
+    }
+}
+
+# 0.5x (the bar's own slow motion) obeys the same rule; 1.5x and 2x are not slow motion and keep their pitch; 1x brings the sound back
+Lib @("--action", "rate", "--value", "0.5") | Out-Null
+Start-Sleep -Milliseconds 800
+$a = (State).film.audio
+if ($expectMute) { Assert ([double]$a.gain -lt 0.01) "0.5x: the dialogue is silent" } else { Assert ([double]$a.gain -gt 0.99 -and [math]::Abs([double]$a.effectivePitch - 0.5) -lt 0.01) "0.5x: the music is at half pitch" }
+Lib @("--action", "rate", "--value", "1.5") | Out-Null
+Start-Sleep -Milliseconds 800
+$a = (State).film.audio
+Assert ([double]$a.gain -gt 0.99 -and [math]::Abs([double]$a.effectivePitch - 1.5) -lt 0.01 -and -not $a.slowMuted) ("1.5x: the sound is back and runs at the rate (gain {0}, pitch {1})" -f $a.gain, $a.effectivePitch)
+Lib @("--action", "rate", "--value", "0.25") | Out-Null
+Start-Sleep -Milliseconds 700
+Lib @("--action", "rate", "--value", "1") | Out-Null
+Start-Sleep -Milliseconds 900
+$x = State
+$a = $x.film.audio
+Assert ([double]$a.gain -gt 0.99 -and [double]$a.volume -gt 0.5 -and [math]::Abs([double]$a.effectivePitch - 1.0) -lt 0.01) ("back at 1x: full level, normal pitch (gain {0}, pitch {1})" -f $a.gain, $a.effectivePitch)
+if ($expectMute) { Assert ([double]$a.fadeInS -gt 0.0 -and [double]$a.fadeInS -lt 0.2) ("back at 1x: the sound faded in within 200 ms (took {0:0} ms)" -f ([double]$a.fadeInS * 1000)) }
+Assert ([string]::IsNullOrEmpty($x.bar.slowNote)) "back at 1x: the note is gone"
+Assert ($a.playing -and [math]::Abs([double]$a.driftS) -lt 0.15) ("back at 1x: the sound is in step with the film (drift {0} s)" -f $a.driftS)
 
 # ------------------------------------------------------------------------------------------------ back
 $script:current = "back"

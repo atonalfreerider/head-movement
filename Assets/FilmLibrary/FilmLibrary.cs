@@ -738,7 +738,8 @@ public class FilmLibrary : MonoBehaviour
             {
                 ["id"] = f.Id, ["title"] = f.Title, ["capture"] = f.Capture, ["ready"] = f.Ready, ["why"] = f.WhyNot,
                 ["durationS"] = float.IsFinite(f.DurationS) ? f.DurationS : null, ["chapters"] = f.Chapters.Count,
-                ["thumbnail"] = f.ThumbnailPath != null && File.Exists(f.ThumbnailPath), ["direction"] = f.DirectionPath != null && File.Exists(f.DirectionPath)
+                ["thumbnail"] = f.ThumbnailPath != null && File.Exists(f.ThumbnailPath), ["direction"] = f.DirectionPath != null && File.Exists(f.DirectionPath),
+                ["dialogue"] = f.Dialogue, ["slowmoAudio"] = f.SlowmoAudio, ["slowAudio"] = f.SlowAudio.ToString().ToLowerInvariant()
             }).ToList(),
             ["pickerCaptures"] = LibraryData.PickerCaptureNames(),
             ["screen"] = $"{Screen.width}x{Screen.height}", ["canvas"] = canvas != null && canvas.enabled

@@ -243,7 +243,7 @@ namespace HmVr
             {
                 s["film"] = new Dictionary<string, object>
                 {
-                    ["time"] = Round(VrFilm.Time), ["duration"] = Round(VrFilm.Duration), ["rate"] = VrFilm.Rate, ["paused"] = VrFilm.Paused,
+                    ["time"] = Round(VrFilm.Time), ["duration"] = Round(VrFilm.Duration), ["rate"] = VrFilm.Rate, ["slowNote"] = VrFilm.SlowAudioHint, ["paused"] = VrFilm.Paused,
                     ["chapter"] = VrFilm.ChapterIndex, ["chapterTitle"] = VrFilm.ChapterTitle, ["scrubbing"] = VrFilm.Director.Scrubbing
                 };
             }

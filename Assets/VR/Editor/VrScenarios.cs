@@ -288,9 +288,11 @@ namespace HmVr.Editor
                 Add("previous chapter", VrFilm.ChapterIndex <= c1 + 1 && VrFilm.ChapterIndex >= c1, $"chapter {c1} -> {VrFilm.ChapterIndex}");
             }
 
-            // slow motion
+            // slow motion: a music lesson's sound slows with the picture (pitch = the rate); a dialogue lesson's is faded out instead (no speech two
+            // octaves down) while its captions and the film clock go on
             Stage("slow motion");
             if (VrFilm.Paused) VrFilm.Resume();
+            bool muteSlow = FilmDirector.Instance != null && FilmDirector.Instance.SlowAudio == SlowAudioMode.Mute;
             foreach (float w in PokeClick("rate 0.25x")) yield return w;
             Add("slow motion 0.25x sets the film rate", Mathf.Approximately(FilmRate, 0.25f), $"rate={FilmRate}");
             yield return 0.4f;
@@ -300,15 +302,34 @@ namespace HmVr.Editor
             Add("the film clock runs at a quarter speed", advanced > 0.45f && advanced < 1.1f, $"{advanced:0.00} film s in 3 real s (rate {FilmRate})");
             if (FilmSoundtrack.Current != null)
             {
-                float pitch = FilmSoundtrack.Current.Pitch;
-                Add("the soundtrack follows the rate (pitch, as the flat speed button)", Mathf.Abs(pitch - 0.25f) < 0.02f, $"pitch={pitch:0.00}");
-                Add("the soundtrack stays with the film", Mathf.Abs(FilmSoundtrack.Current.AudioTime - VrFilm.Time) < 0.25f, $"audio {FilmSoundtrack.Current.AudioTime:0.00} vs film {VrFilm.Time:0.00}");
+                FilmSoundtrack st = FilmSoundtrack.Current;
+                if (muteSlow)
+                {
+                    Add("dialogue: the soundtrack is silent in slow motion (faded out, not pitched down)", st.Gain < 0.01f && st.Volume * st.Gain < 0.01f, $"gain={st.Gain:0.00}");
+                    Add("dialogue: the hand panel says the dialogue is paused", VrFilm.SlowAudioHint.Length > 0 && VrHandPanel.Instance.SlowNoteText == VrFilm.SlowAudioHint, $"'{VrHandPanel.Instance.SlowNoteText}'");
+                    Add("dialogue: the player keeps its place against the film clock", Mathf.Abs(st.AudioTime - VrFilm.Time) < 0.25f, $"audio {st.AudioTime:0.00} vs film {VrFilm.Time:0.00}");
+                }
+                else
+                {
+                    float pitch = st.Pitch;
+                    Add("the soundtrack follows the rate (pitch, as the flat speed button)", Mathf.Abs(pitch - 0.25f) < 0.02f, $"pitch={pitch:0.00}");
+                    Add("the soundtrack stays with the film", Mathf.Abs(st.AudioTime - VrFilm.Time) < 0.25f, $"audio {st.AudioTime:0.00} vs film {VrFilm.Time:0.00}");
+                    Add("music: the sound stays audible in slow motion (no hint, full level)", st.Gain > 0.99f && VrFilm.SlowAudioHint.Length == 0, $"gain={st.Gain:0.00}");
+                }
             }
 
             foreach (float w in PokeClick("rate 0.1x")) yield return w;
             Add("slow motion 0.1x", Mathf.Approximately(FilmRate, 0.1f), $"rate={FilmRate}");
+            if (muteSlow && FilmSoundtrack.Current != null) Add("dialogue: still silent at 0.1x", FilmSoundtrack.Current.Gain < 0.01f, $"gain={FilmSoundtrack.Current.Gain:0.00}");
             foreach (float w in PokeClick("rate 1x")) yield return w;
             Add("back to 1x", Mathf.Approximately(FilmRate, 1f), $"rate={FilmRate}");
+            yield return 0.4f;
+            if (FilmSoundtrack.Current != null)
+            {
+                Add("back at 1x the sound is back at full level, normal pitch", FilmSoundtrack.Current.Gain > 0.99f && Mathf.Abs(FilmSoundtrack.Current.EffectivePitch - 1f) < 0.01f,
+                    $"gain={FilmSoundtrack.Current.Gain:0.00} pitch={FilmSoundtrack.Current.EffectivePitch:0.00}");
+                Add("back at 1x the hand panel's note is gone", VrFilm.SlowAudioHint.Length == 0 && VrHandPanel.Instance.SlowNoteText.Length == 0, $"'{VrHandPanel.Instance.SlowNoteText}'");
+            }
 
             // scrubber: pinch-drag with the pointing ray from a step back (the panel pinned in the air), poke-drag otherwise
             Stage("scrubber");

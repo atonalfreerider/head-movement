@@ -814,6 +814,9 @@ looks at the centre of the nodes the path visits so the path stays in frame.
   1.0×; speed is animatable in the director (speed ramps into slow motion on key moments).
 - Audio: at 1.0× normal; below 1.0× time-stretched without pitch change via an AudioMixer pitch-shifter
   setup, or muted below a configurable threshold (default 0.5×) where stretching degrades.
+  In the library viewer (7.1) the rule is per film (FILM_LIBRARY.md section 7): a lesson whose soundtrack is **dialogue** plays no sound in any
+  slow motion (it fades out in about 120 ms below 1×, back in at 1× or faster; the captions stay and the bar says "dialogue paused"), because
+  pitching speech down by the rate is unintelligible; a music lesson slows its sound with the picture unless its entry says `slowmo_audio: "mute"`.
 - The existing lesson transport (play/pause, beat/measure step, loop measure, seek) and CLI `hm_*`
   commands remain and gain `hm_state <name>`, `hm_camera <id>`, `hm_speed <x>`, `hm_graph`, `hm_tour`.
 
@@ -953,8 +956,8 @@ degrees.
 and the time, a pinch-drag **scrubber** with chapter ticks that the drag sticks to, previous / next chapter, -5 s / +5 s, play / pause,
 **slow motion 1x, 0.5x, 0.25x, 0.1x**, **Chapters** (a paged list to poke), **Views** (the viewpoint presets and two 45-degree turns), CC,
 Library. It drives `FilmPlaybackBar` and the director like the flat bar, so a seek re-syncs the soundtrack, captions and layers exactly,
-and slow motion is the film clock's rate: captions, 3D layers and the soundtrack (pitched with the rate, as the flat speed button)
-stay together. A small **menu button on the back of the non-dominant wrist** opens the menu over the lesson (it pauses behind it).
+and slow motion is the film clock's rate: captions, 3D layers and the soundtrack (pitched with the rate, as the flat speed button;
+a dialogue lesson's soundtrack is faded out instead, with a "dialogue paused" note on the panel) stay together. A small **menu button on the back of the non-dominant wrist** opens the menu over the lesson (it pauses behind it).
 
 **Locomotion** (no smooth motion): *teleport* = pinch with the dominant hand where no panel is, hold to see the arc and the landing disc,
 open to go (a blink hides the jump; at most 9 m from the user, inside a 14 m disc around the dance); *snap turn* = pinch with the other
@@ -1161,7 +1164,7 @@ pipeline (MOVES.md).
 - VR mode (Tools/playtest_vr.ps1, section 9.5; simulated hands, no headset): a card per library film with 5.8 cm Play buttons and at least
   3 cm between cards, Processing disabled; a lesson picked by pointing and pinching; the head camera is the only camera and the film moves
   it by 0 m / 0 degrees over 1.5 s of film, with no flat overlay in the picture; the start vantage lies 2 to 5.5 m from the dancers, facing
-  them; palm-up shows the hand panel; play / pause, +5 s / -5 s, chapters, slow motion 0.25x and 0.1x (clock rate, soundtrack pitch and sync),
+  them; palm-up shows the hand panel; play / pause, +5 s / -5 s, chapters, slow motion 0.25x and 0.1x (clock rate, soundtrack pitch and sync; a dialogue lesson is silent in slow motion, with the panel's note, and back at 1x),
   the pinch-drag scrubber (holds the film, audio re-synced on release), the chapter list, every viewpoint (a phone lands at its real position),
   teleport, the 45 degree snap turn, the wrist menu button, Back to library (film, bar and soundtrack gone), Exit VR (the desktop camera and the
   flat library are back); the EditMode tests of HmVr.Core.Tests pass; the recorder path is unchanged (a recorded excerpt contains no VR object).
@@ -1198,7 +1201,7 @@ Defaults (change any of these):
 - Avatar opacity 0.35 (hm_opacity; Overhead ×2/3, Geometry ×1/2, Physics ×1/3); floor alpha 0.6 (0.25 in
   passthrough); teal #19C3D6.
 - Trace windows: footprints 4 measures, spirals 2 measures.
-- Slow-motion audio muted below 0.5×.
+- Slow-motion audio: a dialogue lesson is muted in any slow motion (below 1×), a music lesson keeps its pitch behaviour unless its entry sets `slowmo_audio: "mute"` (FILM_LIBRARY.md section 7).
 - Default render preset: Vertical HD 1080×1920 @ 30 fps.
 - Miniature couple scale 0.15 in the graph; graph at true scale centred on the origin.
 

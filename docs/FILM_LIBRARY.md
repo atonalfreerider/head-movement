@@ -50,6 +50,8 @@ workspace. Nothing about it is published.
 | `chapters` | list | `{title, startS, endS?}` in **film** seconds (the clock of the bar). Contiguous: each ends where the next begins, the last at the end of the film; the viewer re-derives the ends. Empty list: no marks, the bar still seeks. |
 | `chaptersFile` | string | optional instead of `chapters`: a JSON file holding the list (or `{"chapters": [...]}`). |
 | `available` | bool | optional, default true. `false` forces the card to "Processing" even when the files exist (a film held back). |
+| `dialogue` | bool | optional, default false. `true` = the film's soundtrack carries speech (the class recap): in any slow motion the viewer plays no sound (section 7); the captions stay. |
+| `slowmoAudio` | string | optional, default `"pitch"` (also read as `slowmo_audio`). For a film without dialogue: `"pitch"` = the sound slows with the picture, `"mute"` = it is faded out in slow motion as for dialogue. |
 | `note` | string | optional, free text, not shown. |
 
 A film is **ready** (Play enabled) when its capture folder has `capture.json`, the direction file exists and the film's mix
@@ -123,7 +125,7 @@ hides itself whenever the frame rate is locked by the recorder).
 | Play / pause | also Space. At the end it plays from the start again. |
 | Previous / next chapter | also `[` and `]`. Previous restarts the chapter when it is more than 2 s in, else goes to the chapter before. |
 | -5 s / +5 s | also Left / Right (they repeat while held). |
-| Speed | cycles 0.5x, 1x, 1.5x, 2x (the soundtrack's pitch follows). |
+| Speed | cycles 0.5x, 1x, 1.5x, 2x (the soundtrack's pitch follows; a film with `dialogue` is silent below 1x and the bar says "dialogue paused", section 7). |
 | Library | also Esc: stops the film and returns to the library. Home and End jump to the start and the end. |
 
 The bar fades out three seconds after the last pointer or key activity while the film plays, and is always up while paused, scrubbing or
@@ -165,7 +167,8 @@ its drift against the film clock). `hm_film_show` without `--audio true` starts 
 | `Assets/FilmLibrary/FilmPlaybackBar.cs` | the bar |
 | `Assets/FilmLibrary/UiPointer.cs` | mouse / touch / key reading for the 2D UI (no EventSystem) |
 | `Assets/FilmLibrary/Editor/FilmLibraryCli.cs` | `hm_library` |
-| `Assets/Film/FilmDirector.cs`, `FilmSoundtrack.cs` | seek, pause, scrub and rate; the soundtrack's hold / seek |
+| `Assets/Film/FilmDirector.cs`, `FilmSoundtrack.cs` | seek, pause, scrub and rate; the soundtrack's hold / seek; the slow-motion sound policy |
+| `Assets/VR/Core/SlowAudioRules.cs` | the pure rules of the slow-motion sound (EditMode tests: `Assets/VR/Tests/Editor/SlowAudioTests.cs`) |
 | `Assets/HeadMovement.cs` | the library folder is not a capture; the HUD list and the digit keys offer the library's captures only |
 | `Tools/playtest_library.ps1` | the acceptance test (VIEWER_SPEC section 14); `-Film <id>` runs it on any film (the key and button probes sit at 45 % / 30 % of a film shorter than 5.5 minutes) |
 
@@ -193,3 +196,33 @@ treats it like the others. What such a direction looks like:
 
 The recorder's default capture (`FilmRecorder.DefaultCapture`) is the highest-numbered library capture that has a direction; pass `--capture` to
 record another film.
+
+
+## 7. Sound in slow motion
+
+The playback bar's 0.5x and the VR hand panel's 0.5x, 0.25x and 0.1x slow the film clock, and the soundtrack's pitch follows the rate, so
+speech at 0.25x sounds two octaves down and is not understandable. The library therefore says per film what its sound does below 1x
+(`dialogue`, `slowmoAudio`, section 1; written by `film_library` from the preset keys `dialogue` and `slowmo_audio`):
+
+| Film | Flags | Below 1x (any slow motion) | 1x and faster |
+|---|---|---|---|
+| a lesson with speech (the class recap) | `dialogue: true` | the sound fades out in about 120 ms and stays silent; the captions keep following the film time; the bar (and the VR hand panel) show "dialogue paused" | fades back in in about 120 ms at normal pitch |
+| music (a demo, a heat) | default `slowmoAudio: "pitch"` | as before: the sound slows with the picture (pitch = rate) | unchanged |
+| music, silenced on request | `slowmoAudio: "mute"` | faded out like dialogue, the note reads "sound paused" | back |
+
+- Rates above 1x (1.5x, 2x) are not touched: the pitch rises with the rate (an octave up at 2x). The change was asked for slow motion only;
+  a pitch-preserving stretch would need an AudioMixer pitch shifter on the soundtrack (the source's pitch = the rate, the shifter = 1/rate,
+  its useful range 0.5 to 2), which is not in place.
+- Cleaner options for music that are NOT applied, only possible: keep the song at normal speed under the slow picture (it would no longer be
+  in step with the dance, so the beat grid and the score would disagree with what is heard); or play it through the mixer pitch shifter as
+  above (artifacts below 0.5x).
+- The fade is the player's gain (`FilmSoundtrack.Gain`, 0 to 1), while it is audible its pitch stays at 1 (no swoop down the octaves), and
+  the player keeps running silent at the rate so it stays in step with the film clock: a seek while slow lands in step and is silent, and the
+  sound is back at 1x without a restart. Scrubbing is unaffected (the sound is held while the scrubber is dragged). A recording never fades
+  (the recorder plays at 1x and renders the audio offline).
+- The directed film's own slow segments (a replay) already carry no speech: the film mix plays the room-tone bed there
+  (`dancecap/film_recap_audio.py`: the mix's speech-free `bed` stem; `python -m dancecap.film_recap_audio slow-check` fails if any slowed,
+  held or replayed segment of the rendered mix is louder than -40 dB).
+- Developer interface: `hm_library --action state` lists `dialogue`, `slowmoAudio` and `slowAudio` per film and, while a film plays,
+  `film.audio.{gain, volume, pitch, effectivePitch, slowMuted}` and `bar.slowNote`; `hm_library --action rate --value 0.25` sets any rate.
+  `Tools/playtest_library.ps1` checks the policy of the film under test (stage `slowmo`); `Tools/playtest_vr.ps1` checks it through the hand panel.

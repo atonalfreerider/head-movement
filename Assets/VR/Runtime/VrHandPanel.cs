@@ -143,6 +143,9 @@ namespace HmVr
         public bool Shown => alpha > 0.5f;
         public float Alpha => alpha;
         public VrPanel Main => main;
+
+        /// <summary>the small note beside SLOW MOTION ("dialogue paused" while a speech lesson is slowed), empty otherwise</summary>
+        public string SlowNoteText => slowNote != null && slowNote.Label != null ? slowNote.Label.text : "";
         [System.NonSerialized] public VrListPanel ChaptersList, ViewsList;
         public bool ShowChapters, ShowViews;
         public Func<bool> MenuOpen = () => false;
@@ -150,7 +153,7 @@ namespace HmVr
 
         VrPanel main;
         Transform anchor;
-        VrWidget playBtn, closeBtn, scrub, chapterLabel, timeLabel, cc, tabChapters, tabViews, library;
+        VrWidget playBtn, closeBtn, scrub, chapterLabel, timeLabel, cc, tabChapters, tabViews, library, slowNote;
         VrWidget[] rateBtns = new VrWidget[4];
         Image pauseA, pauseB, playTri;
         float alpha;
@@ -225,6 +228,8 @@ namespace HmVr
             VrPanel.GlyphSkip(next, false, 28f);
             // row D: slow motion
             main.AddLabel("speed", "SLOW MOTION", VrPanel.R(-W * 0.5f + 110f, -28f, 200f, 24f), 18f, VrStyle.Muted, TextAnchor.MiddleLeft, true);
+            // "dialogue paused" while a speech lesson is slowed: its sound is faded out (the captions stay), the note says why it is quiet
+            slowNote = main.AddLabel("slow note", "", VrPanel.R(W * 0.5f - 145f, -28f, 250f, 24f), 18f, VrStyle.Accent, TextAnchor.MiddleRight, true);
             y = -80f;
             string[] names = { "1x", "0.5x", "0.25x", "0.1x" };
             float bw = 94f, bg = 24f, bx = -(bw * 4 + bg * 3) * 0.5f;
@@ -431,6 +436,8 @@ namespace HmVr
             pauseA.gameObject.SetActive(playing);
             pauseB.gameObject.SetActive(playing);
             for (int i = 0; i < rateBtns.Length; i++) rateBtns[i].Toggled = Mathf.Abs(VrFilm.Rate - VrFilm.SlowRates[i]) < 0.001f;
+            string slowHint = VrFilm.SlowAudioHint;
+            if (slowNote.Label.text != slowHint) slowNote.Label.text = slowHint;
             tabChapters.Toggled = ShowChapters;
             tabViews.Toggled = ShowViews;
             VrCaptions caps = VrCaptions.Instance;

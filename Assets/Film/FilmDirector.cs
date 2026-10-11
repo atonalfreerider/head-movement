@@ -1,3 +1,4 @@
+using HmVr;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -149,6 +150,49 @@ public class FilmDirector : MonoBehaviour
 
     /// <summary>playback rate of the film clock (the viewer's playback bar, speed button); 1 = real time. The recorder never changes it.</summary>
     public float Rate { get; set; } = 1f;
+
+    /// <summary>what the soundtrack does below 1x (slow motion): Mute fades it out (the film is dialogue, or its library entry says slowmo_audio mute),
+    /// Pitch lets it slow with the picture. Taken from the film's library entry (dialogue, slowmo_audio) the first time it is read; settable.</summary>
+    public SlowAudioMode SlowAudio
+    {
+        get
+        {
+            ResolveSlowAudio();
+            return slowAudio;
+        }
+        set
+        {
+            slowAudio = value;
+            slowAudioResolved = true;
+        }
+    }
+
+    /// <summary>the soundtrack is faded out right now because the film is in slow motion (see SlowAudio)</summary>
+    public bool SlowAudioMuted => playSoundtrack && FilmSoundtrack.Current != null && FilmSoundtrack.Current.SlowMuted;
+
+    /// <summary>the small note for the bar and the VR panel while SlowAudioMuted ("dialogue paused"); empty otherwise</summary>
+    public string SlowAudioHint
+    {
+        get
+        {
+            ResolveSlowAudio();
+            return SlowAudioMuted ? slowAudioHint : "";
+        }
+    }
+
+    SlowAudioMode slowAudio = SlowAudioMode.Pitch;
+    string slowAudioHint = "sound paused";
+    bool slowAudioResolved;
+
+    void ResolveSlowAudio()
+    {
+        if (slowAudioResolved) return;
+        slowAudioResolved = true;
+        LibraryEntry e = FilmLibrary.EntryForDirection(directionPath);
+        if (e == null) return;
+        slowAudio = e.SlowAudio;
+        slowAudioHint = e.SlowAudioHint;
+    }
 
     /// <summary>true between BeginScrub and EndScrub: the playback bar's scrubber is being dragged, time and audio are held</summary>
     public bool Scrubbing { get; private set; }
@@ -405,7 +449,14 @@ public class FilmDirector : MonoBehaviour
         }
         if (running && filmTime >= FilmDuration) finished = true;
 
-        if (playSoundtrack && FilmSoundtrack.Current != null && !Mathf.Approximately(FilmSoundtrack.Current.Pitch, Rate)) FilmSoundtrack.Current.Pitch = Rate;
+        if (playSoundtrack && FilmSoundtrack.Current != null)
+        {
+            // the policy first, then the rate: a dialogue lesson never has its pitch dropped (it is faded out, see FilmSoundtrack)
+            FilmSoundtrack st = FilmSoundtrack.Current;
+            if (st.SlowAudio != SlowAudio) st.SlowAudio = SlowAudio;
+            if (!Mathf.Approximately(st.Pitch, Rate)) st.Pitch = Rate;
+        }
+
         if (playSoundtrack && running && !Paused && !soundtrackStarted)
         {
             string mix = MixPath;
@@ -908,7 +959,9 @@ public class FilmDirector : MonoBehaviour
         return new Dictionary<string, object>
         {
             ["loaded"] = st.IsLoaded, ["playing"] = st.IsPlaying, ["held"] = st.Held, ["time"] = Math.Round(st.AudioTime, 3), ["resyncs"] = st.Resyncs,
-            ["pitch"] = Math.Round(st.Pitch, 3), ["driftS"] = st.IsPlaying ? Math.Round(st.AudioTime - filmTime, 3) : (double?)null
+            ["pitch"] = Math.Round(st.Pitch, 3), ["effectivePitch"] = Math.Round(st.EffectivePitch, 3), ["gain"] = Math.Round(st.Gain, 3),
+            ["volume"] = Math.Round(st.Volume * st.Gain, 3), ["fadeOutS"] = Math.Round(st.LastFadeOutSeconds, 3), ["fadeInS"] = Math.Round(st.LastFadeInSeconds, 3), ["slowAudio"] = st.SlowAudio.ToString().ToLowerInvariant(), ["slowMuted"] = st.SlowMuted,
+            ["driftS"] = st.IsPlaying ? Math.Round(st.AudioTime - filmTime, 3) : (double?)null
         };
     }
 

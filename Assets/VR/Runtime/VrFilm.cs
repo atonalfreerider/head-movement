@@ -7,7 +7,9 @@ namespace HmVr
     /// The lesson as the VR mode sees it: the library's film that is playing, with the same transport the flat playback bar uses
     /// (FilmPlaybackBar: exact seeks that re-sync the soundtrack, captions, layers; the scrubber holds the film while it is dragged).
     /// Everything on screen is a function of the film clock, so slow motion (the clock's rate) keeps the captions, the 3D layers and the
-    /// soundtrack (pitched with the rate, as the flat speed button does) together.
+    /// soundtrack together. The soundtrack follows the rate as the flat speed button does: pitched with it for a music lesson, and for a
+    /// lesson whose soundtrack is dialogue (library entry "dialogue") faded out below 1x instead, with the captions staying (FilmSoundtrack,
+    /// docs/FILM_LIBRARY.md section 7).
     /// </summary>
     public static class VrFilm
     {
@@ -24,6 +26,9 @@ namespace HmVr
         public static float Time => Director != null ? Director.FilmTime : 0f;
         public static float Duration => Director != null ? Director.FilmDuration : 0f;
         public static float Rate => Director != null ? Director.Rate : 1f;
+
+        /// <summary>"dialogue paused" (or "sound paused") while slow motion has faded this lesson's sound out; empty otherwise</summary>
+        public static string SlowAudioHint => Director != null ? Director.SlowAudioHint : "";
         public static bool Paused => Director != null && Director.Paused;
         public static bool Playing => Director != null && !Director.Paused && Director.FilmTime < Director.FilmDuration - 0.05f;
         public static IReadOnlyList<LibraryChapter> Chapters => Bar != null ? Bar.Chapters : NoChapters;
@@ -80,7 +85,7 @@ namespace HmVr
             if (i >= 0 && i < c.Count) SeekTo(c[i].StartS);
         }
 
-        /// <summary>slow motion: the film clock's rate (1, 0.5, 0.25, 0.1); the soundtrack follows it exactly as the flat speed button does</summary>
+        /// <summary>slow motion: the film clock's rate (1, 0.5, 0.25, 0.1); the soundtrack follows it exactly as the flat speed button does (dialogue is faded out)</summary>
         public static void SetRate(float rate)
         {
             if (Director != null) Director.Rate = Mathf.Clamp(rate, 0.05f, 4f);

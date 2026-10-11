@@ -17,6 +17,9 @@ using UnityEngine.UI;
 /// It exists only in a viewer session (FilmDirector.Show, i.e. the library's Play and hm_film_show --audio true): the film
 /// RECORDER starts the director through Prepare / Begin and never gets a bar, and the bar also takes itself out of the picture
 /// whenever the Unity Recorder is frame-locking the game (FilmLibrary.RecordingActive), so a render can never contain it.
+/// Speed and sound: below 1x a lesson whose soundtrack is speech (library entry "dialogue") plays no sound (FilmSoundtrack fades it out; the
+/// captions stay) and the bar says so beside the time ("dialogue paused"); music lessons keep their pitch behaviour unless their entry says
+/// "slowmo_audio": "mute" (docs/FILM_LIBRARY.md section 7).
 /// All of its actions are public methods (SeekTo, TogglePlay, NextChapter, ...) so that a later VR panel can drive the same bar.
 /// </summary>
 [DefaultExecutionOrder(-60)]
@@ -57,7 +60,7 @@ public class FilmPlaybackBar : MonoBehaviour
     CanvasGroup group;
     RectTransform root;
     Image backdrop, trackBack, trackFill, hoverLine, head, headRing, tipBox;
-    Text chapterLabel, timeLabel, tipText;
+    Text chapterLabel, timeLabel, tipText, slowNote;
     readonly List<(Image shadow, Image tick)> ticks = new();
     readonly List<Btn> buttons = new();
     Btn backBtn, rewBtn, prevBtn, playBtn, nextBtn, fwdBtn, speedBtn;
@@ -234,6 +237,7 @@ public class FilmPlaybackBar : MonoBehaviour
         head = FilmUi.Box(root, "Playhead", FilmUi.Disc, Color.white);
         chapterLabel = Txt("Chapter", Color.white, TextAnchor.MiddleLeft, true);
         timeLabel = Txt("Time", new Color(1f, 1f, 1f, 0.9f), TextAnchor.MiddleRight, false);
+        slowNote = Txt("Slow motion sound note", new Color(Accent.r, Accent.g, Accent.b, 0.95f), TextAnchor.MiddleRight, true);
         tipBox = FilmUi.Box(root, "Tooltip", FilmUi.Rounded, new Color(0.02f, 0.02f, 0.03f, 0.9f));
         tipText = Txt("Tooltip text", Color.white, TextAnchor.MiddleCenter, true);
 
@@ -322,6 +326,8 @@ public class FilmPlaybackBar : MonoBehaviour
         timeLabel.fontSize = Mathf.Max(8, Mathf.RoundToInt(26f * u));
         FilmUi.Place(chapterLabel.rectTransform, new Vector2(m + W * 0.3f, 146f * u), new Vector2(W * 0.6f, 44f * u));
         FilmUi.Place(timeLabel.rectTransform, new Vector2(W - m - 180f * u, 146f * u), new Vector2(360f * u, 44f * u));
+        slowNote.fontSize = Mathf.Max(8, Mathf.RoundToInt(22f * u));
+        FilmUi.Place(slowNote.rectTransform, new Vector2(W - m - 200f * u - 110f * u, 146f * u), new Vector2(220f * u, 44f * u)); // left of the time
         tipText.fontSize = Mathf.Max(8, Mathf.RoundToInt(24f * u));
 
         // buttons: Back left, speed right, the transport in the middle
@@ -608,6 +614,8 @@ public class FilmPlaybackBar : MonoBehaviour
         if (timeLabel.text != time) timeLabel.text = time;
         string rate = Mathf.Approximately(director.Rate, 1f) ? "1x" : $"{director.Rate:0.##}x";
         if (speedBtn.Label.text != rate) speedBtn.Label.text = rate;
+        string note = director.SlowAudioHint; // "dialogue paused" while a speech lesson is slowed (its sound is faded out), else empty
+        if (slowNote.text != note) slowNote.text = note;
         UpdatePlayGlyph();
 
         // button hover
@@ -664,6 +672,7 @@ public class FilmPlaybackBar : MonoBehaviour
         Dictionary<string, object> s = new()
         {
             ["visible"] = IsVisible, ["alpha"] = Math.Round(alpha, 3), ["dragging"] = dragging, ["rate"] = director != null ? director.Rate : 1f,
+            ["slowNote"] = slowNote != null ? slowNote.text : "",
             ["chapter"] = ChapterIndex, ["chapterTitle"] = ChapterIndex >= 0 ? chapters[ChapterIndex].Title : null, ["chapters"] = chapters.Count,
             ["track"] = R(trackRect), ["trackHit"] = R(trackHit), ["tooltip"] = float.IsNaN(hoverTime) ? null : tip, ["hoverTick"] = hoverTick,
             ["ticks"] = chapters.Where(c => c.StartS > 0.05f).Select(c => new[] { c.StartS, XOf(c.StartS) }).ToList(),

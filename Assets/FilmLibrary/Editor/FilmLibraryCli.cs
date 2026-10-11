@@ -29,7 +29,7 @@ public static class FilmLibraryCli
         [CliArg("id", "play: a film id or capture folder of the library")] string id = null,
         [CliArg("at", "seek: film seconds")] float at = 0f,
         [CliArg("index", "chapter: 0-based chapter index")] int index = 0,
-        [CliArg("value", "rate: 0.5 | 1 | 1.5 | 2")] float value = 1f,
+        [CliArg("value", "rate: 0.1 .. 2 (the bar's 0.5 | 1 | 1.5 | 2, the VR panel's 0.25 and 0.1)")] float value = 1f,
         [CliArg("flag", "bar: true = keep the bar visible")] bool flag = true)
     {
         if (!EditorApplication.isPlaying) throw new InvalidOperationException("enter Play mode first (unity command editor_play)");
@@ -80,8 +80,10 @@ public static class FilmLibraryCli
                 break;
             case "rate":
             {
+                // any rate (the bar offers 0.5, 1, 1.5, 2; the VR hand panel's slow motion also 0.25 and 0.1): the director's own rate, as both set it
                 FilmPlaybackBar b = Bar(bar);
-                for (int i = 0; i < 4 && !Mathf.Approximately(b.Director.Rate, value); i++) b.CycleRate();
+                b.Director.Rate = Mathf.Clamp(value, 0.05f, 4f);
+                b.Touch();
                 break;
             }
             case "bar":

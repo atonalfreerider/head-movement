@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using UnityEngine;
 using UnityEngine.Networking;
+using HmVr;
 
 /// <summary>
 /// Plays a film's ONE pre-mixed soundtrack (film/INTERFACE.md section 2): &lt;film dir&gt;/audio/&lt;direction&gt;_mix.wav,
@@ -17,6 +18,11 @@ using UnityEngine.Networking;
 /// While a Unity Recorder renders (Recording = true) the audio is rendered offline in lock with the frames
 /// (AudioRenderer), so the player never seeks; outside a recording it re-syncs when it drifts by more than
 /// ResyncThreshold (the editor's real-time playback can stall). The clip is 2D, bypasses effects and is not spatialised.
+///
+/// SLOW MOTION: the film clock's rate is the player's pitch (Pitch = the director's Rate). A film whose soundtrack is speech must not be
+/// heard slowed (0.25x = two octaves down), so SlowAudio = Mute fades the sound out in ~120 ms when the rate is under SlowBelow (0.95) and back in
+/// when it is SlowBelow or more; the player keeps running (muted, at the rate's pitch once silent) so it stays in step with the film clock and
+/// a seek while slow is consistent. Rates above 1x keep their pitch (the owner asked about slow motion only). The state is Gain / SlowMuted.
 /// </summary>
 [AddComponentMenu("")]
 public class FilmSoundtrack : MonoBehaviour
@@ -51,27 +57,64 @@ public class FilmSoundtrack : MonoBehaviour
     /// Update never restarts it; SetHold(false) plays on from the film clock's time</summary>
     public bool Held { get; private set; }
 
-    /// <summary>playback rate of the clip (the film clock's rate; the re-sync follows it)</summary>
+    /// <summary>rates under this are slow motion (<see cref="SlowAudioRules"/> holds the rules, tested in EditMode)</summary>
+    public const float SlowBelow = HmVr.SlowAudioRules.SlowBelow;
+
+    /// <summary>the fade out / in of the slow-motion mute, seconds</summary>
+    public const float FadeSeconds = HmVr.SlowAudioRules.FadeSeconds;
+
+    /// <summary>playback rate of the clip (the film clock's rate; the re-sync follows it). With SlowAudio = Mute the player itself keeps
+    /// its pitch at 1 until the sound has faded out, so the fade is never heard as a drop in pitch.</summary>
     public float Pitch
     {
-        get => source != null ? source.pitch : 1f;
+        get => requestedPitch;
         set
         {
-            if (source != null) source.pitch = value;
+            requestedPitch = value;
+            ApplyOutput();
         }
     }
 
-    public float Volume
+    /// <summary>what the player actually runs at (differs from Pitch only during the fade out of a slow-motion mute)</summary>
+    public float EffectivePitch => source != null ? source.pitch : 1f;
+
+    /// <summary>what the sound does under SlowBelow; set by the director from the library entry (dialogue, slowmo_audio)</summary>
+    public SlowAudioMode SlowAudio
     {
-        get => source != null ? source.volume : 1f;
+        get => slowAudio;
         set
         {
-            if (source != null) source.volume = value;
+            slowAudio = value;
+            ApplyOutput();
+        }
+    }
+
+    /// <summary>the sound is (being) faded out because the film is in slow motion and this lesson does not slow its sound</summary>
+    public bool SlowMuted => HmVr.SlowAudioRules.Muted(slowAudio, requestedPitch);
+
+    /// <summary>0 to 1: the slow-motion fade (1 = full, 0 = silent); Volume is the level before it</summary>
+    public float Gain { get; private set; } = 1f;
+
+    /// <summary>real seconds the last slow-motion fade out / fade in took, from the frame that asked for it to the frame the gain arrived (-1 = none yet; for the playtests)</summary>
+    public float LastFadeOutSeconds { get; private set; } = -1f;
+
+    public float LastFadeInSeconds { get; private set; } = -1f;
+
+    public float Volume
+    {
+        get => volume;
+        set
+        {
+            volume = value;
+            ApplyOutput();
         }
     }
 
     AudioSource source;
     AudioClip clip;
+    float requestedPitch = 1f, volume = 1f, fadeStart;
+    bool fadeMuting, fading;
+    SlowAudioMode slowAudio = SlowAudioMode.Pitch;
     Func<float> clock;
     bool startPending;
     bool loading;
@@ -222,8 +265,40 @@ public class FilmSoundtrack : MonoBehaviour
         source.Play();
     }
 
+    /// <summary>the slow-motion fade (the unscaled clock: a paused or slowed game must not stretch it) and the player's output</summary>
+    void TickGain()
+    {
+        // a recording never mutes (the recorder plays 1x and renders the audio offline)
+        bool muting = SlowMuted && !Recording;
+        if (muting != fadeMuting)
+        {
+            fadeMuting = muting;
+            fading = true;
+            fadeStart = Time.unscaledTime;
+        }
+
+        Gain = Recording ? 1f : HmVr.SlowAudioRules.Step(Gain, SlowMuted, Time.unscaledDeltaTime);
+        if (fading && (muting ? Gain <= 0f : Gain >= 1f))
+        {
+            fading = false;
+            if (muting) LastFadeOutSeconds = Time.unscaledTime - fadeStart;
+            else LastFadeInSeconds = Time.unscaledTime - fadeStart;
+        }
+
+        ApplyOutput();
+    }
+
+    void ApplyOutput()
+    {
+        if (source == null) return;
+        // while the sound is still fading out for a slow-motion mute it stays at 1x pitch: only a silent player runs at the slow rate
+        source.pitch = HmVr.SlowAudioRules.PlayerPitch(slowAudio, requestedPitch, Gain);
+        source.volume = volume * Gain;
+    }
+
     void Update()
     {
+        TickGain();
         if (clip == null || clock == null || startPending || Recording || Held) return;
         float t = clock();
         if (t < 0f || t >= clip.length - 0.02f)
@@ -255,5 +330,5 @@ public class FilmSoundtrack : MonoBehaviour
 
     public string Describe() =>
         $"{System.IO.Path.GetFileName(WavPath)}: {(Error ?? (loading ? "loading" : IsLoaded ? $"{Length:0.00} s {SampleRate} Hz x{Channels}" : "?"))}" +
-        $"{(IsPlaying ? $", playing at {AudioTime:0.000} s" : "")}, resyncs {Resyncs}";
+        $"{(IsPlaying ? $", playing at {AudioTime:0.000} s" : "")}, resyncs {Resyncs}{(SlowMuted ? $", slow-motion mute (gain {Gain:0.00})" : "")}";
 }
