@@ -196,6 +196,13 @@ public class Annotation3D : MonoBehaviour
                         if (ComMarkers(a, dance, alpha)) active.Add(a.Id);
                         else unresolved.Add(a.Id);
                         break;
+                    case "vector_arrow":
+                    {
+                        int drawn = VectorArrow(a, dance, alpha);
+                        if (drawn > 0) active.Add(a.Id);
+                        else if (drawn < 0) unresolved.Add(a.Id);
+                        break;
+                    }
                     case "readout":
                         Readout(a.Id, a.Text, coupleColour, alpha);
                         active.Add(a.Id);
@@ -614,6 +621,97 @@ public class Annotation3D : MonoBehaviour
         top.Strip(from, baseC + dir * o * 0.5f, w, A(c, alpha), A(c, alpha), Vector3.up);
         top.Triangle(to, baseC + side * hw, baseC - side * hw, A(c, alpha));
         glow.Strip(from, baseC, w * 3f, G(c, 0.3f * alpha), G(c, 0.3f * alpha), Vector3.up);
+    }
+
+    // ------------------------------------------------------------------ vector arrows (D4: velocity / force / weight transfer)
+
+    /// <summary>where an arrow about a body is anchored: the target (the couple's centre of mass at its own height, not the floor dot)</summary>
+    bool Anchor(JObject target, float dance, out Vector3 p)
+    {
+        if (target != null && target.Value<string>("type") == "couple_com")
+        {
+            p = director.Targets.CoupleCom3(dance);
+            return !float.IsNaN(p.x);
+        }
+
+        return director.Targets.Resolve(target, dance, out p);
+    }
+
+    /// <summary>vector_arrow: {target, vector: "velocity" | "force", text?}: an arrow at a body's centre of mass that points the way it moves (its length
+    /// follows the speed) or is pushed (the net horizontal force of the physics stage, as a share of the body weight); {from, to, vector: "between"}: an arrow
+    /// from one foot to the other (the weight moving over). All of it estimated from motion. Drawn like the call-out arrows (on top, constant line widths);
+    /// a standing body gets none. Returns 1 drawn, 0 nothing to show, -1 a target did not resolve.</summary>
+    int VectorArrow(FilmAnnotation a, float dance, float alpha)
+    {
+        string vector = a.Json.Value<string>("vector") ?? "velocity";
+        float age = film - a.F0;
+        float grow = a.F0 <= 1e-4f ? 1f : Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(age / 0.35f));
+        Vector3 tail, tip, anchorP;
+        Color colour;
+        if (vector == "between")
+        {
+            if (!Resolve(a.Json["from"], dance, out Vector3 p0) || !Resolve(a.Json["to"], dance, out Vector3 p1)) return -1;
+            p0.y = p1.y = 0.07f;
+            if ((p1 - p0).magnitude < 0.1f) return 0;
+            tail = p0;
+            tip = Vector3.Lerp(p0, p1, Mathf.Max(0.05f, grow));
+            colour = SubjectColour(a.Json["from"] as JObject);
+            DrawArrow(tail, tip, colour, alpha, 8f);
+            Avoid(tail, tip, a.Id);
+            AddLabel(a, OnScreen(tail, out Vector2 s0) ? s0 : Vector2.zero, OnScreen(p1, out Vector2 s1) ? s1 : Vector2.zero, colour, alpha * Mathf.Clamp01(grow * 1.5f), true);
+            return 1;
+        }
+
+        JObject target = a.Json["target"] as JObject;
+        if (!Anchor(target, dance, out anchorP)) return -1;
+        Vector3 dir;
+        float lenPx;
+        if (vector == "force")
+        {
+            Role role = FilmTargets.RoleOf(target?.Value<string>("dancer"));
+            Vector3 f = director.Targets.NetForce(role, dance);
+            if (float.IsNaN(f.x)) return -1;
+            f.y = 0f;
+            float rel = f.magnitude / Mathf.Max(1f, director.Targets.Mass(role) * 9.81f);   // the push as a share of the body weight
+            if (rel < 0.04f) return 0;
+            dir = f / f.magnitude;
+            lenPx = Mathf.Clamp(70f + 520f * rel, 80f, 300f);
+        }
+        else
+        {
+            const float h = 0.25f;
+            if (!Anchor(target, dance - h, out Vector3 pa) || !Anchor(target, dance + h, out Vector3 pb)) return -1;
+            Vector3 v = (pb - pa) / (2f * h);
+            v.y = 0f;
+            float speed = v.magnitude;
+            if (speed < 0.05f) return 0;
+            dir = v / speed;
+            lenPx = Mathf.Clamp(60f + 140f * speed, 80f, 300f);
+        }
+
+        colour = SubjectColour(target);
+        float pw = PixelWorld(anchorP);
+        float len = Mathf.Clamp(lenPx * (director.Vertical ? 1f : 0.85f) * unit * pw, 0.1f, 4f);
+        float gap = 10f * unit * pw;
+        tail = anchorP + dir * gap;
+        tip = tail + dir * len * Mathf.Max(0.05f, grow);
+        DrawArrow(tail, tip, colour, alpha, 8f);
+        top.Sphere(anchorP, 8f * unit * pw, A(Lin(colour), alpha));
+        Avoid(tail, tip, a.Id);
+        AddLabel(a, OnScreen(tail, out Vector2 ts) ? ts : Vector2.zero, OnScreen(tail + dir * len, out Vector2 tps) ? tps : Vector2.zero, colour, alpha * Mathf.Clamp01(grow * 1.5f), false);
+        return 1;
+    }
+
+    /// <summary>the label of a vector arrow: beyond its tip (velocity / force) or beside its middle (a foot-to-foot arrow)</summary>
+    void AddLabel(FilmAnnotation a, Vector2 from, Vector2 to, Color colour, float alpha, bool middle)
+    {
+        if (string.IsNullOrEmpty(a.Text)) return;
+        Vector2 d = to - from;
+        d = d.sqrMagnitude > 1e-4f ? d.normalized : Vector2.up;
+        Vector2 anchor = middle ? (from + to) * 0.5f : to;
+        Vector2 push = middle ? new Vector2(-d.y, d.x) : d;
+        if (middle && push.y > 0f) push = -push;
+        reqs.Add(new LabelReq { Id = a.Id, Text = a.Text, Anchor = anchor, Dir = push, Accent = colour, Alpha = alpha });
     }
 
     bool ComMarkers(FilmAnnotation a, float dance, float alpha)

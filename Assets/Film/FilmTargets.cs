@@ -139,6 +139,14 @@ public class FilmTargets
         return Vector3.Lerp(d.CenterOfMass(Mathf.Min(f0, d.FrameCount - 1)), d.CenterOfMass(Mathf.Min(f1, d.FrameCount - 1)), k);
     }
 
+    /// <summary>physics.json net external force on a dancer (N, Unity frame; at rest it is (0, m g, 0)); NaN when the capture has none</summary>
+    public Vector3 NetForce(Role role, float dance)
+    {
+        PhysicsData p = hm.Physics;
+        if (p != null && p.Dancers.TryGetValue(role, out PhysicsData.DancerTrack tr) && tr.FNet != null && p.T != null && p.T.Length > 0) return SampleSeries(p.T, tr.FNet, dance);
+        return Nan;
+    }
+
     public float Mass(Role role)
     {
         PhysicsData p = hm.Physics;

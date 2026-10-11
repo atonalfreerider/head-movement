@@ -661,6 +661,18 @@ adds the following keys. A direction without them plays exactly as before.
     instant's box (and 0.3 s ahead) always stays inside 90 % of the frame: a pivot or an exit is never cropped. Without `fill` the old `across_m` framing.
   - `physics_3q` with `distance_m`, `fit_band: true` (+ `band_lo`, `band_hi`, `top_m`): the couple fitted between the captions and the physics legend.
     In 9:16 the physics legend sits at a fixed place under the card slot (it no longer steps below a chapter card and back up) and is drawn 1.85x.
+- **One avatar opacity for the whole film** (direction top-level key `avatar_opacity`, 0..1; opt-in): replaces the `avatars` opacity of every segment
+  that shows avatars (a segment with `avatars: 0` stays 0), so one number flips the film between "avatars 75 % transparent" (0.25) and "25 %
+  transparent" (0.75). The skeleton lines, the physics colours and every overlay keep their own strength: only the bodies fade. Layer
+  `avatars_over_video: true` keeps the 3D dancers (at that opacity) over a phone's video instead of fading them out with it
+  (`avatars_fade_with_video`); without it only the skeleton lines sit on the video.
+- **`vector_arrow` call-outs** (annotation kind; the arrows that carry a quantity, all estimated from motion; drawn like `arrow3d`: on top, constant line
+  widths, the label beyond the tip, fading in 0.25 s / growing in 0.35 s, labels kept off the shaft):
+  `{target, vector: "velocity"}` an arrow at a body's centre of mass (`com` with `dancer`, or `couple_com`) pointing the way it moves, its length
+  following the speed (central difference over +-0.25 s; a body slower than 0.05 m/s gets none); `{target, vector: "force"}` the net horizontal force of
+  `physics.json` on that dancer as a share of the body weight (below 4 %: none); `{from, to, vector: "between"}` an arrow from one target to another
+  (a foot to the other foot: the weight moving over). `text` is optional; an unlabelled arrow belongs to a legend or a readout.
+  `arrow3d` also resolves the targets `stance_foot` (the foot that carries the weight) and `leader_t` as before.
 
 ---
 

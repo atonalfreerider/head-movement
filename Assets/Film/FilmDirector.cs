@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Newtonsoft.Json.Linq;
 using UnityEngine;
 using VRTKLite.Controllers;
 using Object = UnityEngine.Object;
@@ -93,6 +94,7 @@ public class FilmDirector : MonoBehaviour
     public class SegLayers
     {
         public bool AvatarsFadeWithVideo; // layer "avatars_fade_with_video": the 3D dancers fade out as the phone's video fades in (the class recap's POV shots)
+        public bool AvatarsOverVideo;     // layer "avatars_over_video": ... but stay (at the segment's avatar opacity) over the phone's video
         public float Avatar = 0.35f, Skeleton = 1f, Graph, Glyphs, Contacts = 1f; // Contacts: the hand-contact lights (layer "hand_contacts")
         public bool Physics, Floor, Timing, Tension, Counterbalance, Traces, Neck, Axis, Record, AllPivots, Moves = true, Inset, BeatCounter;
         public bool Grid = true;                                        // the floor's cross grid + plane (layer "grid")
@@ -468,7 +470,7 @@ public class FilmDirector : MonoBehaviour
         if (segLayers[si].AvatarsFadeWithVideo)
         {
             float fade = pov != null && sources.VideoShowing ? Mathf.Clamp01(filmCamera.PovVideoOpacity) : 0f;
-            float a = LayerValue(film, si, x => x.Avatar) * Mathf.Clamp01(LayerValue(film, si, x => x.Skeleton)) * (1f - fade);
+            float a = LayerValue(film, si, x => x.Avatar) * Mathf.Clamp01(LayerValue(film, si, x => x.Skeleton)) * (1f - (segLayers[si].AvatarsOverVideo ? 0f : fade));
             if (Mathf.Abs(a - avatarNow) > 1e-3f)
             {
                 avatarNow = a;
@@ -499,6 +501,10 @@ public class FilmDirector : MonoBehaviour
         bool hasOpacity = directionOpacity != null && (directionOpacity.Type == Newtonsoft.Json.Linq.JTokenType.Float || directionOpacity.Type == Newtonsoft.Json.Linq.JTokenType.Integer);
         l.Avatar = s.LayerFloat("avatars", hasOpacity ? Mathf.Clamp01((float)directionOpacity) : HeadMovement.DefaultAvatarOpacity * factor);
         l.AvatarsFadeWithVideo = s.LayerBool("avatars_fade_with_video", false);
+        l.AvatarsOverVideo = s.LayerBool("avatars_over_video", false);
+        // the direction's ONE avatar opacity (key "avatar_opacity", 0..1: 0.25 = the avatars 75 % transparent): replaces the avatar opacity of every segment
+        // that shows avatars (an "avatars" of 0 stays 0). The class recap sets it so that the skeleton lines and the overlays carry the picture.
+        if (direction.Root["avatar_opacity"] is JToken ao && (ao.Type == JTokenType.Float || ao.Type == JTokenType.Integer) && l.Avatar > 1e-3f) l.Avatar = Mathf.Clamp01(ao.Value<float>());
         l.Skeleton = Mathf.Clamp01(s.LayerFloat("dance_full_size", graphView ? 0f : 1f));
         l.Physics = s.LayerString("skeleton_mode", "") == "physics" || s.LayerBool("physics", view == "physics");
         string footprints = s.LayerString("footprints", null);
