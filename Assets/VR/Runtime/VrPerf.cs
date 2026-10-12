@@ -46,6 +46,16 @@ namespace HmVr
         float loadStart = -1f;
         bool wasLesson;
         float overBudgetFrames, adaptWindowFrames, adaptWindowStart;
+        float skeletonProbeAt = -1f;
+        float noAdaptUntil, nextHairScan;
+        HairStrands hairCached;
+        string lastAdaptReason = "";
+
+        /// <summary>a seek / chapter jump: the frames right after it (poses, hair cache, textures) are not steady state, so the adaptive step-down ignores them</summary>
+        public static void NoteSeek()
+        {
+            if (Instance != null) Instance.noAdaptUntil = Time.unscaledTime + 6f;
+        }
 
         void Awake()
         {
@@ -128,8 +138,16 @@ namespace HmVr
 
                 adaptWindowStart = Time.unscaledTime;
                 overBudgetFrames = adaptWindowFrames = 0f;
+                skeletonProbeAt = Time.unscaledTime + 3f; // the avatars, lines and beads exist a moment after the lesson starts
+                LogSkeletonProbe("lesson start");
                 string seek = VrArgs.Get("-hmseek");
                 if (seek != null && float.TryParse(seek, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float at)) seekAt = (Time.unscaledTime + 4f, at);
+            }
+
+            if (skeletonProbeAt >= 0f && lesson && Time.unscaledTime >= skeletonProbeAt)
+            {
+                skeletonProbeAt = -1f;
+                LogSkeletonProbe("lesson +3 s");
             }
 
             if (seekAt.HasValue && Time.unscaledTime >= seekAt.Value.when && lesson)
@@ -143,6 +161,33 @@ namespace HmVr
             if (lib != null && lib.State != FilmLibrary.Mode.Loading && lesson) loadStart = -1f;
             if (lib != null && lib.State == FilmLibrary.Mode.Library) loadStart = -1f;
             wasLesson = lesson;
+        }
+
+        /// <summary>logcat (adb logcat -s Unity | grep "HM-VR skeleton"): what the skeleton is drawn with (shader, queue, blend, z state, colour alpha) and the
+        /// eye buffer it is drawn into (colour / depth-stencil format, MSAA, foveation): the evidence for "full opacity" on the headset itself</summary>
+        public static void LogSkeletonProbe(string when)
+        {
+            try
+            {
+                string report = Dancer.SkeletonReport(out bool ok);
+                UnityEngine.XR.XRDisplaySubsystem xr = null;
+                System.Collections.Generic.List<UnityEngine.XR.XRDisplaySubsystem> list = new();
+                SubsystemManager.GetSubsystems(list);
+                if (list.Count > 0) xr = list[0];
+                RenderTextureDescriptor d = UnityEngine.XR.XRSettings.eyeTextureDesc;
+                var urp = UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline as UnityEngine.Rendering.Universal.UniversalRenderPipelineAsset;
+                Debug.Log($"HM-VR skeleton ({when}): {(ok ? "SOLID OK" : "NOT SOLID")}: {report} | eye buffer {d.width}x{d.height} colour {d.graphicsFormat} depth/stencil {d.depthStencilFormat} (stencil plane {UnityEngine.Experimental.Rendering.GraphicsFormatUtility.IsStencilFormat(d.depthStencilFormat)}) msaa {d.msaaSamples} | urp hdr {(urp != null ? urp.supportsHDR : false)} msaa {(urp != null ? urp.msaaSampleCount : 0)} | foveation {(xr != null ? xr.foveatedRenderingLevel : -1f):0.0} | avatar opacity {AvatarOpacityNow():0.00}");
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("HM-VR skeleton probe failed: " + e.Message);
+            }
+        }
+
+        static float AvatarOpacityNow()
+        {
+            foreach (SmplxAvatar a in FindObjectsByType<SmplxAvatar>(FindObjectsInactive.Exclude)) return a.Opacity;
+            return -1f;
         }
 
         void Adapt(float dt)
@@ -161,6 +206,23 @@ namespace HmVr
                 return;
             }
 
+            // not steady state: the hair bake runs on the main thread in chunks for the first ~25 s of the recap (it logs bake=n/N), and a seek refills the caches.
+            // A step-down in those windows would trade the hair for a transient (X4 2026-10-11: HM-PERF adaptive fired at 47 % over budget in a recap session)
+            if (Time.unscaledTime >= nextHairScan)
+            {
+                nextHairScan = Time.unscaledTime + 1f;
+                hairCached = FindAnyObjectByType<HairStrands>();
+            }
+
+            bool baking = hairCached != null && hairCached.Avatar != null && VrSettings.Current.HairBake && hairCached.BakedFrames < hairCached.Avatar.FrameCount;
+            if (baking || Time.unscaledTime < noAdaptUntil)
+            {
+                lastAdaptReason = baking ? "bake" : "seek";
+                adaptWindowStart = Time.unscaledTime;
+                overBudgetFrames = adaptWindowFrames = 0f;
+                return;
+            }
+
             adaptWindowFrames++;
             if (dt > BudgetSeconds * 1.35f) overBudgetFrames++;
             if (Time.unscaledTime - adaptWindowStart < 4f) return;
@@ -173,7 +235,7 @@ namespace HmVr
                 if (VrQuality.StepHairDown())
                 {
                     adaptCooldown = Time.unscaledTime + 10f;
-                    Debug.Log($"HM-PERF adaptive: {share * 100f:0}% of frames over budget, hair {was.ToString().ToLowerInvariant()} -> {VrQuality.Hair.ToString().ToLowerInvariant()}");
+                    Debug.Log($"HM-PERF adaptive: {share * 100f:0}% of frames over budget, hair {was.ToString().ToLowerInvariant()} -> {VrQuality.Hair.ToString().ToLowerInvariant()} (steady state: bake done {(hairCached != null ? hairCached.BakedFrames : -1)}/{(hairCached != null && hairCached.Avatar != null ? hairCached.Avatar.FrameCount : 0)}, last window gpu {(timingN > 0 ? gpuSum / timingN : -1):0.0} ms cpu {(timingN > 0 ? cpuSum / timingN : -1):0.0} ms, lod {(hairCached != null ? hairCached.Lod : -1)}, solid skeleton {Dancer.SolidSkeletonOn}, mode {(VrDisplay.Instance != null && VrDisplay.Instance.PassthroughActive ? "passthrough" : "immersive")}, last skipped window: '{lastAdaptReason}')");
                 }
             }
         }

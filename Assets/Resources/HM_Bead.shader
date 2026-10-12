@@ -17,6 +17,15 @@ Shader "HeadMovement/Bead"
         _Rim ("Edge brightness relative to the centre", Range(0, 1)) = 0.72
         [HideInInspector] _SkelRef ("Skeleton stencil bit (lead 1, follow 2)", Float) = 2
         [HideInInspector] _StencilPass ("Stencil op: 0 Keep, 2 Replace", Float) = 0
+        // VR solid skeleton (Dancer.SolidSkeleton, HM_SkeletonSolid.shader): 1 = the bead colour goes through the same brightness model (always
+        // bright, hue and beat kept, alpha 1) and the bead is drawn over the translucent bodies (SpineBeads sets _ZTest Always, _ZWrite 0, queue 3101)
+        [HideInInspector] _Solid ("Solid skeleton colour model", Float) = 0
+        [HideInInspector] _ZTest ("ZTest (4 LEqual, 8 Always)", Float) = 4
+        [HideInInspector] _ZWrite ("ZWrite", Float) = 1
+        [HideInInspector] _Idle ("Solid: brightness between beats (linear)", Float) = 0.85
+        [HideInInspector] _PulseAt ("Solid: vertex brightness of a full beat", Float) = 0.5
+        [HideInInspector] _Flash ("Solid: white at the top of a beat", Float) = 0.3
+        [HideInInspector] _IdleVertex ("Solid: vertex brightness between beats", Float) = 0.0397
     }
 
     SubShader
@@ -28,8 +37,8 @@ Shader "HeadMovement/Bead"
             Name "Bead"
             Tags { "LightMode" = "UniversalForwardOnly" }
             Cull Back
-            ZWrite On
-            ZTest LEqual
+            ZWrite [_ZWrite]
+            ZTest [_ZTest]
 
             Stencil
             {
@@ -51,11 +60,28 @@ Shader "HeadMovement/Bead"
                 float _Rim;
                 float _SkelRef;
                 float _StencilPass;
+                float _Solid;
+                float _ZTest;
+                float _ZWrite;
+                float _Idle;
+                float _PulseAt;
+                float _Flash;
+                float _IdleVertex;
             CBUFFER_END
 
             UNITY_INSTANCING_BUFFER_START(BeadProps)
                 UNITY_DEFINE_INSTANCED_PROP(float4, _BeadColor)
             UNITY_INSTANCING_BUFFER_END(BeadProps)
+
+            // HmVr.SolidSkeleton.Map (and HM_SkeletonSolid.shader): hue kept, brightness mapped into [_Idle, 1], white flash at the top of a beat
+            float3 SolidColour(float3 v)
+            {
+                float m = max(v.r, max(v.g, v.b));
+                float3 hue = v / max(m, 1e-5);
+                float beat = saturate((m - _IdleVertex) / max(_PulseAt - _IdleVertex, 1e-4));
+                float f = m < _IdleVertex ? _Idle * (m / _IdleVertex) : lerp(_Idle, 1.0, beat);
+                return saturate(hue * f + _Flash * beat * beat * step(_IdleVertex, m));
+            }
 
             struct Attributes
             {
@@ -82,7 +108,8 @@ Shader "HeadMovement/Bead"
                 output.positionWS = TransformObjectToWorld(input.positionOS.xyz);
                 output.positionCS = TransformWorldToHClip(output.positionWS);
                 output.normalWS = TransformObjectToWorldNormal(input.normalOS);
-                output.color = UNITY_ACCESS_INSTANCED_PROP(BeadProps, _BeadColor).rgb * _Intensity;
+                float3 bead = UNITY_ACCESS_INSTANCED_PROP(BeadProps, _BeadColor).rgb;
+                output.color = (half3)(_Solid > 0.5 ? SolidColour(bead) : bead * _Intensity);
                 return output;
             }
 
@@ -91,7 +118,8 @@ Shader "HeadMovement/Bead"
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
                 float3 v = normalize(GetWorldSpaceViewDir(input.positionWS));
                 float facing = saturate(dot(normalize(input.normalWS), v));
-                return half4(input.color * lerp(_Rim, 1.0, facing), 1);
+                half rim = _Solid > 0.5 ? lerp(0.15h, 1.0h, smoothstep(0.05h, 0.4h, (half)facing)) : lerp(_Rim, 1.0, facing); // solid: a dark edge like the lines
+                return half4(input.color * rim, 1);
             }
             ENDHLSL
         }
@@ -117,6 +145,13 @@ Shader "HeadMovement/Bead"
                 float _Rim;
                 float _SkelRef;
                 float _StencilPass;
+                float _Solid;
+                float _ZTest;
+                float _ZWrite;
+                float _Idle;
+                float _PulseAt;
+                float _Flash;
+                float _IdleVertex;
             CBUFFER_END
 
             UNITY_INSTANCING_BUFFER_START(BeadProps)

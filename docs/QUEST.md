@@ -57,13 +57,26 @@ subtitle from the library data, a progress bar with the stage, a spinner that tu
 immersive mode), shown at app start for at least 2.4 s and during every load. The adaptive app icon is generated (`VrBranding`, `Assets/Icons`); the
 Unity player splash is switched off where the licence allows it.
 
-**Skeletons at full opacity.** The skeleton lines and joints show in their own colours whatever the bodies' opacity (a lesson's `avatar_opacity` 0.25
-applies to the bodies only): in VR the translucent body skips the pixels of its own skeleton (`SmplxAvatar.SkeletonsOverBodies`, a stencil bit).
+**Skeletons at full opacity (solid skeleton).** The owner twice reported "skeletons should be full opacity" after the first Quest builds. Root cause (found
+by rendering the Quest tier in the editor over a bright background, X4 2026-10-11): the skeleton was never translucent as a material (opaque, alpha 1) but
+its colour between beats is `SkeletonStyle.IdleLevel` 0.22 of the base, i.e. dark maroon / slate grey (~12 % linear light); only the beat pulse and the HDR
+bloom of the desktop viewer light it up, and the Quest tier has neither (no HDR, no post). On a bright passthrough room it read as a faint, see-through
+line; the translucent body over it (stencil skip, 14:13 build) was a second, smaller effect. In VR (`Dancer.SetSolidSkeleton`, set by `VrSession`) every
+skeleton line and the follower's spine beads use `Resources/HM_SkeletonSolid` (beads: `HM_Bead` with `_Solid`): unlit, alpha 1, no blending, brightness mapped
+into [0.85, 1] linear light with the hue and the beat kept (a rise to full plus a short white flash; the colour model is `HmVr.SolidSkeleton.Map`, unit
+tested), a thin dark edge so a white or pale line reads against a bright room, and fades by `RoleAlpha` kept. Two materials per line: the depth-correct one
+(queue Geometry, ZWrite on) and an over-the-bodies one (queue 3100: after the bodies 2990-3022 and the hair, before the VR panels 3900; ZTest Always, ZWrite
+off), so no body opacity, hair or stencil plane is needed (the stencil skip is off in VR). The skeleton shows through the partner's body too (x-ray; the
+bodies are translucent anyway). A lesson's `skeleton_lines` / the tours' skeleton fades never thin the lines below full width in VR (hidden at ~0 still hides).
+Desktop viewer unchanged. Logcat: `HM-VR skeleton (lesson start | lesson +3 s): SOLID OK: solid True, 7 lines, lowest colour alpha 1.00; depth-correct: ...
+queue 2000 blend One/Zero zwrite 1 ...; over the bodies: ... queue 3100 ... ztest Always; beads ... | eye buffer WxH colour .. depth/stencil .. (stencil plane
+..) msaa .. | urp hdr .. | foveation ..`. The VR selftest (`Tools/playtest_vr.ps1`) checks the same state with the lesson at avatar opacity 0.25.
 
 **Hair on the Quest.** The follow's groomed hair (160 guides x 16 segments, cards, Burst simulation baked in the background after load) stays ON in the
 Quest tier. `VrQuality`: hair level *Full* (all cards close up, LOD by head size on screen, tip glow), *Light* (cheaper levels from a shorter distance,
 no tip glow), *Off*; the menu footer's *Hair* button cycles them; when a lesson keeps missing the frame budget the level steps down by itself
-(`adaptive`, logged as `HM-PERF adaptive`), never up. The tier is data: `hm_data/quest_settings.json` (keys in `VrSettings.cs`: `display`, `hair`, `hair_full`,
+(`adaptive`, logged as `HM-PERF adaptive` with the context of the decision; windows during the hair bake and the 6 s after a seek / chapter jump are
+ignored, they are transients), never up. The tier is data: `hm_data/quest_settings.json` (keys in `VrSettings.cs`: `display`, `hair`, `hair_full`,
 `hair_light`, `adaptive`, `hair_bake`, `hair_bake_chunk`, `hair_substeps`, `hair_iterations`, `msaa`, `eye_scale`, `refresh_hz`, `perf_log`); command line
 `-hmhair full|light|off`. MSAA 4x on a Quest 3 (hair alpha-to-coverage needs it; 2x on a Quest 2), no HDR, no shadows, no extra lights, eye buffer 1.0
 (0.9 on a Quest 2), the renderer's intermediate texture set to Auto (Meta's passthrough advice), 72 Hz asked from the runtime. The frame log

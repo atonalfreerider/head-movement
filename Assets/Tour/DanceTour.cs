@@ -393,6 +393,7 @@ public class DanceTour : MonoBehaviour, ICameraDirector
     void SetSkeletonWidth(HeadMovement hm, float k)
     {
         skeletonNow = k;
+        if (Dancer.SolidSkeletonOn && k > 0.02f) k = 1f; // VR: the solid skeleton is never faded to a thin line
         WidthOf(hm.LeadDancer, k);
         WidthOf(hm.FollowDancer, k);
         // the hand-contact lights belong to the full-size dance too: they shrink away with it (hidden in the graph states)

@@ -92,7 +92,10 @@ namespace HmVr
             // skeleton lines and joints at FULL opacity whatever the avatar opacity is (a lesson can set 0.25 for the bodies): the translucent
             // body skips the pixels of its own skeleton (stencil), so the skeleton shows in its own colour, untinted by the body
             skeletonsWere = SmplxAvatar.SkeletonsOverBodies;
-            SmplxAvatar.SkeletonsOverBodies = true;
+            // Dancer.SolidSkeleton (X4, 2026-10-11): the skeleton is drawn solid (alpha 1, always bright) and a second time over the bodies, so the bodies' stencil
+            // skip is not needed (and the headset's eye buffer may have no stencil plane); if the solid shader is missing the stencil route stays on
+            Dancer.SetSolidSkeleton(true);
+            SmplxAvatar.SkeletonsOverBodies = !Dancer.SolidSkeletonOn;
             ApplyCullMask(false);
             Placement.Init(rig, Display);
             rig.Moved += RecallPanels;
@@ -211,6 +214,7 @@ namespace HmVr
         {
             tornDown = true;
             SmplxAvatar.SkeletonsOverBodies = skeletonsWere;
+            Dancer.SetSolidSkeleton(false);
             HeadMovement.AsyncLoad = false;
             suppressed.Clear();
             if (Rig != null) Destroy(Rig.gameObject);

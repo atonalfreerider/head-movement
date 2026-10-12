@@ -650,8 +650,10 @@ namespace HmVr.Editor
 
             // skeletons at full opacity
             Stage("skeletons at full opacity");
-            Add("the skeleton option is on (bodies never tint their own skeleton)", SmplxAvatar.SkeletonsOverBodies && Dancer.SkeletonStencilOn);
-            foreach (SmplxAvatar a in hm.Avatars.Values) Add($"{a.DancerRole}: the translucent body skips its own skeleton's pixels", a.Opacity >= SmplxAvatar.SkeletonOverBodyBelowOpacity || a.SkeletonOverBody, $"opacity {a.Opacity:0.00}");
+            // the solid skeleton (Dancer.SetSolidSkeleton): alpha 1, opaque-queue depth-correct material with ZWrite on, plus the over-the-bodies pass; the bodies' stencil skip is off
+            string skeletonReport = Dancer.SkeletonReport(out bool solidOk);
+            Add("the skeleton is SOLID whatever the avatar opacity (alpha 1, no blending, opaque queue + ZWrite, second pass over the bodies)", Dancer.SolidSkeletonOn && solidOk, skeletonReport);
+            foreach (SmplxAvatar a in hm.Avatars.Values) Add($"{a.DancerRole}: the body is translucent ({a.Opacity:0.00}) and the skeleton does not depend on it", Dancer.SolidSkeletonOn && !SmplxAvatar.SkeletonsOverBodies, $"opacity {a.Opacity:0.00}");
             Add("the HUD, floor craft and overlays keep their own opacity (no global alpha)", true);
 
             // anchored panels: opened once in front, fixed while the head turns for 10 s

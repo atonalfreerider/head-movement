@@ -63,6 +63,7 @@ namespace HmVr
 
         public static void SeekTo(float t)
         {
+            VrPerf.NoteSeek();
             if (Bar != null) Bar.SeekTo(t);
             else if (Director != null) Director.Seek(t);
         }

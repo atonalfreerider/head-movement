@@ -335,7 +335,107 @@ public class Dancer : MonoBehaviour
             if (line == null) continue;
             Material glow = line.sharedMaterial;
             line.sharedMaterials = new[] { glow, marker };
+            classicMaterials[line] = line.sharedMaterials;
         }
+
+        if (solidSkeleton) ApplySkeletonMaterials();
+    }
+
+    // ------------------------------------------------------------------ solid skeleton (VR)
+
+    /// <summary>render queue of the over-the-bodies pass of the solid skeleton: after the translucent bodies (2990-3022) and the hair, before the VR panels (3900)</summary>
+    public const int SolidOnTopQueue = 3100;
+
+    static readonly List<Dancer> LiveDancers = new();
+    static bool solidSkeleton;
+    static readonly Material[] solidMaterials = new Material[2];
+    readonly Dictionary<LineRenderer, Material[]> classicMaterials = new();
+
+    void Awake() => LiveDancers.Add(this);
+
+    void OnDestroy() => LiveDancers.Remove(this);
+
+    /// <summary>VR mode: the skeleton lines (and the follower's spine beads) are SOLID - alpha 1, no blending, always bright (Resources/HM_SkeletonSolid,
+    /// HmVr.SolidSkeleton), drawn once depth-correct (Geometry queue, ZWrite on) and once over the translucent bodies (queue 3100, ZTest Always), so no
+    /// body opacity, hair or passthrough can dim them. Off: the viewer's glow shader graph and the stencil markers. Widths are never faded below 1 while on.</summary>
+    public static bool SolidSkeletonOn => solidSkeleton;
+
+    public static void SetSolidSkeleton(bool on)
+    {
+        if (on && SolidMaterial(false) == null) on = false; // shader missing from the player: keep the glow lines rather than none
+        if (solidSkeleton == on) return;
+        solidSkeleton = on;
+        foreach (Dancer d in LiveDancers)
+        {
+            if (d != null) d.ApplySkeletonMaterials();
+        }
+    }
+
+    /// <summary>the solid skeleton's material: the depth-correct one (onTop false) or the over-the-bodies one (shared by every line; null when the shader is missing)</summary>
+    public static Material SolidMaterial(bool onTop)
+    {
+        int i = onTop ? 1 : 0;
+        if (solidMaterials[i] != null) return solidMaterials[i];
+        Shader shader = Resources.Load<Shader>("HM_SkeletonSolid");
+        if (shader == null) shader = Shader.Find("HeadMovement/SkeletonSolid");
+        if (shader == null)
+        {
+            Debug.LogError("HM-VR skeleton: shader HeadMovement/SkeletonSolid is not in the player; the skeleton keeps its glow material");
+            return null;
+        }
+
+        Material m = new(shader) { name = onTop ? "skeleton solid (over the bodies)" : "skeleton solid" };
+        m.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.One);
+        m.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.Zero);
+        m.SetFloat("_OnTop", onTop ? 1f : 0f);
+        m.SetFloat("_ZWrite", onTop ? 0f : 1f);
+        m.SetFloat("_ZTest", onTop ? (float)UnityEngine.Rendering.CompareFunction.Always : (float)UnityEngine.Rendering.CompareFunction.LessEqual);
+        m.renderQueue = onTop ? SolidOnTopQueue : (int)UnityEngine.Rendering.RenderQueue.Geometry;
+        solidMaterials[i] = m;
+        return m;
+    }
+
+    void ApplySkeletonMaterials()
+    {
+        Material depth = solidSkeleton ? SolidMaterial(false) : null, over = solidSkeleton ? SolidMaterial(true) : null;
+        foreach (LineRenderer line in SkeletonLines())
+        {
+            if (line == null) continue;
+            if (depth != null && over != null) line.sharedMaterials = new[] { depth, over };
+            else if (classicMaterials.TryGetValue(line, out Material[] classic)) line.sharedMaterials = classic;
+        }
+    }
+
+    /// <summary>what the skeleton is drawn with now (the HM-VR skeleton log line, the VR selftest): per material the shader, queue, blend and z state, and
+    /// the lowest gradient alpha of every skeleton line</summary>
+    public static string SkeletonReport(out bool solidOk)
+    {
+        float alpha = 1f;
+        int lines = 0;
+        foreach (Dancer d in LiveDancers)
+        {
+            if (d == null) continue;
+            foreach (LineRenderer line in d.SkeletonLines())
+            {
+                if (line == null) continue;
+                lines++;
+                foreach (GradientAlphaKey k in line.colorGradient.alphaKeys) alpha = Mathf.Min(alpha, k.alpha);
+            }
+        }
+
+        Material depth = solidMaterials[0], over = solidMaterials[1];
+        solidOk = solidSkeleton && depth != null && over != null && alpha >= 0.999f
+                  && depth.renderQueue < 2500 && depth.GetFloat("_ZWrite") > 0.5f && depth.GetFloat("_DstBlend") < 0.5f
+                  && over.renderQueue >= 3000 && over.GetFloat("_DstBlend") < 0.5f;
+        string One(Material m) => m == null ? "none"
+            : $"{m.shader.name} queue {m.renderQueue} blend {(UnityEngine.Rendering.BlendMode)(int)m.GetFloat("_SrcBlend")}/{(UnityEngine.Rendering.BlendMode)(int)m.GetFloat("_DstBlend")} zwrite {m.GetFloat("_ZWrite"):0} ztest {(UnityEngine.Rendering.CompareFunction)(int)m.GetFloat("_ZTest")}";
+        string beads = "";
+        foreach (Dancer d in LiveDancers)
+        {
+            if (d != null && d.followSpineBeads != null) beads = "; " + d.followSpineBeads.SolidState();
+        }
+
+        return $"solid {solidSkeleton}, {lines} lines, lowest colour alpha {alpha:0.00}; depth-correct: {One(depth)}; over the bodies: {One(over)}{beads}";
     }
 
     bool spanHidden;

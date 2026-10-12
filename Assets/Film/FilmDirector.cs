@@ -875,6 +875,7 @@ public class FilmDirector : MonoBehaviour
     void SetSkeletonWidth(float k)
     {
         skeletonNow = k;
+        if (Dancer.SolidSkeletonOn && k > 0.02f) k = 1f; // VR: the solid skeleton is never faded to a thin line (hidden at ~0 still hides it)
         WidthOf(hm.LeadDancer, k);
         WidthOf(hm.FollowDancer, k);
         if (contactLines == null)

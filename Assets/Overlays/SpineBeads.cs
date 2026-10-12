@@ -49,6 +49,9 @@ public class SpineBeads : MonoBehaviour
     static readonly int IntensityId = Shader.PropertyToID("_Intensity");
     static readonly int SkelRefId = Shader.PropertyToID("_SkelRef");
     static readonly int StencilPassId = Shader.PropertyToID("_StencilPass");
+    static readonly int SolidId = Shader.PropertyToID("_Solid");
+    static readonly int ZTestId = Shader.PropertyToID("_ZTest");
+    static readonly int ZWriteId = Shader.PropertyToID("_ZWrite");
 
     readonly Matrix4x4[] matrices = new Matrix4x4[MaxBeads];
     readonly Vector4[] colours = new Vector4[MaxBeads];
@@ -63,7 +66,7 @@ public class SpineBeads : MonoBehaviour
     Bounds bounds;
     int count;
     bool hasPose;
-    bool stencilOn;
+    bool stencilOn, solidOn;
     float radius = DefaultRadius, spacing = DefaultSpacing;
     float typicalLength = 0.5f;
     float lastScale = 1f;
@@ -269,11 +272,26 @@ public class SpineBeads : MonoBehaviour
 
     void ApplyStencil(bool force)
     {
+        bool solid = Dancer.SolidSkeletonOn;
+        if (force || solid != solidOn)
+        {
+            // VR: the bead is part of the solid skeleton - the same brightness model as the lines (HM_SkeletonSolid) and drawn over the translucent bodies
+            solidOn = solid;
+            material.SetFloat(SolidId, solid ? 1f : 0f);
+            material.SetFloat(ZTestId, solid ? (float)CompareFunction.Always : (float)CompareFunction.LessEqual);
+            material.SetFloat(ZWriteId, solid ? 0f : 1f);
+            material.renderQueue = solid ? Dancer.SolidOnTopQueue + 1 : -1;
+        }
+
         bool on = Dancer.SkeletonStencilOn;
         if (!force && on == stencilOn) return;
         stencilOn = on;
         material.SetFloat(StencilPassId, on ? (float)StencilOp.Replace : (float)StencilOp.Keep);
     }
+
+    /// <summary>VR solid skeleton: the bead material's state, for the HM-VR skeleton log line</summary>
+    public string SolidState() => material == null ? "no material"
+        : $"beads {material.shader.name} queue {material.renderQueue} solid {material.GetFloat(SolidId):0} ztest {(CompareFunction)(int)material.GetFloat(ZTestId)} zwrite {material.GetFloat(ZWriteId):0} instanced {material.enableInstancing}";
 
     /// <summary>the colour of bead i now as a line colour (sRGB 0..1, like the joint colours SkeletonStyle hands out)</summary>
     public Color BeadColour(int i) => i >= 0 && i < count ? ((Color)colours[i]).gamma : Color.clear;
