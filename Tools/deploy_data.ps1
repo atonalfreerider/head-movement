@@ -8,7 +8,11 @@ build placed anywhere, or the Quest (Android: StreamingAssets is inside the APK,
     powershell -File Tools/deploy_data.ps1 -Out Builds/data -PhoneVideo      # include the phones' frame strips and clips (hundreds of MB; VR does not draw them)
     powershell -File Tools/deploy_data.ps1 -Out Builds/data -Bake -Push   # also bake the headset textures (editor open; see below)
     powershell -File Tools/deploy_data.ps1 -Out Builds/data -Push -Serial <adb serial>   # with several headsets attached, name the one (adb devices)
-    powershell -File Tools/deploy_data.ps1 -Out Builds/data -Push -ReplaceSettings   # also replace the headset's quest_settings.json by Tools/quest_settings.json
+    powershell -File Tools/deploy_data.ps1 -Out Builds/data -Push -ReplaceSettings   # also replace the headset's quest_settings.json by the tier file for that headset
+    powershell -File Tools/deploy_data.ps1 -Out Builds/data -Push -ReplaceSettings -Settings Tools/quest2_settings.json   # name the tier file yourself
+
+The Quest tier file (pushed as hm_data/quest_settings.json) is picked per headset from its model (adb shell getprop ro.product.model):
+"Quest 2" -> Tools/quest2_settings.json, anything else (Quest 3 / 3S / Pro) -> Tools/quest_settings.json; -Settings <file> overrides it.
 
 What it copies, for every film of StreamingAssets/library/library.json that is ready:
   <capture>/                  the capture folder without .meta files: avatars (smplx bins, albedo), hair groom, shoes / head props, room mesh, audio,
@@ -29,7 +33,8 @@ param(
     [switch]$Bake,
     [string]$Package = "com.headmovement.viewer",
     [string]$Serial = "",
-    [switch]$ReplaceSettings
+    [switch]$ReplaceSettings,
+    [string]$Settings = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -152,9 +157,17 @@ if ($Push) {
     # the folders the shell made are private to it (owner shell, mode 770): the app (another uid) gets "access denied" listing them until they are world-readable
     & $adb @a shell "find $target -type d -exec chmod 755 {} + ; find $target -type f -exec chmod 644 {} +"
     Write-Host "made the pushed folders readable by the app"
-    # the Quest's tier defaults (Tools/quest_settings.json, docs/QUEST.md): pushed when the headset has none, or always with -ReplaceSettings.
+    # the Quest's tier defaults (docs/QUEST.md): pushed when the headset has none, or always with -ReplaceSettings.
     # Pushed to the headset only, never laid out in -Out (a Windows player reads quest_settings.json from its data folder too).
-    $qs = Join-Path $PSScriptRoot "quest_settings.json"
+    # Per headset: a Quest 2 gets Tools/quest2_settings.json (when it exists), every other headset Tools/quest_settings.json; -Settings names the file.
+    $model = "$(& $adb @a shell getprop ro.product.model)".Trim()
+    if ($Settings) {
+        $qs = if ([System.IO.Path]::IsPathRooted($Settings)) { $Settings } else { Join-Path $project $Settings }
+        if (-not (Test-Path $qs)) { throw "-Settings: no file $qs" }
+    }
+    elseif ($model -match "Quest 2" -and (Test-Path (Join-Path $PSScriptRoot "quest2_settings.json"))) { $qs = Join-Path $PSScriptRoot "quest2_settings.json" }
+    else { $qs = Join-Path $PSScriptRoot "quest_settings.json" }
+    Write-Host "headset model '$model': tier file $qs"
     if (Test-Path $qs) {
         $has = "$(& $adb @a shell "if [ -f $target/quest_settings.json ]; then echo yes; fi")".Trim()
         if ($ReplaceSettings -or $has -ne "yes") {

@@ -1,0 +1,10 @@
+{
+  "_comment": "Quest 2 STARTING tier (2026-10-21, before the Quest 2 bench): pushed as hm_data/quest_settings.json by Tools/deploy_data.ps1 -Push to a headset whose model is 'Quest 2' (Tools/quest_settings.json stays the Quest 3 default). The low-res splat layer at 0.5 with the fastest composite settings measured on the Quest 3.",
+  "splats": true,
+  "splat_set": "quest_15k",
+  "splat_scale": 0.5,
+  "splat_path": "composite",
+  "splat_depth": "on",
+  "splat_alpha_cutoff": 0.05,
+  "splat_sort_every": 2
+}
