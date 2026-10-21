@@ -1,8 +1,10 @@
 {
-  "_comment": "Quest tier defaults pushed to the headset as hm_data/quest_settings.json by Tools/deploy_data.ps1 -Push (kept if the headset has its own; -ReplaceSettings replaces it). Keys: Assets/VR/Runtime/VrSettings.cs, docs/SPLAT_DANCERS.md 'Quest'. Never lay this out in Builds/data: a Windows player reads quest_settings.json from its data folder too.",
+  "_comment": "Quest tier defaults pushed to the headset as hm_data/quest_settings.json by Tools/deploy_data.ps1 -Push (kept if the headset has its own; -ReplaceSettings replaces it). Keys: Assets/VR/Runtime/VrSettings.cs, docs/SPLAT_DANCERS.md 'Quest'. Never lay this out in Builds/data: a Windows player reads quest_settings.json from its data folder too. 2026-10-21 headset bench (Builds/quest_bench_d25): quest_15k + alpha cutoff 0.05 + sort every 2 on the composite path = the fastest runtime-only setting with an unchanged look (the low-res layer splat_scale < 1 draws the splats upside down on the Quest; the direct path loses the floor marks). Known: at the splat frame rate the adaptive step takes the hair full -> light -> off about 55-70 s into the recap (no fps gain) and the follower's splat hair then stops swinging; \"adaptive\": false does not help in the 2026-10-21 build (VrPerf reads the settings before they are loaded).",
   "splats": true,
-  "splat_set": "quest_25k",
+  "splat_set": "quest_15k",
   "splat_scale": 1.0,
   "splat_path": "composite",
-  "splat_depth": "on"
+  "splat_depth": "on",
+  "splat_alpha_cutoff": 0.05,
+  "splat_sort_every": 2
 }
