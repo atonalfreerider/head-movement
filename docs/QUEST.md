@@ -74,11 +74,22 @@ queue 2000 blend One/Zero zwrite 1 ...; over the bodies: ... queue 3100 ... ztes
 
 **Hair on the Quest.** The follow's groomed hair (160 guides x 16 segments, cards, Burst simulation baked in the background after load) stays ON in the
 Quest tier. `VrQuality`: hair level *Full* (all cards close up, LOD by head size on screen, tip glow), *Light* (cheaper levels from a shorter distance,
-no tip glow), *Off*; the menu footer's *Hair* button cycles them; when a lesson keeps missing the frame budget the level steps down by itself
-(`adaptive`, logged as `HM-PERF adaptive` with the context of the decision; windows during the hair bake and the 6 s after a seek / chapter jump are
-ignored, they are transients), never up. The tier is data: `hm_data/quest_settings.json` (keys in `VrSettings.cs`: `display`, `hair`, `hair_full`,
-`hair_light`, `adaptive`, `hair_bake`, `hair_bake_chunk`, `hair_substeps`, `hair_iterations`, `msaa`, `eye_scale`, `refresh_hz`, `perf_log`); command line
-`-hmhair full|light|off`. MSAA 4x on a Quest 3 (hair alpha-to-coverage needs it; 2x on a Quest 2), no HDR, no shadows, no extra lights, eye buffer 1.0
+no tip glow), *Off*; the menu footer's *Hair* button cycles them. When a lesson keeps missing the frame budget (`adaptive`) the level is TRIED one
+step down: the next steady 4-s window is compared with the one that triggered it and the step is kept only if it gained frame time (mean frame time
+down by 0.5 ms and 4 %, or GPU time by 0.5 ms and 5 %); otherwise it is undone and not tried again in that lesson. Windows during the hair bake and
+the 6 s after a seek / chapter jump are ignored (transients); it never steps up by itself. **With the splat dancers** (2026-10-21) the follower's
+splat hair is driven by this hair simulation and the hair cards are hidden under the splats: a hair level changes nothing that is drawn, and Off
+used to stop the simulation, so the splat hair froze on its rigid skinning ("source not ready (LBS)" in `HM-SPLATS status`; the 2026-10-21 bench saw
+full -> light -> off about 55-70 s into the recap with no frame-rate gain). Now a hair that drives bound splat hair is never switched off: the
+adaptive step stops at Light (`... hair stays light: its simulation drives the splat dancer's bound hair`), and a level of Off (menu, settings,
+`-hmhair off`) keeps that hair simulating with the Light profile (`HM-PERF hair: level off, but ...`; `VrQuality.SplatHairNeedsSimulation`,
+`SplatDancers.DrivesSplatHair`). Every decision is an `HM-PERF adaptive` line (`trying hair full -> light`, `kept hair light: it gained frame time
+(...)`, `undo hair light -> full: no frame time gained (mean frame a -> b ms, gpu c -> d ms, over budget x% -> y%)`), and the 5-s `HM-PERF` line
+carries `hairSim=on|off adaptive=on|off steps= undos= splatHair=live|<status>`. The settings are loaded before `VrPerf` starts (`VrSession.Init`;
+before, `"adaptive": false` was read from the defaults and had no effect); `HM-PERF settings: adaptive on|off ...` at start and `HM-PERF adaptive:
+on|off for lesson ...` at each lesson say what is in force. The tier is data: `hm_data/quest_settings.json` (keys in `VrSettings.cs`: `display`,
+`hair`, `hair_full`, `hair_light`, `adaptive`, `hair_bake`, `hair_bake_chunk`, `hair_substeps`, `hair_iterations`, `msaa`, `eye_scale`, `refresh_hz`,
+`perf_log`); command line `-hmhair full|light|off`, `-hmadaptive on|off`. MSAA 4x on a Quest 3 (hair alpha-to-coverage needs it; 2x on a Quest 2), no HDR, no shadows, no extra lights, eye buffer 1.0
 (0.9 on a Quest 2), the renderer's intermediate texture set to Auto (Meta's passthrough advice), 72 Hz asked from the runtime. The frame log
 (`HM-PERF`, every 5 s, tag Unity): fps, mean / p95 / worst frame ms, share of frames over budget, GPU and CPU frame time from `FrameTimingManager`, hair
 level and LOD, hair triangles, bake progress, memory.
@@ -102,7 +113,12 @@ starts a lesson by itself (`-hmplay <film id>`), jumps to a time a few seconds a
 `/sdcard/Android/data/com.headmovement.viewer/files/hmshots/` (one every 6 s from 9 s after the start; `ScreenCapture` BothEyes,
 not yet tried on the headset), and `-hmsplats on|off`,
 `-hmsplatmax N`, `-hmsplatsigma M`, `-hmsplatpath composite|direct`, `-hmsplatdepth on|off`, `-hmsplatset NAME|full`,
-`-hmsplatscale S`, `-hmsplatcutoff A`, `-hmsplatsort N` set the splat tier for that run.
+`-hmsplatscale S`, `-hmsplatcutoff A`, `-hmsplatsort N` set the splat tier for that run; `-hmadaptive on|off` the adaptive hair step,
+`-hmshotfrom S` the time of the first still (default 9 s). **Bench sequence** (one launch, several settings; `python Tools/quest_splat_bench.py
+cycle <label> <film> <seek|none> --views start,front,overhead --scales 0.5,0.6,0.7 --x "..." --shots 1`): `-hmviews a,b,c` and `-hmsplatscales
+s1,s2,...` step through every view x `-hmbenchreps N` (default 2) x scale, one step every `-hmbenchdwell S` seconds (default 8), changing the
+low-res layer's scale in place (only inside the low-res layer: start with `-hmsplatscale` below 1) and logging `HM-PERF bench step i/N view 'v'
+scale s dwell d s` (`HM-PERF bench done` at the end); `-hmbenchshots 1` takes one still 0.3 s into each step of the first round.
 A desk test needs a tracked headset: one that lay still in a dark room shows the system's "Finding position in room" dialog and holds
 every app launch until it is picked up (logcat `VioInitialization: Skipping: Device is static`); `prox_close` alone does not help.
 

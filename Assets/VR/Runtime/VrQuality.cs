@@ -100,6 +100,7 @@ namespace HmVr
             if (xr) RequestRefreshRate(settings.RefreshHz);
             Hair = settings.Hair;
             HairSteps = 0;
+            HairUndos = 0;
             ApplyHair();
             if (!hairHooked)
             {
@@ -141,6 +142,27 @@ namespace HmVr
             return true;
         }
 
+        /// <summary>the adaptive controller takes back a step that gained no frame time</summary>
+        public static void UndoHairStep(HairLevel back)
+        {
+            HairUndos++;
+            SetHair(back, false);
+        }
+
+        public static int HairUndos { get; private set; }
+
+        /// <summary>a hair whose simulation drives a splat dancer's bound hair (SplatDancers.DrivesSplatHair): never switched off -
+        /// at level Off it keeps simulating with the Light profile (its cards are hidden under the splats anyway), so the splat hair
+        /// keeps swinging; the HairSimulation components and every other hair follow the level as before</summary>
+        public static bool SplatHairNeedsSimulation(HairStrands h = null)
+        {
+#if UNITY_EDITOR || UNITY_STANDALONE_WIN || UNITY_ANDROID
+            return SplatDancers.DrivesSplatHair(h);
+#else
+            return false;
+#endif
+        }
+
         static void ApplyHair()
         {
             if (Current != Tier.Quest) return;
@@ -150,10 +172,31 @@ namespace HmVr
             foreach (HairStrands h in UnityEngine.Object.FindObjectsByType<HairStrands>(FindObjectsInactive.Include))
             {
                 h.ApplyBudget(st.HairBake, st.HairBakeChunk, st.HairSubsteps, st.HairIterations);
-                h.ApplyQuality(on, p.LodScale, p.MinLod, p.Tips);
+                bool keep = !on && SplatHairNeedsSimulation(h);
+                VrSettings.HairProfile hp = keep ? st.Light : p;
+                h.ApplyQuality(on || keep, hp.LodScale, hp.MinLod, hp.Tips);
+                if (keep) Debug.Log("HM-PERF hair: level off, but this hair drives the splat dancer's bound hair: its simulation keeps running (light profile; the cards stay hidden under the splats)");
             }
 
             foreach (HairSimulation h in UnityEngine.Object.FindObjectsByType<HairSimulation>(FindObjectsInactive.Include)) h.enabled = on;
+        }
+
+        /// <summary>called about once a second (VrPerf): the splat dancers are built a moment after the avatars (their files load in the
+        /// background), so a hair that was switched off before its splat binding existed is switched back on here; true when it changed</summary>
+        public static bool EnforceSplatHairFloor()
+        {
+            if (!applied || Current != Tier.Quest || Hair != HairLevel.Off) return false;
+            bool changed = false;
+            foreach (HairStrands h in UnityEngine.Object.FindObjectsByType<HairStrands>(FindObjectsInactive.Include))
+            {
+                if (h.enabled || !SplatHairNeedsSimulation(h)) continue;
+                VrSettings.HairProfile lp = VrSettings.Current.Light;
+                h.ApplyQuality(true, lp.LodScale, lp.MinLod, lp.Tips);
+                changed = true;
+            }
+
+            if (changed) Debug.Log("HM-PERF hair: level off, but the splat dancer's bound hair needs the simulation: switched back on (light profile)");
+            return changed;
         }
 
         static void RestoreHair()
@@ -298,7 +341,7 @@ namespace HmVr
 
         public static Dictionary<string, object> State() => new()
         {
-            ["tier"] = Current.ToString().ToLowerInvariant(), ["applied"] = applied, ["hair"] = Hair.ToString().ToLowerInvariant(), ["hairSteps"] = HairSteps,
+            ["tier"] = Current.ToString().ToLowerInvariant(), ["applied"] = applied, ["hair"] = Hair.ToString().ToLowerInvariant(), ["hairSteps"] = HairSteps, ["hairUndos"] = HairUndos, ["splatHairNeedsSimulation"] = SplatHairNeedsSimulation(),
             ["msaa"] = asset != null && Current == Tier.Quest ? asset.msaaSampleCount : (GraphicsSettings.currentRenderPipeline as UniversalRenderPipelineAsset)?.msaaSampleCount ?? -1,
             ["hdr"] = (GraphicsSettings.currentRenderPipeline as UniversalRenderPipelineAsset)?.supportsHDR ?? false,
             ["refreshHz"] = RefreshHz, ["notes"] = Notes

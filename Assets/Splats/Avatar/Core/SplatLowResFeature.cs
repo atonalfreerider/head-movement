@@ -19,14 +19,31 @@ namespace HmSplats
     /// SplatUrpFeature.LowResScale &lt; 1 (quest_settings.json "splat_scale", -hmsplatscale): the same three steps as the package's
     /// composite path (net.kleinbeck.gaussians 0.4.0 GaussianSplat3DURPPasses: prepare = view data + sort, accumulate, composite),
     /// but the accumulation goes into a texture of its own at <c>LowResScale</c> of the eye buffer per side, 1x MSAA, RGBA16F,
-    /// cleared to transparent, with no depth attachment (the splats are not depth-tested against the scene: the dancers have
-    /// nothing opaque in front of them in the lesson scene), and the composite samples it bilinearly into the camera colour (our
-    /// HM_SplatComposite pass 1: premultiplied, gamma to linear, the fade opacity). The camera is NOT forced to an intermediate
-    /// texture (the package forces one because its accumulation shares the camera depth). No splat depth is written in this mode:
-    /// floor marks and overlays draw over the dancers (the package's depth pass is full resolution and costs ~25 % of the splat
-    /// time). The view data is prepared for the low-res size (the renderer's pixel-size terms, the 0.3 px^2 low-pass, follow it).
-    /// The package's internals (the render system, its camera selection and draw list) are reached by reflection; Status says
-    /// whether they were found. Added to the URP renderer at run time only (SplatUrpFeature.Ensure / Remove).
+    /// cleared to transparent, with a low-res depth attachment of its own (cleared to far: the splats' ZTest LEqual always has a
+    /// depth buffer, as in the package's pass, which binds the camera depth), and the composite samples it bilinearly into the
+    /// camera colour (our HM_SplatComposite pass 1: premultiplied, gamma to linear, the fade opacity). The camera is NOT forced to
+    /// an intermediate texture (the package forces one because its accumulation shares the camera depth), so on the Quest the
+    /// composite writes the XR eye texture directly.
+    ///
+    /// ORIENTATION (fixed 2026-10-21 after the headset showed the low-res splats upside down over an upright floor): the renderer's
+    /// view data always uses the render-texture projection (GL.GetGPUProjectionMatrix(p, true)), so the low-res layer holds the image
+    /// in Unity's texture convention (UV origin bottom-left). The package's composite copies in memory order (its vert flips the uv
+    /// under UNITY_UV_STARTS_AT_TOP, and Blitter's fullscreen triangle undoes it), which is right only when the target has the same
+    /// origin - the package's forced intermediate. The eye texture (Vulkan, D3D: the back buffer) has a TOP-left origin, so the
+    /// copy came out mirrored vertically. The composite now asks the render graph for the target's UV origin
+    /// (RasterGraphContext.GetTextureUVOrigin, the test URP's own final blit uses) and passes a y-flipped _BlitScaleBias when it
+    /// differs from the layer's: upright into the eye texture (Vulkan) and into a D3D12 back buffer, unchanged into an
+    /// intermediate texture (the PC editor's camera, which renders through one). OpenGL-like APIs report bottom-left for both.
+    ///
+    /// DEPTH (<c>SplatUrpFeature.LowResDepth</c>, "splat_depth" on): after the colour, the renderer's SplatDepth pass (approximate
+    /// splat-centre depth) writes the low-res depth, and the composite (HM_SplatComposite pass 2) outputs it as SV_Depth with ZTest
+    /// LEqual / ZWrite On against the camera depth: splats behind nearer scene geometry are hidden, and the overlays drawn after it
+    /// (floor marks, the contact disc, the transparent queue) depth-test against the dancers as on the package's composite path.
+    /// Without it the composite is ZTest Always with no depth and the floor marks draw over the feet.
+    ///
+    /// The view data is prepared for the low-res size (the renderer's pixel-size terms, the 0.3 px^2 low-pass, follow it). The
+    /// package's internals (the render system, its camera selection and draw list) are reached by reflection; Status says whether
+    /// they were found. Added to the URP renderer at run time only (SplatUrpFeature.Ensure / Remove).
     /// </summary>
     public sealed class SplatLowResFeature : ScriptableRendererFeature
     {
@@ -37,6 +54,11 @@ namespace HmSplats
 
         /// <summary>the low-res layer of the last frame (width x height per eye)</summary>
         public static Vector2Int LastSize { get; internal set; }
+
+        /// <summary>the composite's last orientation decision: "flip (target top-left)" / "no flip (target bottom-left)" (Status)</summary>
+        public static string LastOrientation { get; private set; } = "-";
+
+        static readonly int LowResDepthId = Shader.PropertyToID("_HmSplatLowResDepth");
 
         public override void Create()
         {
@@ -117,12 +139,14 @@ namespace HmSplats
             sealed class AccumulateData
             {
                 internal readonly List<Draw> Draws = new();
+                internal bool Depth;
             }
 
             sealed class CompositeData
             {
-                internal TextureHandle Source;
+                internal TextureHandle Source, Target;
                 internal Material Material;
+                internal int Pass;
             }
 
             public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData)
@@ -184,11 +208,29 @@ namespace HmSplats
                     name = "_HmSplatLowRes"
                 };
                 TextureHandle acc = renderGraph.CreateTexture(td);
+                // the layer's own depth (cleared to far): the splat colour pass tests LEqual like the package's (which binds the camera
+                // depth), so a depth buffer is always bound; with LowResDepth the SplatDepth pass fills it and the composite reads it
+                TextureDesc dd = new(w, h)
+                {
+                    dimension = cd.dimension,
+                    slices = cd.volumeDepth,
+                    vrUsage = cd.vrUsage,
+                    format = GraphicsFormat.D32_SFloat,
+                    msaaSamples = MSAASamples.None,
+                    clearBuffer = true,
+                    filterMode = FilterMode.Point,
+                    wrapMode = TextureWrapMode.Clamp,
+                    useMipMap = false,
+                    name = "_HmSplatLowResDepth"
+                };
+                TextureHandle accDepth = renderGraph.CreateTexture(dd);
+                bool depth = SplatUrpFeature.LowResDepth && resources.activeDepthTexture.IsValid();
                 LastSize = new Vector2Int(w, h);
 
                 using (IRasterRenderGraphBuilder builder = renderGraph.AddRasterRenderPass("HmSplats.LowRes.Accumulate", out AccumulateData data))
                 {
                     data.Draws.Clear();
+                    data.Depth = depth;
                     foreach (object d in draws)
                     {
                         data.Draws.Add(new Draw
@@ -204,38 +246,60 @@ namespace HmSplats
                     }
 
                     builder.SetRenderAttachment(acc, 0, AccessFlags.Write);
+                    builder.SetRenderAttachmentDepth(accDepth, AccessFlags.Write);
+                    if (depth) builder.SetGlobalTextureAfterPass(accDepth, LowResDepthId);
                     builder.EnableFoveatedRasterization(false);
                     builder.AllowPassCulling(false);
                     builder.SetRenderFunc(static (AccumulateData p, RasterGraphContext context) =>
                     {
-                        foreach (Draw d in p.Draws)
-                        {
-                            if (d.Material == null || d.Indices == null) continue;
-                            if (d.IndirectArgs != null)
-                                context.cmd.DrawProceduralIndirect(d.Indices, d.Matrix, d.Material, 0, MeshTopology.Triangles, d.IndirectArgs, 20, d.Properties);
-                            else
-                                context.cmd.DrawProcedural(d.Indices, d.Matrix, d.Material, 0, MeshTopology.Triangles, d.IndexCount, d.Count, d.Properties);
-                        }
+                        DrawAll(context.cmd, p.Draws, 0); // SplatColor: premultiplied over, ZWrite Off
+                        if (p.Depth) DrawAll(context.cmd, p.Draws, 1); // SplatDepth: ColorMask 0, ZWrite On (after the colour: it must not reject it)
                     });
                 }
 
                 using (IRasterRenderGraphBuilder builder = renderGraph.AddRasterRenderPass("HmSplats.LowRes.Composite", out CompositeData data))
                 {
                     data.Source = acc;
+                    data.Target = resources.activeColorTexture;
                     data.Material = composite;
+                    data.Pass = depth ? 2 : 1;
                     builder.UseTexture(acc);
                     builder.SetRenderAttachment(resources.activeColorTexture, 0, AccessFlags.ReadWrite);
+                    if (depth)
+                    {
+                        builder.UseTexture(accDepth);
+                        builder.SetRenderAttachmentDepth(resources.activeDepthTexture, AccessFlags.ReadWrite);
+                    }
+
                     ConfigureFoveation(builder, camera, resources.isActiveTargetBackBuffer);
                     builder.SetRenderFunc(static (CompositeData p, RasterGraphContext context) =>
                     {
                         RTHandle source = p.Source;
                         Vector4 s = source.useScaling ? source.rtHandleProperties.rtHandleScale : Vector4.one;
-                        Blitter.BlitTexture(context.cmd, source, new Vector4(s.x, s.y, 0, 0), p.Material, 1);
+                        // the layer is in texture order (bottom-left origin: the renderer's render-texture projection); flip when the
+                        // target is not (the XR eye texture / a back buffer on Vulkan and D3D), as URP's final blit does
+                        bool flip = context.GetTextureUVOrigin(in p.Source) != context.GetTextureUVOrigin(in p.Target);
+                        LastOrientation = flip ? "flip (target top-left)" : "no flip (target bottom-left)";
+                        Vector4 scaleBias = flip ? new Vector4(s.x, -s.y, 0f, s.y) : new Vector4(s.x, s.y, 0f, 0f);
+                        Blitter.BlitTexture(context.cmd, source, scaleBias, p.Material, p.Pass);
                     });
                 }
 
                 if ((Time.frameCount & 31) == 0 || !Status.StartsWith("ok"))
-                    Status = $"ok: {w}x{h} per eye ({scale:0.00} of {cd.width}x{cd.height}), {draws.Count} draw(s), {(camera.xr != null && camera.xr.enabled ? $"xr {camera.xr.viewCount} views" : "mono")}, no splat depth";
+                    Status = $"ok: {w}x{h} per eye ({scale:0.00} of {cd.width}x{cd.height}), {draws.Count} draw(s), {(camera.xr != null && camera.xr.enabled ? $"xr {camera.xr.viewCount} views" : "mono")}, " +
+                             $"target {(resources.isActiveTargetBackBuffer ? "back buffer" : "intermediate")}, composite {LastOrientation}, {(depth ? "splat depth (low-res, depth-tested composite)" : "no splat depth")}";
+            }
+
+            static void DrawAll(RasterCommandBuffer cmd, List<Draw> draws, int pass)
+            {
+                foreach (Draw d in draws)
+                {
+                    if (d.Material == null || d.Indices == null) continue;
+                    if (d.IndirectArgs != null)
+                        cmd.DrawProceduralIndirect(d.Indices, d.Matrix, d.Material, pass, MeshTopology.Triangles, d.IndirectArgs, 20, d.Properties);
+                    else
+                        cmd.DrawProcedural(d.Indices, d.Matrix, d.Material, pass, MeshTopology.Triangles, d.IndexCount, d.Count, d.Properties);
+                }
             }
 
             /// <summary>the package's foveation policy for the composite into the camera target (GaussiansURPUtilities.ConfigureFoveation)</summary>

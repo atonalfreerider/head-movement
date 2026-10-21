@@ -221,6 +221,7 @@ public sealed class SplatDancers : MonoBehaviour
         alphaCutoff = 0f;
         sortEvery = 1;
         SplatUrpFeature.LowResScale = 1f;
+        SplatUrpFeature.LowResDepth = true;
         opacityMode = OpacityModes.Opaque;
         renderPath = Paths.Composite;
         DisplayOpacity = 1f;
@@ -264,6 +265,41 @@ public sealed class SplatDancers : MonoBehaviour
 
     public static int ReduceMax => reduceMax;
     public static float ReduceSigma => reduceSigma;
+
+    /// <summary>
+    /// The hair simulation of <paramref name="hair"/> drives a splat dancer's bound hair Gaussians in this lesson (the follower's
+    /// hair on the recap): it must keep running whatever the headset's hair level says (VrQuality, VrPerf's adaptive step) - a
+    /// disabled HairStrands stops simulating, the bound hair falls back to the rigid LHM++ skinning ("source not ready (LBS)") and
+    /// stops swinging. The hair cards themselves are hidden under the splats, so the hair level changes nothing that is drawn.
+    /// False while the splats are off, fell back to the mesh avatars, show the rigid hair (HairMotion off) or carry no binding;
+    /// null = any hair (the lesson has bound splat hair at all).
+    /// </summary>
+    public static bool DrivesSplatHair(HairStrands hair = null)
+    {
+        SplatDancers s = Instance;
+        if (!splatsOn || s == null || s.fellBack || !hairMotion || hairMode == SkinnedSplatAvatar.HairModes.Hidden) return false;
+        foreach (Entry e in s.entries)
+        {
+            if (e.Splat == null || e.Splat.HairBinding == null || e.Splat.HairBinding.Bound <= 0) continue;
+            if (hair == null || hair.Avatar == e.Avatar) return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>the bound splat hair follows the simulation this frame (any dancer): "live" / the renderer's hair status / "-" (no bound hair)</summary>
+    public static string SplatHairState()
+    {
+        SplatDancers s = Instance;
+        if (s == null) return "-";
+        foreach (Entry e in s.entries)
+        {
+            if (e.Splat == null || e.Splat.HairBinding == null) continue;
+            return e.Splat.HairLive ? "live" : e.Splat.HairStatus;
+        }
+
+        return "-";
+    }
 
     /// <summary>the capture being loaded has a splat avatar for at least one dancer</summary>
     public bool HasSplatData
@@ -326,6 +362,7 @@ public sealed class SplatDancers : MonoBehaviour
         reduceSigma = st.SplatMaxSigma > 0f ? st.SplatMaxSigma : st.SplatMaxSigma < 0f ? 0f : QuestDefaultSigma;
         renderPath = st.SplatPath == "direct" ? Paths.Direct : st.SplatPath == "composite" ? Paths.Composite : QuestDefaultPath;
         questDepth = st.SplatDepth == "off" ? false : st.SplatDepth == "on" ? true : QuestDefaultDepth;
+        SplatUrpFeature.LowResDepth = questDepth; // the low-res layer's own splat depth + depth-tested composite (SplatLowResFeature)
         // the splat depth BEFORE the transparents is for the composite path (overlays depth-test against the dancers); on the direct
         // path the splats are transparents themselves and would test against their own depth: the package's order (after) then
         SplatUrpFeature.DepthBeforeTransparents = renderPath == Paths.Composite;
@@ -339,7 +376,7 @@ public sealed class SplatDancers : MonoBehaviour
         string why = QuestPlayer ? "" : st.SplatsGiven ? " (given)" : " (pc default: on in VR, off on the desktop)";
         QuestTier = $"{who}: splats {(on ? "on" : "off")}{why}{noPath}, max {(reduceMax > 0 ? reduceMax.ToString() : "all")} per dancer, " +
                     $"sigma clamp {(reduceSigma > 0f ? $"{reduceSigma * 100f:0.##} cm" : "none")}, path {renderPath}, depth {(questDepth ? "on" : "off")}, " +
-                    $"set '{(splatSet.Length > 0 ? splatSet : "full")}', layer scale {SplatUrpFeature.LowResScale:0.##}{(SplatUrpFeature.LowResScale < 0.999f ? " (low-res layer, no splat depth)" : "")}, " +
+                    $"set '{(splatSet.Length > 0 ? splatSet : "full")}', layer scale {SplatUrpFeature.LowResScale:0.##}{(SplatUrpFeature.LowResScale < 0.999f ? $" (low-res layer, {(questDepth ? "low-res splat depth" : "no splat depth")})" : "")}, " +
                     $"alpha cutoff {(alphaCutoff > 0f ? alphaCutoff.ToString("0.###") : "package")}, sort every {sortEvery}, api {api}, settings {st.Source}";
         Debug.Log($"HM-SPLATS tier: {QuestTier} (capture {Path.GetFileName(viewer.Manifest?.Folder ?? "?")})");
     }

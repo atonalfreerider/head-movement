@@ -48,6 +48,10 @@ namespace HmVr
             Xr = xr;
             root = gameObject;
             DontDestroyOnLoad(root);
+            // the tier's data (hm_data/quest_settings.json + the command line) BEFORE the components that read it when they are added:
+            // VrPerf took "adaptive" and "perf_log" from the defaults while the file was only loaded by VrQuality.Apply further down,
+            // so "adaptive": false had no effect (2026-10-21 headset bench). VrQuality.Apply reads it again (same values).
+            VrSettings.Load();
             Input = root.AddComponent<VrInput>();
             Input.Source = xr ? new XrInputSource(rig.TrackingSpace, rig.Head) : rig.Sim;
             Pointers = root.AddComponent<VrPointers>();

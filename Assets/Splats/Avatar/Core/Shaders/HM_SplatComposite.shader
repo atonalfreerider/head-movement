@@ -5,6 +5,15 @@
 // the camera target, so the dancers can be shown uniformly translucent over the scene and the skeletons. The whole
 // image is faded as ONE layer: the inside and the back of the bodies never show (scaling every Gaussian's alpha would).
 // Not done: VIEWER_SPEC 3.2 "transparent as displayed" (a per-pixel alpha from the shaded luminance, DisplayTransparency).
+//
+// Passes 0 and 1 are the package's (0: the BiRP composite, 1: URP, Blitter-driven). Their uv is a memory-order copy (the
+// UNITY_UV_STARTS_AT_TOP flip in vert undoes the raster flip of a fullscreen triangle): right when the source and the target have
+// the same UV origin (the package forces an intermediate camera texture). SplatLowResFeature composites its own render texture
+// (BottomLeft) into whatever URP's active target is - on the Quest the XR eye texture itself (TopLeft on Vulkan) - and flips
+// through _BlitScaleBias (-y) when the two origins differ, the way URP's final blit does (RenderingUtils.GetFinalBlitScaleBias).
+// Pass 2 (SplatLowResFeature with splat depth): pass 1 plus the low-res splat depth (_HmSplatLowResDepth, written by the
+// renderer's SplatDepth pass at the layer's resolution) as SV_Depth, depth-tested against the scene: the splats are hidden behind
+// nearer scene geometry and the overlays drawn after (floor marks, the contact disc) depth-test against the dancers.
 Shader "Hidden/HmSplats/Composite"
 {
     Properties
@@ -78,6 +87,40 @@ Shader "Hidden/HmSplats/Composite"
             float2 uv = SplatLinearToRasterUV(i.uv) * _BlitScaleBias.xy + _BlitScaleBias.zw;
             return ResolveSplatColor(UNITY_SAMPLE_SCREENSPACE_TEXTURE(_BlitTexture, uv));
         }
+
+        UNITY_DECLARE_SCREENSPACE_TEXTURE(_HmSplatLowResDepth);
+        float4 _HmSplatLowResDepth_TexelSize;
+
+        float NearerDepth(float a, float b)
+        {
+        #if defined(UNITY_REVERSED_Z)
+            return max(a, b);
+        #else
+            return min(a, b);
+        #endif
+        }
+
+        // the low-res splat depth, dilated by one texel (the nearest of the 2x2 point samples around uv) so the bilinear colour's
+        // reach at the silhouette still has a depth; far where no splat wrote one
+        half4 fragBlitDepth(v2f i, out float depth : SV_Depth) : SV_Target
+        {
+            UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(i);
+            float2 uv = SplatLinearToRasterUV(i.uv) * _BlitScaleBias.xy + _BlitScaleBias.zw;
+            float2 h = 0.5 * _HmSplatLowResDepth_TexelSize.xy;
+            float d = UNITY_SAMPLE_SCREENSPACE_TEXTURE(_HmSplatLowResDepth, uv + float2(-h.x, -h.y)).r;
+            d = NearerDepth(d, UNITY_SAMPLE_SCREENSPACE_TEXTURE(_HmSplatLowResDepth, uv + float2(h.x, -h.y)).r);
+            d = NearerDepth(d, UNITY_SAMPLE_SCREENSPACE_TEXTURE(_HmSplatLowResDepth, uv + float2(-h.x, h.y)).r);
+            d = NearerDepth(d, UNITY_SAMPLE_SCREENSPACE_TEXTURE(_HmSplatLowResDepth, uv + float2(h.x, h.y)).r);
+        #if defined(UNITY_REVERSED_Z)
+            if (d <= 0.0) discard;
+        #else
+            if (d >= 1.0) discard;
+        #endif
+            half4 col = ResolveSplatColor(UNITY_SAMPLE_SCREENSPACE_TEXTURE(_BlitTexture, uv));
+            if (col.a <= 0.0) discard;
+            depth = d;
+            return col;
+        }
         ENDCG
 
         Pass
@@ -96,6 +139,18 @@ Shader "Hidden/HmSplats/Composite"
             CGPROGRAM
             #pragma vertex vert
             #pragma fragment fragBlit
+            #pragma target 3.5
+            #pragma multi_compile_instancing
+            ENDCG
+        }
+        Pass
+        {
+            Name "CompositeURPLowResDepth"
+            ZWrite On
+            ZTest LEqual
+            CGPROGRAM
+            #pragma vertex vert
+            #pragma fragment fragBlitDepth
             #pragma target 3.5
             #pragma multi_compile_instancing
             ENDCG

@@ -24,7 +24,8 @@ namespace HmVr
     ///     "hair_bake": true,           // simulate the whole take in the background after load (false = live simulation only)
     ///     "hair_bake_chunk": 6,        // capture frames per bake step (smaller = shorter main-thread spikes, slower bake)
     ///     "hair_substeps": 0, "hair_iterations": 0,   // simulation quality (0 = the groom's own: 8 and 2)
-    ///     "adaptive": true,            // step the hair down one level when a lesson keeps missing the frame budget (never up by itself)
+    ///     "adaptive": true,            // try the hair one level down when a lesson keeps missing the frame budget; undone when it gains nothing,
+    ///                                  // never to off while the hair drives a splat dancer's bound hair, never up by itself (VrPerf; -hmadaptive on|off)
     ///     "msaa": 0,                   // 0 = by device (Quest 3 and later 4x, Quest 2 2x)
     ///     "eye_scale": 0.0,            // 0 = by device (1.0 on Quest 3, 0.9 on Quest 2)
     ///     "refresh_hz": 72,            // asked from the runtime when it offers it
@@ -40,7 +41,7 @@ namespace HmVr
     ///                                  // composite; below 1 = SplatLowResFeature: own 1x-MSAA layer, bilinear composite, no splat depth)
     ///     "splat_alpha_cutoff": 0.0,   // the renderer's alpha cutoff (0 = the Quest default; the package's is 1/255): larger = smaller quads, less fill
     ///     "splat_sort_every": 0 }      // sort the Gaussians every N rendered frames (0 = the Quest default, 1 = every frame)
-    /// Command line (adb ... -e unity "..."): -hmsplats on|off, -hmsplatmax N, -hmsplatsigma M, -hmsplatpath composite|direct, -hmsplatdepth on|off,
+    /// Command line (adb ... -e unity "..."): -hmhair full|light|off, -hmadaptive on|off, -hmsplats on|off, -hmsplatmax N, -hmsplatsigma M, -hmsplatpath composite|direct, -hmsplatdepth on|off,
     /// -hmsplatset NAME|full, -hmsplatscale S, -hmsplatcutoff A, -hmsplatsort N.
     /// </summary>
     public sealed class VrSettings
@@ -131,6 +132,12 @@ namespace HmVr
 
             string hair = VrArgs.Get("-hmhair");
             if (hair != null) s.Hair = ParseLevel(hair, s.Hair);
+            string adaptive = VrArgs.Get("-hmadaptive");
+            if (adaptive != null)
+            {
+                string a = adaptive.Trim().ToLowerInvariant();
+                s.Adaptive = !(a == "off" || a == "0" || a == "false");
+            }
             string splats = VrArgs.Get("-hmsplats");
             if (splats != null)
             {

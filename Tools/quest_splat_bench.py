@@ -8,6 +8,11 @@ level and clock, App = the app's GPU ms per frame, GPU %), the viewer's HM-PERF 
     python Tools/quest_splat_bench.py run <label> <film> <seek> <view> [--x "-hmsplatset quest_25k -hmsplatscale 0.5"] [--shots 1]
     python Tools/quest_splat_bench.py plan [--only recap|john_lula] [--shots 1]   # the candidate sweep (docs/SPLAT_DANCERS.md "Quest")
     python Tools/quest_splat_bench.py table                                       # results.jsonl as a markdown table
+    python Tools/quest_splat_bench.py cycle <label> <film> <seek|none> --views start,front,overhead --scales 0.5,0.6,0.7
+        [--x "-hmsplatset quest_15k"] [--reps 2] [--dwell 9] [--settle 3] [--shots 1]
+        ONE launch through every view x reps x scale (the app's -hmviews / -hmsplatscales bench sequence; the low-res layer's scale is
+        changed in place, interleaved A B C A B C); one result line per view and scale; the first --settle s of each step are left
+        out (a still is taken 0.3 s into each step of the first round). About half the battery of one launch per setting.
 
 The headset must be tracking: one that lay still in a dark room shows "Finding position in room" and holds every launch
 (logcat "VioInitialization: Skipping: Device is static") until it is picked up. Runs stop below --min-battery %.
@@ -138,6 +143,110 @@ def run(adb, label, film, seek, view, extra="", shots=0, window=15.0, settle=7.0
     return res
 
 
+STEP = re.compile(r"HM-PERF bench step (\d+)/(\d+) view '([^']*)' scale (\S+) dwell ([\d.]+) s")
+
+
+def run_cycle(adb, label, film, seek, views, scales, extra="", reps=2, dwell=9.0, settle=3.0, shots=0, out="Builds/quest_bench",
+              display="immersive"):
+    """one launch through the app's bench sequence; returns one result dict per (view, scale)"""
+    os.makedirs(out, exist_ok=True)
+    adb("shell", "am", "force-stop", PKG)
+    time.sleep(1.5)
+    adb("logcat", "-G", "16M")
+    adb("logcat", "-c")
+    adb("shell", f"rm -f {SHOTDIR}/*.png")
+    adb("shell", "am", "broadcast", "-a", "com.oculus.vrpowermanager.prox_close")
+    seek_arg = f" -hmseek {seek}" if str(seek).lower() not in ("", "none") else ""
+    args = (f"-hmplay {film}{seek_arg} -hmvr-display {display} -hmview {views[0]} -hmviews {','.join(views)}"
+            + (f" -hmsplatscale {scales[0]} -hmsplatscales {','.join(scales)}" if scales else "")
+            + f" -hmbenchreps {reps} -hmbenchdwell {dwell}" + (" -hmbenchshots 1" if shots else "") + (f" {extra}" if extra else ""))
+    t_start = adb.now()
+    adb("shell", "am", "start", "-n", f"{PKG}/com.unity3d.player.UnityPlayerActivity", "-e", "unity", f"'{args}'")
+    nsteps = len(views) * reps * max(1, len(scales))
+    deadline = time.time() + 150 + nsteps * dwell + 40
+    done = static = False
+    while time.time() < deadline and not done:
+        time.sleep(4)
+        for ln in adb("logcat", "-d", "-v", "epoch").splitlines():
+            m = re.match(r"\s*(\d+\.\d+)\s+(\d+)", ln)
+            if not m or float(m.group(1)) < t_start:
+                continue
+            if "HM-PERF bench done" in ln:
+                done = True
+            if "Device is static" in ln:
+                static = True
+    time.sleep(1.5)
+    dump = adb("logcat", "-d", "-v", "epoch")
+    open(os.path.join(out, f"{label}.log"), "w", encoding="utf-8").write(dump)
+    steps, rows, perf, splats, adapt, tier = [], [], [], [], [], []
+    pid = None
+    for ln in dump.splitlines():
+        m = re.match(r"\s*(\d+\.\d+)\s+(\d+)\s+(\d+)\s+(\w)\s+(.*)", ln)
+        if not m:
+            continue
+        t, p, msg = float(m.group(1)), m.group(2), m.group(5)
+        if t < t_start:
+            continue
+        st = STEP.search(msg)
+        if st:
+            pid = p
+            steps.append(dict(t=t, i=int(st.group(1)), n=int(st.group(2)), view=st.group(3), scale=st.group(4), dwell=float(st.group(5))))
+        elif "VrApi" in msg and "FPS=" in msg:
+            v = VRAPI.search(msg)
+            if v:
+                rows.append(dict(t=t, p=p, fps=int(v.group(1)), stale=int(v.group(3)), cpu_lvl=int(v.group(4)), gpu_lvl=int(v.group(5)),
+                                 gpu_mhz=int(v.group(7)), temp=float(v.group(8)), app_ms=float(v.group(9)), gpu_pct=float(v.group(11))))
+        elif "HM-PERF lesson=" in msg:
+            perf.append((t, msg[msg.index("HM-PERF"):]))
+        elif "HM-SPLATS status" in msg:
+            splats.append((t, msg[msg.index("HM-SPLATS"):]))
+        elif "HM-PERF adaptive" in msg or "HM-PERF hair" in msg or "HM-PERF settings" in msg:
+            adapt.append(msg[msg.index("HM-PERF"):])
+        if "HM-SPLATS tier" in msg or "HM-SPLATS splat dancers" in msg or "FALLBACK" in msg:
+            tier.append(msg[msg.index("HM-"):])
+    base = {"label": label, "film": film, "seek": seek, "extra": extra, "args": args, "mode": "cycle", "display": display}
+    if not steps:
+        base["error"] = "no bench steps in the log" + (" (the headset is not tracking: 'Device is static')" if static else "")
+        base["battery"] = adb.battery()
+        return [base]
+    groups = {}
+    for k, st in enumerate(steps):
+        t1 = steps[k + 1]["t"] if k + 1 < len(steps) else st["t"] + st["dwell"]
+        sel = [r for r in rows if r["p"] == pid and st["t"] + settle <= r["t"] < t1]
+        g = groups.setdefault((st["view"], st["scale"]), {"rows": [], "seconds": 0.0, "steps": 0})
+        g["rows"] += sel
+        g["seconds"] += max(0.0, t1 - st["t"] - settle)
+        g["steps"] += 1
+    results = []
+    for (view, scale), g in groups.items():
+        r = dict(base, label=f"{label}_{view}_s{scale}", view=view, scale=scale, steps=g["steps"], seconds=round(g["seconds"], 1))
+        rs = g["rows"]
+        if rs:
+            med = lambda k: statistics.median(x[k] for x in rs)
+            r.update(n=len(rs), fps_med=med("fps"), fps_mean=round(statistics.mean(x["fps"] for x in rs), 1), fps_min=min(x["fps"] for x in rs),
+                     stale_sum=sum(x["stale"] for x in rs), stale_per_15s=round(sum(x["stale"] for x in rs) * 15.0 / max(1, len(rs))),
+                     app_gpu_ms_med=med("app_ms"), gpu_pct_med=med("gpu_pct"), cpu_gpu_lvl=sorted({(x["cpu_lvl"], x["gpu_lvl"]) for x in rs}),
+                     gpu_mhz=sorted({x["gpu_mhz"] for x in rs}), temp_max=max(x["temp"] for x in rs))
+        else:
+            r["error"] = "no VrApi rows in the step windows"
+        results.append(r)
+    results[0]["tier"] = tier
+    results[0]["adaptive"] = adapt
+    results[0]["perf"] = [m for _, m in perf[-3:]]
+    results[0]["splats_status"] = [m for _, m in splats[-2:]]
+    if shots or "-hmshots" in extra:
+        sd = os.path.join(out, label + "_shots")
+        os.makedirs(sd, exist_ok=True)
+        for f in adb("shell", f"ls {SHOTDIR}").split():
+            if f.endswith(".png"):
+                adb("pull", f"{SHOTDIR}/{f}", os.path.join(sd, f))
+        results[0]["shots"] = sorted(os.listdir(sd))
+    b = adb.battery()
+    for r in results:
+        r["battery"] = b
+    return results
+
+
 def table(out):
     p = os.path.join(out, "results.jsonl")
     print("| run | switches | fps (VrApi median / min) | stale frames in window | app GPU ms | CPU/GPU level | GPU MHz |")
@@ -153,7 +262,12 @@ def table(out):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=("run", "plan", "table"))
+    ap.add_argument("cmd", choices=("run", "plan", "table", "cycle"))
+    ap.add_argument("--views", default="start")
+    ap.add_argument("--scales", default="")
+    ap.add_argument("--reps", type=int, default=2)
+    ap.add_argument("--dwell", type=float, default=9.0)
+    ap.add_argument("--settle", type=float, default=3.0)
     ap.add_argument("rest", nargs="*")
     ap.add_argument("--x", default="")
     ap.add_argument("--shots", type=int, default=0)
@@ -167,6 +281,21 @@ def main():
         table(a.out)
         return 0
     adb = Adb(a.serial)
+    if a.cmd == "cycle":
+        label, film, seek = a.rest
+        b = adb.battery()
+        if 0 <= b < a.min_battery:
+            print(f"battery {b} %: stopping (charge the headset, then run again)")
+            return 3
+        rs = run_cycle(adb, label, film, seek, a.views.split(","), [x for x in a.scales.split(",") if x], a.x, a.reps, a.dwell, a.settle,
+                       a.shots, out=a.out)
+        with open(os.path.join(a.out, "results.jsonl"), "a", encoding="utf-8") as fh:
+            for r in rs:
+                fh.write(json.dumps(r) + "\n")
+        for r in rs:
+            print(json.dumps({k: r.get(k) for k in ("label", "error", "fps_med", "fps_mean", "fps_min", "stale_per_15s", "app_gpu_ms_med", "cpu_gpu_lvl", "battery")}))
+        adb("shell", "am", "force-stop", PKG)
+        return 0
     jobs = []
     if a.cmd == "run":
         label, film, seek, view = a.rest

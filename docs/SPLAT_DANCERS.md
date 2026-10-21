@@ -242,14 +242,30 @@ URP renderer for them). The PC default is unchanged (off; `hm_splatdancers --act
   d40 | t40 | d25 | t25 | d15 | t15, held-out canonical and posed views): `dancecap/work/quest_distill/sheets/`. The follow's hair
   binding is carried over (quest_25k: 636 Gaussians on strands). Pod session `20261021-022537-batch` (A40, 20 min, $0.20).
 - **Low-res splat layer** (`SplatLowResFeature`, `"splat_scale"` below 1): replaces the package's URP feature: the same prepare
-  (view data + sort) but the splats accumulate into a texture of their own at S x the eye buffer per side, 1x MSAA, RGBA16F, no depth
-  attachment, composited bilinearly into the eye buffer (`HM_SplatComposite` pass 1: premultiplied, gamma to linear, the fade); the
-  camera is not forced to an intermediate texture. No splat depth in this mode: floor marks and the contact disc draw over the feet.
-  The package's internals are reached by reflection (`HM-SPLATS status: ... low-res layer 'ok: WxH per eye ...'` or the reason).
-  **Not verified on any device and not the default**: the other agent's editor test (`--action quest --set full --scale 0.99`, D3D12,
-  two eye cameras) crashed the Editor at 03:57 ("d3d12: failed to Close a command list (80070057)", the error of the m_WriteDepth toggle
-  above); not isolated (that call also swapped the URP feature and rebuilt both dancers in the same frame: `SetQuestKnobs` now only
-  swaps the feature when the mode changes and rebuilds only when the set changes). Try it on the Quest with `-hmsplatscale 0.5` first.
+  (view data + sort) but the splats accumulate into a texture of their own at S x the eye buffer per side, 1x MSAA, RGBA16F, with a
+  low-res depth attachment of its own, composited bilinearly into the eye buffer (`HM_SplatComposite` pass 1: premultiplied, gamma to
+  linear, the fade); the camera is not forced to an intermediate texture, so on the Quest the composite writes the XR eye texture itself.
+  The package's internals are reached by reflection (`HM-SPLATS status: ... low-res layer 'ok: WxH per eye (S of ...), ..., target back
+  buffer|intermediate, composite flip|no flip (...), splat depth ...'` or the reason).
+  - **Upside down on the Quest (2026-10-21 bench), fixed**: the renderer's view data always uses the render-texture projection
+    (`GL.GetGPUProjectionMatrix(p, true)`), so the layer holds the image in texture order (UV origin bottom-left); the package's composite
+    copies in memory order, right only into its own forced intermediate. Written straight into the eye texture (top-left origin on
+    Vulkan) the splats came out mirrored vertically over an upright floor (`Builds/quest_bench_d25/tune1/recap_d25_s05_front_shots`).
+    The composite now asks the render graph for the target's UV origin (`RasterGraphContext.GetTextureUVOrigin`, the test URP's own
+    final blit uses) and flips through `_BlitScaleBias` when it differs from the layer's: the eye texture (Vulkan) and a D3D12 back buffer
+    are flipped, an intermediate (the PC editor's camera) is not; OpenGL-like APIs report bottom-left for both.
+  - **Splat depth in the low-res layer** (`"splat_depth"` on, the default; `SplatUrpFeature.LowResDepth`): after the colour the
+    renderer's SplatDepth pass writes the layer's own depth (approximate Gaussian-centre depth, at the layer's resolution), and the
+    composite (`HM_SplatComposite` pass 2) writes it into the camera depth as SV_Depth with ZTest LEqual: splats behind nearer scene
+    geometry are hidden, and the floor marks, the contact disc and the rest of the transparent queue depth-test against the dancers as
+    on the package's composite path (before: no splat depth, the floor marks drew over the feet). The depth is dilated by one texel
+    (the nearest of the 2x2 point samples) so the bilinear colour at the silhouette keeps a depth. `"splat_depth": "off"` = the old
+    behaviour (ZTest Always, no depth). The colour pass always has the (cleared) depth attachment bound, as the package's pass binds
+    the camera depth: its ZTest LEqual never runs without a depth buffer.
+  - The D3D12 editor crash of 03:57 (the other agent's `--action quest --set full --scale 0.99`: "d3d12: failed to Close a command list
+    (80070057)", the error of the m_WriteDepth toggle above) is still not isolated: the low-res layer has not been switched on in the
+    PC editor since (the film path, scale 1, is unchanged and was re-checked on D3D12 after this change). One candidate the change
+    removes: the old low-res colour pass drew the splat material (ZTest LEqual) with no depth buffer bound.
 - **Quest default (2026-10-21)**: the distilled `quest_25k` on the package's composite path with splat depth (the path the owner
   saw work): `SplatDancers.QuestDefaultSet = "quest_25k"` in the code and `Tools/quest_settings.json` pushed as
   `hm_data/quest_settings.json`. Expected (e, from the fit above and the fill of the distilled sets; not measured): the floor edge

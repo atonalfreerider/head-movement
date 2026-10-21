@@ -25,6 +25,11 @@ namespace HmSplats
         /// quest_settings.json "splat_scale"). Takes effect at the next Ensure (SplatDancers builds the dancers after the tier).</summary>
         public static float LowResScale = 1f;
 
+        /// <summary>the low-res layer writes the splat depth (its own low-res SplatDepth pass, then a depth-tested composite that
+        /// writes it into the camera depth: the overlays drawn after it depth-test against the dancers). SplatDancers sets it from the
+        /// tier's splat depth ("splat_depth", -hmsplatdepth; on by default). false = no splat depth (the floor marks draw over the feet).</summary>
+        public static bool LowResDepth = true;
+
         /// <summary>the low-res layer is the one in the renderer now</summary>
         public static bool LowResActive => lowRes != null && Targets.Count > 0;
         static readonly List<ScriptableRendererData> Targets = new();
