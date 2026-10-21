@@ -1,0 +1,8 @@
+{
+  "_comment": "Quest tier defaults pushed to the headset as hm_data/quest_settings.json by Tools/deploy_data.ps1 -Push (kept if the headset has its own; -ReplaceSettings replaces it). Keys: Assets/VR/Runtime/VrSettings.cs, docs/SPLAT_DANCERS.md 'Quest'. Never lay this out in Builds/data: a Windows player reads quest_settings.json from its data folder too.",
+  "splats": true,
+  "splat_set": "quest_25k",
+  "splat_scale": 1.0,
+  "splat_path": "composite",
+  "splat_depth": "on"
+}

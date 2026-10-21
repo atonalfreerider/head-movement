@@ -177,6 +177,10 @@ URP renderer for them). The PC default is unchanged (off; `hm_splatdancers --act
   | `splat_max_sigma` | `-hmsplatsigma M` | 0 = `QuestDefaultSigma` (none) | clamp every standard deviation to M metres (fill cost); -1 = none |
   | `splat_path` | `-hmsplatpath composite\|direct` | composite | composite = as on the PC (accumulate, composite, splat depth before the transparents); direct = drawn in the transparent queue (no intermediate texture; the splat depth goes after the transparents) |
   | `splat_depth` | `-hmsplatdepth on\|off` | on | the splats write their depth (one more splat raster pass) |
+  | `splat_set` | `-hmsplatset NAME\|full` | `quest_25k` (`QuestDefaultSet`) | a Quest-only file set `splats/<NAME>/<role>.json` (the distilled `quest_40k`, `quest_25k`, `quest_15k`, below); a capture without it uses `splats/<role>.json` (logged) |
+  | `splat_scale` | `-hmsplatscale S` | 1 (`QuestDefaultScale`) | the splat layer's resolution per side, a fraction of the eye buffer: 1 = the package's composite (full resolution, the eye buffer's 4x MSAA, splat depth); below 1 = `SplatLowResFeature` (below) |
+  | `splat_alpha_cutoff` | `-hmsplatcutoff A` | 0 = the package's 1/255 | larger = smaller quads (opacity-aware bounds), less fill, softer edges lost |
+  | `splat_sort_every` | `-hmsplatsort N` | 1 | sort the Gaussians every N rendered frames (sort amortisation: `SkinnedSplatAvatar.HoldPositionRevision` + the group's Sort Nth Frame; compaction off) |
 
   `Reduce` keeps the N Gaussians with the largest opacity x (sigma_mid x sigma_max)^0.25 (faint ones go first, size breaks ties), keeps
   record order, joints, weights and the hair binding (`SplatHairBinding` is rebuilt on the kept records), and logs how much of the summed
@@ -197,16 +201,133 @@ URP renderer for them). The PC default is unchanged (off; `hm_splatdancers --act
   55 MB (the compiled `SplatUtilities.compute` is 17.8 MB of it); 25 min for the first build with the splat shaders, 3 min warm.
   The PC path was re-checked after the change (Editor Play mode, D3D12, recap: 320,000 participating Gaussians, hair live, the
   image as before; EditMode tests 15/15, GPU vs CPU included).
-- **Measured on the headset**: see the table below; the first desk test was blocked (the Quest 3 lay still on the desk in a dark room:
-  the system's "Finding position in room" dialog held every launch, logcat `VioInitialization: Skipping: Device is static`). Until a
-  run on the headset, the frame rate of the splat recap on a Quest 3 and the look in both eyes are **untested**; switch the splats off
-  with `-hmsplats off` or `"splats": false` if they misbehave.
+- **Measured on the headset** (2026-10-21, the build installed at 00:15, Quest 3 `2G0YC1ZF8F063B` on the desk, `Tools/quest_splat_bench.py`:
+  `-hmplay recap -hmseek 120 -hmvr-display immersive -hmview start` = the floor edge 3 m from the couple, a fresh `logcat -G 16M`, VrApi
+  of the app over 15 s from 7 s after the vantage was taken; "app GPU ms" = VrApi `App=`; CPU/GPU level 2-3 / 3, GPU 640 MHz in every
+  splat run; GPU% 0.99 = GPU bound). The owner's test ("framerate extremely low but splat looked correct") is this: **5 fps**.
 
-| moment (recap) | splats | Gaussians | fps (VrApi) | GPU ms |
+  | recap, floor edge (start) | fps | stale frames / 15 s | app GPU ms |
+  |---|---|---|---|
+  | splats off (mesh avatars, hair) | 72-73 | 2 | 6.3 |
+  | as installed (2 x 160,000, composite, depth, eye buffer 4x MSAA) | 5 | 1086 | 184-197 (4 runs) |
+  | `-hmsplatmax 100000` / `60000` / `30000` / `15000` | 6 / 7 / 9 / 12 | 1086 / 1071 / 1084 / 926 | 156 / 125 / 97 / 69 |
+  | `-hmsplatsigma 0.02` / `0.01` | 5 / 6 | 1087 / 1087 | 194 / 155 |
+  | `-hmsplatpath direct` | 4 | 1085 | 219 |
+  | `-hmsplatdepth off` | 6 | 1088 | 147 |
+  | `-hmsplatmax 15000 -hmsplatdepth off` | 16 | 862 | 62 |
+  | `"msaa": 1` (quest_settings.json: the whole eye buffer without MSAA) | 10 | 747 | 97 |
+
+  In passthrough with the headset lying on the desk (the dancers mostly out of view) the same build ran at 43 fps, app GPU 19.5 ms.
+  **Bottleneck: fill.** The cost follows the Quest renderer's fragment count (quad area per Gaussian, opacity-aware, summed over the
+  splats; `dancecap work/quest_distill/fill_estimate.json`: 2 x 160k at the floor edge = 37 M fragments per eye, `-hmsplatmax 15000` =
+  14 M) - a fit to the five thinning runs gives app GPU ms = 4.8 x (M fragments per eye) + 31 x (M Gaussians), residuals under 1 ms -
+  and every fragment is blended into a 4x-MSAA RGBA16F accumulation (the package's accumulation texture inherits the eye buffer's MSAA:
+  MSAA off halves the time) and drawn once more by the depth pass (a quarter of the time). Clamping sigma barely helps (the opaque
+  surface keeps its overdraw), thinning keeps the large Gaussians (2 x 15k still costs 69 ms and loses the arms and the head, below),
+  the direct path is slower. Sort, LBS and the hair pass are inside the count term (~10 ms at 320k).
+- **Distilled Quest sets** (`splats/quest_40k|quest_25k|quest_15k/<role>.*`, dancecap `mono4d/quest_distill.py`, format doc section 10):
+  a compact set per dancer fitted with gsplat to renders of the full avatar (100 canonical + 144 posed views, max-scale and fill
+  penalties); held-out views vs the full 160k (PSNR / LPIPS on the dancer crop; the viewer's `-hmsplatmax` thinning at the same count
+  for comparison; fill = fragments relative to the full avatar):
+
+  | dancer | quest_40k | quest_25k | quest_15k | thinned 25k / 15k |
+  |---|---|---|---|---|
+  | recap lead | 45.7 dB / 0.008 / fill 0.074 | 44.4 / 0.010 / 0.064 | 42.5 / 0.012 / 0.058 | 21.4 / 0.25 / 0.52 - 19.6 / 0.34 / 0.38 |
+  | recap follow | 42.8 / 0.012 / 0.077 | 42.4 / 0.012 / 0.067 | 41.1 / 0.014 / 0.060 | 21.2 / 0.25 / 0.40 - 20.2 / 0.33 / 0.32 |
+  | John & Lula lead | 43.1 / 0.012 / 0.059 | 41.6 / 0.017 / 0.051 | 39.4 / 0.026 / 0.045 | 18.6 / 0.34 / 0.42 - 17.6 / 0.38 / 0.28 |
+  | John & Lula follow | 45.4 / 0.013 / 0.078 | 44.9 / 0.015 / 0.069 | 43.5 / 0.018 / 0.063 | 24.8 / 0.24 / 0.43 - 23.7 / 0.29 / 0.32 |
+
+  The full avatar's 160k Gaussians are mostly hidden layers (about 50 fragments per covered pixel at the floor edge); the distilled
+  sets cover the same surface with 6-8 % of the fragments (2 x 25k at the floor edge: 2.5 M per eye instead of 37 M). Sheets (teacher |
+  d40 | t40 | d25 | t25 | d15 | t15, held-out canonical and posed views): `dancecap/work/quest_distill/sheets/`. The follow's hair
+  binding is carried over (quest_25k: 636 Gaussians on strands). Pod session `20261021-022537-batch` (A40, 20 min, $0.20).
+- **Low-res splat layer** (`SplatLowResFeature`, `"splat_scale"` below 1): replaces the package's URP feature: the same prepare
+  (view data + sort) but the splats accumulate into a texture of their own at S x the eye buffer per side, 1x MSAA, RGBA16F, no depth
+  attachment, composited bilinearly into the eye buffer (`HM_SplatComposite` pass 1: premultiplied, gamma to linear, the fade); the
+  camera is not forced to an intermediate texture. No splat depth in this mode: floor marks and the contact disc draw over the feet.
+  The package's internals are reached by reflection (`HM-SPLATS status: ... low-res layer 'ok: WxH per eye ...'` or the reason).
+  **Not verified on any device and not the default**: the other agent's editor test (`--action quest --set full --scale 0.99`, D3D12,
+  two eye cameras) crashed the Editor at 03:57 ("d3d12: failed to Close a command list (80070057)", the error of the m_WriteDepth toggle
+  above); not isolated (that call also swapped the URP feature and rebuilt both dancers in the same frame: `SetQuestKnobs` now only
+  swaps the feature when the mode changes and rebuilds only when the set changes). Try it on the Quest with `-hmsplatscale 0.5` first.
+- **Quest default (2026-10-21)**: the distilled `quest_25k` on the package's composite path with splat depth (the path the owner
+  saw work): `SplatDancers.QuestDefaultSet = "quest_25k"` in the code and `Tools/quest_settings.json` pushed as
+  `hm_data/quest_settings.json`. Expected (e, from the fit above and the fill of the distilled sets; not measured): the floor edge
+  ~13 ms of app GPU (2.5 M fragments per eye + 50k Gaussians) = about 72 fps, the front row (1.9 m) ~20 ms = 45-50 fps, overhead
+  ~9 ms. The low-res layer at 0.5 would take the fill part to about a quarter (e): the candidate if the front row must hold 72 fps.
+- **Not measured after the change**: the headset's tracking was lost while it lay still on the desk (logcat `VioInitialization:
+  Skipping: Device is static`, launches held at "Finding position in room"), and the Android rebuild with this code is not done (the
+  Editor sat at its "Scene Backup Detected" dialog after the 03:57 crash). Once both are cleared: build (QUEST.md 0), install, then
+  `python Tools/quest_splat_bench.py plan --only recap --shots 1` (and `--only john_lula`): `installed` (= the 00:15 build's tier),
+  `off`, `d25`, `d15`, `d25_s07`, `d25_s05`, `d15_s05`, `d40_s05`, `d25_s05_sort2` at the floor edge, the front row and overhead.
+
+## PC VR over Meta Quest Link (2026-10-21)
+
+The owner's other route after the 5 fps Quest test ("try deep compression or let's try running over quest link on PC"): the same
+viewer as a Windows player on this PC (RTX 2080 Ti, i5-6500), streamed to the Quest 3 by Meta Horizon Link. Steps for the owner:
+QUEST.md section 2a.
+
+- **Build**: `Builds/vr/HeadMovement.exe` (`hm_vr_build --target windows --output Builds/vr --development false`, 625 s), its
+  `HeadMovement_Data/StreamingAssets` replaced by the laid-out data (`Tools/deploy_data.ps1 -Out Builds/data`, 651 MB, then
+  `robocopy Builds/data ... /MIR`), so the exe also runs without `HM_DATA`. Start it with `Tools/pcvr_link.ps1` or
+  `Builds/vr/Start Head Movement (Link).cmd`: `-force-d3d12` (the renderer needs D3D12; this 4-thread PC picks D3D11 by itself),
+  `-hmvr on`, `-hmvr-display immersive` (passthrough is a Quest-standalone feature), `-hmsplats on`, HM_DATA, `-logFile
+  Builds/vr/logs/pcvr_<time>.log`, and a summary of the `HM-SPLATS` / `HM-PERF` / `VrMode` lines when the app closes.
+- **Default**: a Windows player (`SplatDancers.PcPlayer`) applies the player tier at each capture load like the Quest: without a
+  `"splats"` key in `<data>/quest_settings.json` and without `-hmsplats`, the splat dancers are ON while the viewer is in VR
+  (`VrMode.Active`: a headset through OpenXR, or `-hmvr sim`) and OFF on the desktop (the PC default is unchanged). Lessons with
+  `splats/`: the class recap and John & Lula; the others keep their avatars. Every `-hmsplat*` switch applies; D3D11 keeps the avatars
+  and says why (`HM-SPLATS tier: ... (D3D11: ... -force-d3d12; avatars)`). The Player log gets the same `HM-SPLATS` lines as logcat.
+- **Smoke test without a headset** (the Quest 3 was in use standalone): `-force-d3d12 -hmvr sim -hmvr-display immersive -hmplay recap
+  -hmseek 23 -hmview start -hmshots 3` with `HM_DATA=Builds/data`: D3D12 12.2, `HM-SPLATS tier: pc vr: splats on (pc default: on in VR,
+  off on the desktop) ...`, 320,000 participating, hair live, no fallback; the stills show the photoreal couple at the floor edge
+  (`%USERPROFILE%/AppData/LocalLow/DefaultCompany/Head Movement/hmshots/`). **Not run**: a real OpenXR session over Link (single-pass
+  instanced stereo through the package on D3D12 is untested; the 3-s fallback to the avatars is the safety net) and a lesson loaded
+  on the desktop (the off path is code-reviewed only).
+- **Link's default eye buffer on this PC** (Meta Horizon Link service logs `%LOCALAPPDATA%/Oculus/Service_2026-10-1*.txt`, Quest 3 =
+  `CapiReportedHmdType 23`): `display fixed fov res: 1824x1952` per eye, `VsyncToNextVsync 0.013889` (72 Hz), encode 4096 x 2240.
+  The owner's Graphics preferences (refresh rate, render resolution) change it; nothing here changed them.
+
+**Splat layer GPU time at the Link eye buffer** (editor Play mode, D3D12; `hm_splatdancers --action eyes`: two eye cameras 1824 x
+1952, vertical FOV 96 deg, IPD 63 mm, eyes 1.6 m above the floor, the URP asset's MSAA 4x as an XR eye texture gets it on the PC tier,
+side-on to the couple at 2.5 m = the VR seat and 1.0 m = walking up close; the recap film at film 23, 39 and 273 s (the moments of the
+2026-10-20 splat comparison), played 1x for 3.5 s from each moment; `Profiling.Recorder` GPU ms of the Gaussians passes, prepare +
+accumulate + composite + depth, summed over BOTH eyes; multi-pass, so the sort runs per eye: a single-pass runtime saves about half of
+"prepare"). Median over the moments (range); rows marked t23 measured at film 23 s only. Work folder (git-ignored, likeness):
+the class-recap take's `work/<take>/pcvr_link/run1/` (`results.jsonl`, `table.md`, every eye still, `sheet_*.jpg`).
+
+| splat setting | Gaussians | 2.5 m | 1.0 m | look (left eye stills, sheets) |
 |---|---|---|---|---|
-| (not measured yet: see above) | | | | |
+| full, as installed (MSAA 4x accumulation) | 2 x 160k | 16.0 (14.7-16.0) | 38.4 (35.5-42.6) | reference |
+| `-hmsplatmax 80000` | 2 x 80k | 11.1 (10.7-11.1) | 29.1 (26.9-30.9) | faces smeared (his face, her cheek) |
+| `-hmsplatsigma 0.01` | 2 x 160k | 8.5 (8.2-10.5) | 22.3 (21.3-23.6) | as full |
+| `-hmsplatsigma 0.006` | 2 x 160k | 6.7 (5.9-6.8) | 17.4 (16.8-17.7) | gaps: streaks on his arm, grainy jeans |
+| `-hmsplatmax 80000 -hmsplatsigma 0.01` | 2 x 80k | 7.9 (7.6-8.0) | 18.6 (15.4-20.2) | faces smeared |
+| `-hmsplatmax 40000 -hmsplatsigma 0.006` | 2 x 40k | 3.5 (3.4-3.8) | 9.2 (9.0-10.2) | broken (disc holes, heads in blobs) |
+| full, accumulation at 1x MSAA (t23) | 2 x 160k | 4.4 | 18.3 | as full (no visible difference) |
+| `-hmsplatsigma 0.01`, 1x MSAA (t23) | 2 x 160k | - | 12.1 | as full |
+| full at 0.8 x the Link resolution (1459 x 1562, t23) | 2 x 160k | 9.1 | - | softer |
+| distilled `-hmsplatset quest_40k` (t23) | 2 x 40k | 1.4 | 4.0 | close to full at 1 m (jeans edges a little fuzzy) |
+| distilled `-hmsplatset quest_25k` (t23) | 2 x 25k | 1.2 | 5.3 | close to full |
+
+(The 1x-MSAA rows set the eye targets' MSAA to 1: in the player the accumulation inherits the eye buffer's MSAA, so 1x needs either
+the PC tier's eye buffer at 1x MSAA or a 1x splat layer like `SplatLowResFeature`; neither is in this build for the PC.)
+
+- **The rest of the frame**: the editor's synced timing (8 stereo pairs, then a GPU readback) is CPU-bound in the editor (3-5 ms of
+  CPU per stereo pair without splats, 6-10 with) and reads 7-11 ms per stereo frame with no dancers at all and 8-9.5 ms with the mesh
+  avatars: an upper bound, not a GPU number. The scene's own draws are small (opaque / transparent queues 0.03 / 0.4 ms GPU); about
+  1-3 ms of GPU for the rest at the Link eye buffer including post (e), plus Link's compositor and encoder on the same GPU, about 1-2 ms
+  (e, not measured). The 4-core i5-6500 has to fit the frame too (the Link run's `HM-PERF ... cpu=` will tell).
+- **Verdict (e)**: room for the splat layer about 9-12 ms at 72 Hz, 7.5-10.5 at 80 Hz, 6-9 at 90 Hz. The build as installed (full
+  set, MSAA 4x) holds none of them (16 ms at the seat, 38 close: expect Link's ASW at 36 fps or less). `-hmsplatsigma 0.01` (looks as
+  full) can hold 72 Hz at the seat, perhaps 80, not 90, and not up close. The distilled `quest_40k` set fits 90 Hz at the seat and up
+  close (4 ms at 1 m) - for the recap; John & Lula has no distilled set yet and falls back to its full files (logged). Thinning by
+  count costs the faces for little gain.
+- **Editor crash**: switching the recap to `--action quest --set full --scale 0.99` (the low-res layer) in Play mode with the eye
+  cameras on D3D12 crashed the Editor (2026-10-21 03:57, `%TEMP%/Unity/Editor/Crashes/Crash_2026-10-21_105735789`, the NVIDIA D3D12
+  driver module in the dump); cause not isolated. `-hmsplatscale` below 1 is untested in the Windows player: not for the first Link test.
 
 ## Not done yet
 
-- A Windows player build was not tried; the shader set above should give it the shaders too.
+- A run over Link with the headset: frame rate, the look in both eyes, the hair (PC VR over Link above; QUEST.md 2a).
 - The Quest frame rate, the look in both eyes and the hair on the headset (above).

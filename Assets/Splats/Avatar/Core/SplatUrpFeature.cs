@@ -17,7 +17,16 @@ namespace HmSplats
     public static class SplatUrpFeature
     {
         static GaussiansURPFeature feature;
+        static SplatLowResFeature lowRes;
         static SplatOverlayFeature overlayFeature;
+
+        /// <summary>the splat layer's resolution as a fraction of the eye buffer per side: 1 (default) = the package's own composite
+        /// (GaussiansURPFeature, full resolution, the camera's MSAA, splat depth); below 1 = SplatLowResFeature instead (the Quest:
+        /// quest_settings.json "splat_scale"). Takes effect at the next Ensure (SplatDancers builds the dancers after the tier).</summary>
+        public static float LowResScale = 1f;
+
+        /// <summary>the low-res layer is the one in the renderer now</summary>
+        public static bool LowResActive => lowRes != null && Targets.Count > 0;
         static readonly List<ScriptableRendererData> Targets = new();
         static bool hooked;
 
@@ -69,7 +78,7 @@ namespace HmSplats
 
         static readonly FieldInfo ThreeDField = typeof(GaussiansURPFeature).GetField("m_ThreeD", BindingFlags.NonPublic | BindingFlags.Instance);
 
-        public static bool Injected => feature != null && Targets.Count > 0;
+        public static bool Injected => (feature != null || lowRes != null) && Targets.Count > 0;
 
         /// <summary>the renderers the feature is in now, by name (CLI state)</summary>
         public static IEnumerable<string> TargetNames
@@ -88,17 +97,29 @@ namespace HmSplats
         {
             if (GraphicsSettings.currentRenderPipeline is not UniversalRenderPipelineAsset urp) return false;
             bool ok = true;
+            bool low = LowResScale < 0.999f;
             foreach (ScriptableRendererData data in urp.rendererDataList)
             {
                 if (data == null) continue;
                 if (HasSavedFeature(data)) continue;
-                if (feature == null)
+                if (!low && feature == null)
                 {
                     feature = ScriptableObject.CreateInstance<GaussiansURPFeature>();
                     feature.name = "Gaussians (run time, HmSplats)";
                     feature.hideFlags = HideFlags.DontSave;
                     feature.SetActive(true);
                 }
+
+                if (low && lowRes == null)
+                {
+                    lowRes = ScriptableObject.CreateInstance<SplatLowResFeature>();
+                    lowRes.name = "Gaussians low-res layer (run time, HmSplats)";
+                    lowRes.hideFlags = HideFlags.DontSave;
+                    lowRes.SetActive(true);
+                }
+
+                ScriptableRendererFeature main = low ? lowRes : feature;
+                ScriptableRendererFeature other = low ? feature : lowRes;
 
                 if (overlayFeature == null)
                 {
@@ -109,9 +130,10 @@ namespace HmSplats
                 }
 
                 bool dirty = false;
-                if (!data.rendererFeatures.Contains(feature))
+                if (other != null && data.rendererFeatures.Remove(other)) dirty = true; // the mode changed (scale 1 <-> below 1)
+                if (!data.rendererFeatures.Contains(main))
                 {
-                    data.rendererFeatures.Add(feature);
+                    data.rendererFeatures.Add(main);
                     dirty = true;
                 }
 
@@ -127,7 +149,7 @@ namespace HmSplats
                     if (!Targets.Contains(data)) Targets.Add(data);
                 }
 
-                ok &= data.rendererFeatures.Contains(feature);
+                ok &= data.rendererFeatures.Contains(main);
             }
 
             if (!hooked)
@@ -170,6 +192,7 @@ namespace HmSplats
             {
                 if (data == null) continue;
                 bool removed = data.rendererFeatures.Remove(feature);
+                if (lowRes != null) removed |= data.rendererFeatures.Remove(lowRes);
                 if (overlayFeature != null) removed |= data.rendererFeatures.Remove(overlayFeature);
                 if (removed) data.SetDirty();
             }
@@ -199,6 +222,13 @@ namespace HmSplats
             }
 
             feature = null;
+            if (lowRes != null)
+            {
+                if (Application.isPlaying) UnityEngine.Object.Destroy(lowRes);
+                else UnityEngine.Object.DestroyImmediate(lowRes);
+            }
+
+            lowRes = null;
         }
 
         static bool HasSavedFeature(ScriptableRendererData data)

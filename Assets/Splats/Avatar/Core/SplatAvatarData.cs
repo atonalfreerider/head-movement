@@ -68,6 +68,25 @@ namespace HmSplats
             return File.Exists(p) ? p : null;
         }
 
+        /// <summary>the json of a role in a named file set of the capture (splats/&lt;set&gt;/&lt;role&gt;.json: the Quest's distilled sets, dancecap
+        /// mono4d/quest_distill.py), falling back to splats/&lt;role&gt;.json when the capture has no such set (empty set or "full": the full
+        /// file); null when the capture has no splat avatar for the role</summary>
+        public static string JsonPath(string captureFolder, string role, string set, out bool fromSet)
+        {
+            fromSet = false;
+            if (!string.IsNullOrWhiteSpace(set) && !string.Equals(set.Trim(), "full", StringComparison.OrdinalIgnoreCase))
+            {
+                string s = Path.Combine(captureFolder, "splats", set.Trim(), role.ToLowerInvariant() + ".json");
+                if (File.Exists(s))
+                {
+                    fromSet = true;
+                    return s;
+                }
+            }
+
+            return JsonPath(captureFolder, role);
+        }
+
         /// <summary>read and validate a json + splatav pair (thread-safe: no Unity API calls)</summary>
         public static SplatAvatarData Load(string jsonPath)
         {

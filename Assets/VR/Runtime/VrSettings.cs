@@ -33,8 +33,15 @@ namespace HmVr
     ///     "splat_max": 0,              // at most this many Gaussians per dancer (0 = the Quest default, SplatDancers.QuestDefaultMax; -1 = all)
     ///     "splat_max_sigma": 0.0,      // clamp every Gaussian's standard deviation to this many metres (0 = the Quest default; -1 = none)
     ///     "splat_path": "",            // "composite" | "direct" (empty = the Quest default)
-    ///     "splat_depth": "" }          // "on" | "off": the splats write their depth (overlays depth-test against them); empty = the Quest default
-    /// Command line (adb ... -e unity "..."): -hmsplats on|off, -hmsplatmax N, -hmsplatsigma M, -hmsplatpath composite|direct, -hmsplatdepth on|off.
+    ///     "splat_depth": "",           // "on" | "off": the splats write their depth (overlays depth-test against them); empty = the Quest default
+    ///     "splat_set": "",             // a Quest-only splat file set: splats/&lt;set&gt;/&lt;role&gt;.json (e.g. "quest_25k", dancecap quest_distill); "full" or
+    ///                                  // empty = the Quest default (SplatDancers.QuestDefaultSet); a capture without that set uses splats/&lt;role&gt;.json
+    ///     "splat_scale": 0.0,          // the splat layer's resolution, a fraction of the eye buffer (0 = the Quest default; 1 = the package's full-res
+    ///                                  // composite; below 1 = SplatLowResFeature: own 1x-MSAA layer, bilinear composite, no splat depth)
+    ///     "splat_alpha_cutoff": 0.0,   // the renderer's alpha cutoff (0 = the Quest default; the package's is 1/255): larger = smaller quads, less fill
+    ///     "splat_sort_every": 0 }      // sort the Gaussians every N rendered frames (0 = the Quest default, 1 = every frame)
+    /// Command line (adb ... -e unity "..."): -hmsplats on|off, -hmsplatmax N, -hmsplatsigma M, -hmsplatpath composite|direct, -hmsplatdepth on|off,
+    /// -hmsplatset NAME|full, -hmsplatscale S, -hmsplatcutoff A, -hmsplatsort N.
     /// </summary>
     public sealed class VrSettings
     {
@@ -60,6 +67,16 @@ namespace HmVr
         public int SplatMax;
         public float SplatMaxSigma;
         public string SplatPath = "", SplatDepth = "";
+        /// <summary>"splat_set" / -hmsplatset (empty = the Quest default; "full" = splats/&lt;role&gt;.json)</summary>
+        public string SplatSet = "";
+        /// <summary>"splat_scale" / -hmsplatscale, "splat_alpha_cutoff" / -hmsplatcutoff (0 = the Quest default)</summary>
+        public float SplatScale, SplatAlphaCutoff;
+        /// <summary>"splat_sort_every" / -hmsplatsort (0 = the Quest default)</summary>
+        public int SplatSortEvery;
+        /// <summary>"splats" was named by the settings file or the -hmsplats switch (a Windows player keeps its own default otherwise: on in VR, off on the desktop)</summary>
+        public bool SplatsGiven;
+        /// <summary>Load() made this (the file and the command line were read)</summary>
+        public bool Loaded;
         public string Source = "defaults";
 
         public static VrSettings Current { get; private set; } = new();
@@ -91,11 +108,20 @@ namespace HmVr
                     if (j["eye_scale"] != null) s.EyeScale = j.Value<float>("eye_scale");
                     if (j["refresh_hz"] != null) s.RefreshHz = j.Value<int>("refresh_hz");
                     if (j["perf_log"] != null) s.PerfLog = j.Value<bool>("perf_log");
-                    if (j["splats"] != null) s.Splats = j.Value<bool>("splats");
+                    if (j["splats"] != null)
+                    {
+                        s.Splats = j.Value<bool>("splats");
+                        s.SplatsGiven = true;
+                    }
+
                     if (j["splat_max"] != null) s.SplatMax = j.Value<int>("splat_max");
                     if (j["splat_max_sigma"] != null) s.SplatMaxSigma = j.Value<float>("splat_max_sigma");
                     if (j["splat_path"] != null) s.SplatPath = j.Value<string>("splat_path").Trim().ToLowerInvariant();
                     if (j["splat_depth"] != null) s.SplatDepth = j.Value<string>("splat_depth").Trim().ToLowerInvariant();
+                    if (j["splat_set"] != null) s.SplatSet = j.Value<string>("splat_set").Trim();
+                    if (j["splat_scale"] != null) s.SplatScale = j.Value<float>("splat_scale");
+                    if (j["splat_alpha_cutoff"] != null) s.SplatAlphaCutoff = j.Value<float>("splat_alpha_cutoff");
+                    if (j["splat_sort_every"] != null) s.SplatSortEvery = j.Value<int>("splat_sort_every");
                 }
             }
             catch (Exception e)
@@ -106,13 +132,25 @@ namespace HmVr
             string hair = VrArgs.Get("-hmhair");
             if (hair != null) s.Hair = ParseLevel(hair, s.Hair);
             string splats = VrArgs.Get("-hmsplats");
-            if (splats != null) s.Splats = !string.Equals(splats.Trim(), "off", StringComparison.OrdinalIgnoreCase) && splats.Trim() != "0" && !string.Equals(splats.Trim(), "false", StringComparison.OrdinalIgnoreCase);
+            if (splats != null)
+            {
+                s.Splats = !string.Equals(splats.Trim(), "off", StringComparison.OrdinalIgnoreCase) && splats.Trim() != "0" && !string.Equals(splats.Trim(), "false", StringComparison.OrdinalIgnoreCase);
+                s.SplatsGiven = true;
+            }
+
             if (int.TryParse(VrArgs.Get("-hmsplatmax"), out int smax)) s.SplatMax = smax;
             if (float.TryParse(VrArgs.Get("-hmsplatsigma"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float ssig)) s.SplatMaxSigma = ssig;
             string spath = VrArgs.Get("-hmsplatpath");
             if (spath != null) s.SplatPath = spath.Trim().ToLowerInvariant();
             string sdepth = VrArgs.Get("-hmsplatdepth");
             if (sdepth != null) s.SplatDepth = sdepth.Trim().ToLowerInvariant();
+            string sset = VrArgs.Get("-hmsplatset");
+            if (sset != null) s.SplatSet = sset.Trim();
+            System.Globalization.CultureInfo inv = System.Globalization.CultureInfo.InvariantCulture;
+            if (float.TryParse(VrArgs.Get("-hmsplatscale"), System.Globalization.NumberStyles.Float, inv, out float sscale)) s.SplatScale = sscale;
+            if (float.TryParse(VrArgs.Get("-hmsplatcutoff"), System.Globalization.NumberStyles.Float, inv, out float scut)) s.SplatAlphaCutoff = scut;
+            if (int.TryParse(VrArgs.Get("-hmsplatsort"), out int ssort)) s.SplatSortEvery = ssort;
+            s.Loaded = true;
             Current = s;
             return s;
         }

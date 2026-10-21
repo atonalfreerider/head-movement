@@ -28,12 +28,20 @@ using UnityEngine.Profiling;
 ///   unity command hm_splatdancers --action hairshot --out C:/abs/prefix --azimuths 0,90,180,270 [--radius 1.2 --elevation 8 --width 720 --height 960]
 ///                                                                     # off-screen stills around the follow's head (what is shown now: splats or avatars)
 ///   unity command hm_splatdancers --action perf_start | perf_report   # frame time and the Gaussian passes' GPU ms
+///   unity command hm_splatdancers --action thin --max 80000 --sigma 0.01   # the Quest / PC VR load-time thinning in the Editor
+///   unity command hm_splatdancers --action quest --set quest_25k --scale 0.5 --cutoff 0.02 --sort 2   # the Quest knobs in the Editor
+///                                                                     # (distilled file set, low-res splat layer, alpha cutoff, sort cadence)
+///   unity command hm_splatdancers --action eyes --width 1824 --height 1952 --radius 2.5 --fov 96 [--azimuths 0]
+///                                                                     # two eye cameras (a headset's per-eye targets) instead of the main
+///                                                                     # camera, for perf_start / perf_report (PC VR / Link cost on the desktop)
+///   unity command hm_splatdancers --action eyeshot --out C:/abs/file.png | eyes_off
+///                                                                     # (SplatAvatarData.Reduce; 0 = none; rebuilds; resets with Play mode)
 /// </summary>
 public static class SplatDancersCli
 {
-    [CliCommand("hm_splatdancers", "Splat dancers (skinned LHM++ Gaussians instead of the mesh avatars; default off): state | on | off | hair --mode skinned|hidden|only | hairmotion --mode strands|rigid | opacity --mode opaque|avatars|scale | path --mode composite|direct | depth --mode before|after | skeleton --mode physics|always|never (skeleton lines with the splats) | check [--samples N] (GPU skinning vs CPU reference) | haircheck (hair pass vs CPU reference, swing, head intrusion) | perf_start | perf_report (frame + Gaussian pass GPU ms)")]
+    [CliCommand("hm_splatdancers", "Splat dancers (skinned LHM++ Gaussians instead of the mesh avatars; default off): state | on | off | hair --mode skinned|hidden|only | hairmotion --mode strands|rigid | opacity --mode opaque|avatars|scale | path --mode composite|direct | depth --mode before|after | skeleton --mode physics|always|never (skeleton lines with the splats) | check [--samples N] (GPU skinning vs CPU reference) | haircheck (hair pass vs CPU reference, swing, head intrusion) | perf_start | perf_report (frame + Gaussian pass GPU ms) | thin --max N --sigma M (load-time thinning, as -hmsplatmax / -hmsplatsigma in a player)")]
     public static string Command(
-        [CliArg("action", "state | on | off | hair | hairmotion | opacity | path | depth | skeleton | check | haircheck | perf_start | perf_report")] string action = "state",
+        [CliArg("action", "state | on | off | hair | hairmotion | opacity | path | depth | skeleton | check | haircheck | perf_start | perf_report | thin")] string action = "state",
         [CliArg("mode", "hair: skinned|hidden|only; hairmotion: strands|rigid; opacity: opaque|avatars|scale; path: composite|direct; depth: before|after (the transparents); skeleton: physics|always|never")] string mode = null,
         [CliArg("samples", "check: Gaussians per dancer")] int samples = 4096,
         [CliArg("from", "haircheck sweep: first dance second (omit: the shown frame only)")] float from = float.NaN,
@@ -45,7 +53,14 @@ public static class SplatDancersCli
         [CliArg("drop", "hairshot: look-at point below her head joint (m)")] float drop = 0.22f,
         [CliArg("fov", "hairshot: vertical field of view (deg)")] float fov = 40f,
         [CliArg("width", "hairshot: pixels")] int width = 720,
-        [CliArg("height", "hairshot: pixels")] int height = 960)
+        [CliArg("height", "hairshot: pixels")] int height = 960,
+        [CliArg("max", "thin: at most N Gaussians per dancer, the most opaque kept (0 = all)")] int max = 0,
+        [CliArg("sigma", "thin: clamp every standard deviation to M metres (0 = none)")] float sigma = 0f,
+        [CliArg("msaa", "eyes: MSAA samples of the eye targets (0 = the URP asset's, as an XR eye texture)")] int msaa = 0,
+        [CliArg("set", "quest: splat file set (splats/<set>/<role>.json, e.g. quest_25k; full = the full files)")] string set = null,
+        [CliArg("scale", "quest: splat layer resolution (1 = the package's composite; below 1 = the low-res layer)")] float scale = 1f,
+        [CliArg("cutoff", "quest: alpha cutoff (0 = the package's 1/255)")] float cutoff = 0f,
+        [CliArg("sort", "quest: sort every N frames (1 = every frame)")] int sort = 1)
     {
         if (!EditorApplication.isPlaying) throw new InvalidOperationException("enter Play mode first (unity command editor_play)");
         switch ((action ?? "state").Trim().ToLowerInvariant())
@@ -71,6 +86,13 @@ public static class SplatDancersCli
                 return JsonConvert.SerializeObject(HairCheck(from, to));
             case "hairshot":
                 return JsonConvert.SerializeObject(HairShot(@out, azimuths, radius, elevation, drop, fov, width, height));
+            case "eyes":
+                return JsonConvert.SerializeObject(Eyes(width, height, radius, fov, float.Parse(azimuths.Split(',')[0], System.Globalization.CultureInfo.InvariantCulture), msaa));
+            case "eyes_off":
+                EyesOff();
+                return JsonConvert.SerializeObject(new { eyes = false });
+            case "eyeshot":
+                return JsonConvert.SerializeObject(EyeShot(@out));
             case "opacity":
                 SplatDancers.OpacityMode = (mode ?? "opaque").ToLowerInvariant() switch
                 {
@@ -100,6 +122,12 @@ public static class SplatDancersCli
                 return JsonConvert.SerializeObject(new { started = true, samplers = Perf.Names });
             case "perf_report":
                 return JsonConvert.SerializeObject(Perf.Report());
+            case "thin":
+                SplatDancers.SetReduction(max, sigma);
+                break;
+            case "quest":
+                SplatDancers.SetQuestKnobs(set == null || set == "full" ? "" : set, scale, cutoff, sort);
+                break;
             case "state":
                 break;
             default:
@@ -355,6 +383,111 @@ public static class SplatDancersCli
         };
     }
 
+    // ------------------------------------------------------------------ eye cameras: a headset's stereo cost on the desktop
+
+    static GameObject eyesRoot;
+    static Camera eyesMainOff;
+    static readonly List<RenderTexture> EyeTargets = new();
+
+    /// <summary>two eye cameras (IPD 63 mm, eyes 1.6 m above the floor) rendering every frame into per-eye targets of width x height
+    /// with the URP asset's MSAA (as an XR eye texture), symmetric vertical field of view fov; placed distance m from the couple's
+    /// midpoint (the pelvises), side-on to the lead-follow line turned by azimuth deg, looking at 1.1 m above the floor at the
+    /// midpoint. The main camera is switched off, so the frame renders the two eyes only. Multi-pass: the splat sort and view data
+    /// run once per eye (a single-pass instanced runtime shares one sort for both eyes).</summary>
+    static object Eyes(int width, int height, float distance, float fov, float azimuth, int msaaOverride = 0)
+    {
+        EyesOff();
+        HeadMovement hm = HeadMovement.Instance;
+        if (hm == null || !hm.Avatars.TryGetValue(Role.Lead, out SmplxAvatar l) || l == null || !hm.Avatars.TryGetValue(Role.Follow, out SmplxAvatar f) || f == null)
+            throw new InvalidOperationException("no lead / follow avatar");
+        Camera main = Camera.main != null ? Camera.main : HairStrands.ViewCamera();
+        if (main == null) main = Camera.allCameras.Where(c => c.targetTexture == null).OrderByDescending(c => c.depth).FirstOrDefault();
+        if (main == null) throw new InvalidOperationException("no camera to copy");
+        Vector3 a = l.Bone(0).position, b = f.Bone(0).position, mid = (a + b) * 0.5f;
+        float floorY = Mathf.Min(Mathf.Min(l.Bone(10).position.y, l.Bone(11).position.y), Mathf.Min(f.Bone(10).position.y, f.Bone(11).position.y)) - 0.04f;
+        Vector3 side = b - a;
+        side.y = 0;
+        side = side.sqrMagnitude > 1e-4f ? side.normalized : Vector3.right;
+        Vector3 view = Quaternion.AngleAxis(azimuth, Vector3.up) * Vector3.Cross(Vector3.up, side);
+        Vector3 eye = new Vector3(mid.x, floorY + 1.6f, mid.z) + view * distance, target = new(mid.x, floorY + 1.1f, mid.z);
+        eyesRoot = new GameObject("HM eye cameras") { hideFlags = HideFlags.HideAndDontSave };
+        eyesRoot.transform.SetPositionAndRotation(eye, Quaternion.LookRotation(target - eye, Vector3.up));
+        int msaa = msaaOverride > 0 ? msaaOverride : Mathf.Max(1, (UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline as UnityEngine.Rendering.Universal.UniversalRenderPipelineAsset)?.msaaSampleCount ?? 1);
+        var urp = main.GetComponent<UnityEngine.Rendering.Universal.UniversalAdditionalCameraData>();
+        foreach (float s in new[] { -1f, 1f })
+        {
+            GameObject go = new(s < 0 ? "left eye" : "right eye") { hideFlags = HideFlags.HideAndDontSave };
+            Camera cam = go.AddComponent<Camera>();
+            cam.CopyFrom(main);
+            var urpCopy = go.AddComponent<UnityEngine.Rendering.Universal.UniversalAdditionalCameraData>();
+            if (urp != null)
+            {
+                urpCopy.renderPostProcessing = urp.renderPostProcessing;
+                urpCopy.antialiasing = urp.antialiasing;
+            }
+
+            go.transform.SetParent(eyesRoot.transform, false);
+            go.transform.localPosition = new Vector3(s * 0.0315f, 0f, 0f);
+            go.transform.localRotation = Quaternion.identity;
+            cam.fieldOfView = fov;
+            cam.nearClipPlane = 0.05f;
+            RenderTexture rt = new(width, height, 24, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB) { antiAliasing = msaa };
+            cam.targetTexture = rt;
+            cam.aspect = width / (float)height;
+            EyeTargets.Add(rt);
+        }
+
+        main.enabled = false;
+        eyesMainOff = main;
+        return new { eyes = true, width, height, msaa, fov, distance, azimuth, eye = eye.ToString("F2"), target = target.ToString("F2"), floorY, couple = (a - b).magnitude };
+    }
+
+    static void EyesOff()
+    {
+        if (eyesRoot != null) UnityEngine.Object.DestroyImmediate(eyesRoot);
+        eyesRoot = null;
+        foreach (RenderTexture rt in EyeTargets)
+        {
+            if (rt != null) UnityEngine.Object.DestroyImmediate(rt);
+        }
+
+        EyeTargets.Clear();
+        if (eyesMainOff != null) eyesMainOff.enabled = true;
+        eyesMainOff = null;
+    }
+
+    /// <summary>both eye targets side by side as one PNG (left | right)</summary>
+    static object EyeShot(string file)
+    {
+        if (EyeTargets.Count != 2) throw new InvalidOperationException("no eye cameras (--action eyes)");
+        if (string.IsNullOrEmpty(file) || !System.IO.Path.IsPathRooted(file)) throw new ArgumentException("--out <absolute .png path> required");
+        int w = EyeTargets[0].width, h = EyeTargets[0].height;
+        Texture2D tex = new(w * 2, h, TextureFormat.RGB24, false);
+        RenderTexture tmp = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
+        RenderTexture prev = RenderTexture.active;
+        try
+        {
+            for (int i = 0; i < 2; i++)
+            {
+                Graphics.Blit(EyeTargets[i], tmp);
+                RenderTexture.active = tmp;
+                tex.ReadPixels(new Rect(0, 0, w, h), i * w, 0);
+            }
+
+            tex.Apply();
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file) ?? ".");
+            System.IO.File.WriteAllBytes(file, tex.EncodeToPNG());
+        }
+        finally
+        {
+            RenderTexture.active = prev;
+            RenderTexture.ReleaseTemporary(tmp);
+            UnityEngine.Object.DestroyImmediate(tex);
+        }
+
+        return new { file, size = $"{w * 2}x{h}" };
+    }
+
     /// <summary>off-screen stills of the follow from a camera parked around her head (azimuth relative to her pelvis'
     /// facing), rendered by a temporary copy of the main camera into a RenderTexture: the splats (when on) or the avatars
     /// as the viewer shows them now; screen-space UI is not drawn</summary>
@@ -434,11 +567,12 @@ public static class SplatDancersCli
         public static readonly string[] Names =
         {
             "Gaussians.3D.Prepare", "Gaussians.3D.Accumulate", "Gaussians.3D.Composite", "Gaussians.3D.Depth",
-            "Gaussians.3D.Direct", "GaussianSplat3D.Prepare", "GaussianSplat3D.SortSplats", "GaussianSplat3D.CalcViewData",
+            "Gaussians.3D.Direct", "Gaussians.3D.Sort", "Gaussians.3D.CalcView", "Gaussians.3D.Draw", "Gaussians.3D.Compose", "GaussianSplat3D.Prepare", "GaussianSplat3D.SortSplats", "GaussianSplat3D.CalcViewData",
             "Render Camera", "UniversalRenderTotal", "DrawTransparentObjects", "DrawOpaqueObjects"
         };
 
-        static readonly List<float> Frames = new();
+        static readonly List<float> Frames = new(), GpuFrame = new();
+        static readonly FrameTiming[] Timing = new FrameTiming[1];
         static readonly Dictionary<string, List<float>> Gpu = new(), Cpu = new();
         static bool hooked;
         static int startFrame;
@@ -446,6 +580,7 @@ public static class SplatDancersCli
         public static void Start()
         {
             Frames.Clear();
+            GpuFrame.Clear();
             Gpu.Clear();
             Cpu.Clear();
             foreach (string n in Names)
@@ -469,6 +604,8 @@ public static class SplatDancersCli
             if (!EditorApplication.isPlaying || Frames.Count >= 2000) return;
             if (Time.frameCount == startFrame) return;
             Frames.Add(Time.unscaledDeltaTime * 1000f);
+            FrameTimingManager.CaptureFrameTimings();
+            if (FrameTimingManager.GetLatestTimings(1, Timing) > 0 && Timing[0].gpuFrameTime > 0) GpuFrame.Add((float)Timing[0].gpuFrameTime);
             foreach (string n in Names)
             {
                 Recorder r = Recorder.Get(n);
@@ -488,6 +625,8 @@ public static class SplatDancersCli
         public static object Report() => new
         {
             frameMs = Stats(Frames),
+            // the whole GPU frame (FrameTimingManager; in the Editor it includes the editor's own repaints)
+            gpuFrameMs = Stats(GpuFrame),
             // GPU samples arrive a few frames late and read 0 on frames without a resolved timer: count the resolved ones
             gpuMs = Names.Where(n => Gpu.TryGetValue(n, out List<float> l) && l.Any(x => x > 0)).ToDictionary(n => n, n => Stats(Gpu[n].Where(x => x > 0).ToList())),
             cpuMs = Names.Where(n => Cpu.TryGetValue(n, out List<float> l) && l.Any(x => x > 0)).ToDictionary(n => n, n => Stats(Cpu[n])),

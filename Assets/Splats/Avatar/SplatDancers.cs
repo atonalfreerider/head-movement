@@ -31,7 +31,9 @@ using UnityEngine.XR;
 /// (quest_settings.json "splats", "splat_max", "splat_max_sigma", "splat_path", "splat_depth"; -hmsplats on|off and the
 /// other switches, VrSettings), and the Gaussians are thinned at load to the Quest default (QuestDefaultMax /
 /// QuestDefaultSigma: SplatAvatarData.Reduce) so the lesson holds 72 Hz. GLES (no compute path in the renderer) keeps the
-/// avatars. The PC default stays OFF. Hair: when the splat file carries a hair binding
+/// avatars. The PC default stays OFF on the desktop. A Windows player (PC VR over Meta Quest Link, PcPlayer) applies the same
+/// tier at each capture load: without a "splats" key / -hmsplats switch the splat dancers are ON in VR and OFF on the desktop;
+/// D3D11 keeps the avatars (start the exe with -force-d3d12). Hair: when the splat file carries a hair binding
 /// (dancecap mono4d/recap_splat_hair.py: the free hair Gaussians bound to the HairStrands guides) the dancer's simulated
 /// HairStrands (the same simulation that moves the hair cards, which are hidden with the rest of the avatar) drive the
 /// bound Gaussians every frame (HairStrandsSplatSource, SkinnedSplatAvatar's SkinHair pass); scalp-level hair and an
@@ -167,6 +169,21 @@ public sealed class SplatDancers : MonoBehaviour
         false;
 #endif
 
+    /// <summary>a Windows player (HeadMovement.exe: PC VR over Meta Quest Link / Air Link, or the desktop viewer). Its splat tier is
+    /// data like the Quest's (quest_settings.json in HmData.Root, the -hmsplats* switches), applied at each capture load; without a
+    /// "splats" key or -hmsplats switch the splat dancers are ON while the viewer is in VR (a headset through OpenXR) and OFF on the
+    /// desktop (the PC desktop default is unchanged). D3D11 (the automatic choice on a 4-thread PC: start the exe with -force-d3d12)
+    /// and GLES have no path in the renderer: the avatars stay.</summary>
+    public static readonly bool PcPlayer =
+#if UNITY_STANDALONE_WIN && !UNITY_EDITOR
+        true;
+#else
+        false;
+#endif
+
+    /// <summary>a player whose splat tier is applied at each capture load (VrSettings): the Quest and a Windows player</summary>
+    public static bool TierPlayer => QuestPlayer || PcPlayer;
+
     /// <summary>the Quest's Gaussians per dancer (load-time thinning, SplatAvatarData.Reduce; 0 = all), measured on a Quest 3
     /// (docs/SPLAT_DANCERS.md "Quest"); quest_settings.json "splat_max" / -hmsplatmax override it</summary>
     public const int QuestDefaultMax = 0;
@@ -177,6 +194,15 @@ public sealed class SplatDancers : MonoBehaviour
     /// <summary>the Quest's render path and splat depth (see Paths; "splat_path" / "splat_depth")</summary>
     public const Paths QuestDefaultPath = Paths.Composite;
     public const bool QuestDefaultDepth = true;
+
+    /// <summary>the Quest's splat file set (splats/&lt;set&gt;/&lt;role&gt;.json, dancecap mono4d/quest_distill.py; "" = splats/&lt;role&gt;.json),
+    /// its splat layer resolution (SplatUrpFeature.LowResScale: 1 = the package's full-res composite), alpha cutoff (0 = the package's
+    /// 1/255) and sort cadence (sort every N frames); "splat_set", "splat_scale", "splat_alpha_cutoff", "splat_sort_every" override them.
+    /// A Windows player keeps the full files and the package's rendering unless its settings name them (docs/SPLAT_DANCERS.md "Quest").</summary>
+    public const string QuestDefaultSet = "quest_25k";
+    public const float QuestDefaultScale = 1f;
+    public const float QuestDefaultAlphaCutoff = 0f;
+    public const int QuestDefaultSortEvery = 1;
 
     /// <summary>what the Quest tier applied at the last capture load (State, logcat)</summary>
     public static string QuestTier { get; private set; } = "";
@@ -189,6 +215,12 @@ public sealed class SplatDancers : MonoBehaviour
 #else
         splatsOn = QuestPlayer; // the Quest: on by default (VrSettings "splats" / -hmsplats off turn it off at the capture load)
 #endif
+        reduceMax = 0;
+        reduceSigma = 0f;
+        splatSet = "";
+        alphaCutoff = 0f;
+        sortEvery = 1;
+        SplatUrpFeature.LowResScale = 1f;
         opacityMode = OpacityModes.Opaque;
         renderPath = Paths.Composite;
         DisplayOpacity = 1f;
@@ -209,16 +241,29 @@ public sealed class SplatDancers : MonoBehaviour
 
     static void OnAvatarsLoaded(HeadMovement viewer)
     {
-        if (QuestPlayer) ApplyQuestTier(viewer);
+        if (TierPlayer) ApplyPlayerTier(viewer);
         if (Instance != null) Instance.Rebuild(viewer);
         else if (splatsOn) Ensure().Rebuild(viewer);
-        if (!QuestPlayer)
+        if (!TierPlayer)
         {
             if (splatsOn) SplatUrpFeature.Ensure();
         }
-        else if (!splatsOn || Instance == null || !Instance.HasSplatData) SplatUrpFeature.Remove(); // a Quest lesson without splat data renders as before
-        // (on the Quest the Gaussians feature is added when the first splat dancer is built: Build)
+        else if (!splatsOn || Instance == null || !Instance.HasSplatData) SplatUrpFeature.Remove(); // a player lesson without splat data renders as before
+        // (in a player the Gaussians feature is added when the first splat dancer is built: Build)
     }
+
+    /// <summary>thinning for the next capture load / rebuild (SplatAvatarData.Reduce): at most max Gaussians per dancer (0 = all), every
+    /// standard deviation clamped to sigma metres (0 = none). A player sets it from VrSettings at each capture load; in the Editor it is
+    /// off unless set here (hm_splatdancers --action thin: measure the Quest / PC VR reductions on the desktop) and resets with Play mode.</summary>
+    public static void SetReduction(int max, float sigma)
+    {
+        reduceMax = Math.Max(0, max);
+        reduceSigma = Math.Max(0f, sigma);
+        if (Instance != null && HeadMovement.Instance != null && splatsOn) Instance.Rebuild(HeadMovement.Instance);
+    }
+
+    public static int ReduceMax => reduceMax;
+    public static float ReduceSigma => reduceSigma;
 
     /// <summary>the capture being loaded has a splat avatar for at least one dancer</summary>
     public bool HasSplatData
@@ -237,15 +282,45 @@ public sealed class SplatDancers : MonoBehaviour
     static int reduceMax;
     static float reduceSigma;
     static bool questDepth = true;
+    static string splatSet = "";
+    static float alphaCutoff;
+    static int sortEvery = 1;
 
-    /// <summary>the Quest tier at each capture load (VrSettings: quest_settings.json + the command line): on / off, thinning,
-    /// render path, splat depth; logged as HM-SPLATS</summary>
-    static void ApplyQuestTier(HeadMovement viewer)
+    /// <summary>the file set, alpha cutoff and sort cadence the next build / every frame uses (a player: VrSettings at each capture
+    /// load; the Editor: hm_splatdancers --action quest, to measure the Quest knobs on the desktop; Play mode resets them)</summary>
+    public static void SetQuestKnobs(string set, float scale, float cutoff, int sortN)
     {
-        HmVr.VrSettings st = HmVr.VrSettings.Current;
-        bool on = st.Splats;
-        bool gles = SystemInfo.graphicsDeviceType is UnityEngine.Rendering.GraphicsDeviceType.OpenGLES3 or UnityEngine.Rendering.GraphicsDeviceType.OpenGLCore;
-        if (gles || !SystemInfo.supportsComputeShaders) on = false; // the renderer has no OpenGL path: the avatars stay
+        bool setChanged = !string.Equals(splatSet, set ?? "", StringComparison.OrdinalIgnoreCase);
+        splatSet = set ?? "";
+        alphaCutoff = Math.Max(0f, cutoff);
+        sortEvery = Math.Max(1, sortN);
+        float s = scale > 0f ? Mathf.Clamp(scale, 0.2f, 1f) : 1f;
+        bool modeChanged = (s < 0.999f) != (SplatUrpFeature.LowResScale < 0.999f);
+        SplatUrpFeature.LowResScale = s;
+        // Ensure swaps the package feature and the low-res layer in place (no Remove: destroying the feature the renderer still
+        // holds in the same frame is avoided); the dancers are rebuilt only when the file set changes
+        if (splatsOn && modeChanged) SplatUrpFeature.Ensure();
+        if (setChanged && Instance != null && HeadMovement.Instance != null && splatsOn) Instance.Rebuild(HeadMovement.Instance);
+    }
+
+    public static string SplatSet => splatSet;
+    public static float AlphaCutoff => alphaCutoff;
+    public static int SortEvery => sortEvery;
+
+    /// <summary>the player tier at each capture load (VrSettings: quest_settings.json + the command line): on / off, thinning,
+    /// render path, splat depth; logged as HM-SPLATS (logcat on the Quest, Player.log on Windows). The Quest: on unless "splats":
+    /// false / -hmsplats off. A Windows player: "splats" / -hmsplats when given, else on in VR (PC VR over Link) and off on the desktop.</summary>
+    static void ApplyPlayerTier(HeadMovement viewer)
+    {
+        HmVr.VrSettings st = HmVr.VrSettings.Current.Loaded ? HmVr.VrSettings.Current : HmVr.VrSettings.Load();
+        bool vr = HmVr.VrMode.Active;
+        bool on = (QuestPlayer || st.SplatsGiven) ? st.Splats : vr;
+        UnityEngine.Rendering.GraphicsDeviceType api = SystemInfo.graphicsDeviceType;
+        bool gles = api is UnityEngine.Rendering.GraphicsDeviceType.OpenGLES3 or UnityEngine.Rendering.GraphicsDeviceType.OpenGLCore;
+        string noPath = gles ? " (GLES: no compute path, avatars)"
+            : api == UnityEngine.Rendering.GraphicsDeviceType.Direct3D11 ? " (D3D11: the renderer needs D3D12 - start the exe with -force-d3d12; avatars)"
+            : !SystemInfo.supportsComputeShaders ? " (no compute shaders: avatars)" : "";
+        if (noPath.Length > 0) on = false; // the renderer has no OpenGL / D3D11 path: the avatars stay
         splatsOn = on;
         reduceMax = st.SplatMax > 0 ? st.SplatMax : st.SplatMax < 0 ? 0 : QuestDefaultMax;
         reduceSigma = st.SplatMaxSigma > 0f ? st.SplatMaxSigma : st.SplatMaxSigma < 0f ? 0f : QuestDefaultSigma;
@@ -254,8 +329,18 @@ public sealed class SplatDancers : MonoBehaviour
         // the splat depth BEFORE the transparents is for the composite path (overlays depth-test against the dancers); on the direct
         // path the splats are transparents themselves and would test against their own depth: the package's order (after) then
         SplatUrpFeature.DepthBeforeTransparents = renderPath == Paths.Composite;
-        QuestTier = $"splats {(on ? "on" : "off")}{(gles ? " (GLES: no compute path, avatars)" : "")}, max {(reduceMax > 0 ? reduceMax.ToString() : "all")} per dancer, " +
-                    $"sigma clamp {(reduceSigma > 0f ? $"{reduceSigma * 100f:0.##} cm" : "none")}, path {renderPath}, depth {(questDepth ? "on" : "off")}, api {SystemInfo.graphicsDeviceType}, settings {st.Source}";
+        // the Quest-only compression knobs (a Windows player: only when its settings name them)
+        splatSet = st.SplatSet.Length > 0 ? st.SplatSet : QuestPlayer ? QuestDefaultSet : "";
+        float scale = st.SplatScale > 0f ? st.SplatScale : QuestPlayer ? QuestDefaultScale : 1f;
+        SplatUrpFeature.LowResScale = renderPath == Paths.Composite ? Mathf.Clamp(scale, 0.2f, 1f) : 1f; // the low-res layer is a composite
+        alphaCutoff = st.SplatAlphaCutoff > 0f ? st.SplatAlphaCutoff : QuestPlayer ? QuestDefaultAlphaCutoff : 0f;
+        sortEvery = Math.Max(1, st.SplatSortEvery > 0 ? st.SplatSortEvery : QuestPlayer ? QuestDefaultSortEvery : 1);
+        string who = QuestPlayer ? "quest" : vr ? "pc vr" : "pc desktop";
+        string why = QuestPlayer ? "" : st.SplatsGiven ? " (given)" : " (pc default: on in VR, off on the desktop)";
+        QuestTier = $"{who}: splats {(on ? "on" : "off")}{why}{noPath}, max {(reduceMax > 0 ? reduceMax.ToString() : "all")} per dancer, " +
+                    $"sigma clamp {(reduceSigma > 0f ? $"{reduceSigma * 100f:0.##} cm" : "none")}, path {renderPath}, depth {(questDepth ? "on" : "off")}, " +
+                    $"set '{(splatSet.Length > 0 ? splatSet : "full")}', layer scale {SplatUrpFeature.LowResScale:0.##}{(SplatUrpFeature.LowResScale < 0.999f ? " (low-res layer, no splat depth)" : "")}, " +
+                    $"alpha cutoff {(alphaCutoff > 0f ? alphaCutoff.ToString("0.###") : "package")}, sort every {sortEvery}, api {api}, settings {st.Source}";
         Debug.Log($"HM-SPLATS tier: {QuestTier} (capture {Path.GetFileName(viewer.Manifest?.Folder ?? "?")})");
     }
 
@@ -310,7 +395,7 @@ public sealed class SplatDancers : MonoBehaviour
                                              // (the Composite path converts at the resolve: GaussiansURPFeature default)
         group.m_SortNthFrame = 1;            // the posed positions change every frame
         group.m_WriteDepth = true;           // splat depth for the overlays (SplatUrpFeature.DepthBeforeTransparents)
-        if (QuestPlayer) group.m_WriteDepth = questDepth; // set once here, never toggled at run time (see FilmVideoFade)
+        if (TierPlayer) group.m_WriteDepth = questDepth; // set once here, never toggled at run time (see FilmVideoFade)
         Shader composite = shaders != null ? shaders.fadeComposite : null;
         if (composite != null && composite.isSupported) group.m_ShaderComposite = composite;
         else Debug.LogWarning($"splat dancers: {CompositeShaderPath} missing or unsupported - the package composite is used (no fade)");
@@ -328,13 +413,16 @@ public sealed class SplatDancers : MonoBehaviour
         foreach (KeyValuePair<Role, SmplxAvatar> kv in viewer.Avatars)
         {
             if (kv.Value == null) continue;
-            string json = SplatAvatarData.JsonPath(capture, kv.Key == Role.Lead ? "lead" : "follow");
+            // the Quest's distilled set (splats/<set>/<role>.json) when the capture has it, else the full file
+            string json = SplatAvatarData.JsonPath(capture, kv.Key == Role.Lead ? "lead" : "follow", splatSet, out bool fromSet);
             Entry e = new() { Role = kv.Key, Avatar = kv.Value, JsonPath = json };
-            if (json != null && (splatsOn || !QuestPlayer))
+            if (json != null && splatSet.Length > 0 && !fromSet && !string.Equals(splatSet, "full", StringComparison.OrdinalIgnoreCase))
+                Debug.LogWarning($"{(TierPlayer ? "HM-SPLATS " : "")}splat dancers: {kv.Key}: no set '{splatSet}' in {capture}/splats: the full file is used");
+            if (json != null && (splatsOn || !TierPlayer))
             {
                 string path = json;
-                int max = QuestPlayer ? reduceMax : 0;
-                float sigma = QuestPlayer ? reduceSigma : 0f;
+                int max = reduceMax; // a player: VrSettings at the capture load; the Editor: SetReduction (default none)
+                float sigma = reduceSigma;
                 e.Loading = Task.Run(() =>
                 {
                     SplatAvatarData d = SplatAvatarData.Load(path);
@@ -417,9 +505,9 @@ public sealed class SplatDancers : MonoBehaviour
             SplatUrpFeature.SplatLayer = e.Avatar.gameObject.layer;
             group.AddMember(e.Splat.Renderer);
             e.LoadSeconds = loadWatch.Elapsed.TotalSeconds;
-            Debug.Log($"{(QuestPlayer ? "HM-SPLATS " : "")}splat dancers: {e.Role} {data.Count} Gaussians ({data.HairCount} hair, {data.BoundHairCount} bound) from {data.SourcePath}" +
+            Debug.Log($"{(TierPlayer ? "HM-SPLATS " : "")}splat dancers: {e.Role} {data.Count} Gaussians ({data.HairCount} hair, {data.BoundHairCount} bound) from {data.SourcePath}" +
                       $" in {e.LoadSeconds:0.0} s{(e.Reduction != null ? "; thinned: " + e.Reduction : "")}");
-            if (QuestPlayer) SplatUrpFeature.Ensure();
+            if (TierPlayer) SplatUrpFeature.Ensure();
         }
         catch (Exception ex)
         {
@@ -432,12 +520,21 @@ public sealed class SplatDancers : MonoBehaviour
     {
         GaussianSplat3DRenderer.RenderPath path = renderPath == Paths.Direct ? GaussianSplat3DRenderer.RenderPath.DirectTransparent : GaussianSplat3DRenderer.RenderPath.CompositeTexture;
         if (group.m_RenderPath != path) group.m_RenderPath = path;
+        // the Quest knobs (defaults = the package's: cutoff 1/255, sort every frame, compaction above 100,000 rejected)
+        float cutoff = alphaCutoff > 0f ? alphaCutoff : GaussianSplat3DRenderer.DefaultAlphaCutoff;
+        if (!Mathf.Approximately(group.m_AlphaCutoff, cutoff)) group.m_AlphaCutoff = cutoff;
+        if (group.m_SortNthFrame != sortEvery) group.m_SortNthFrame = sortEvery;
+        // sort amortisation: the frame keeps its position revision (else the renderer re-sorts after every skinned frame) and the
+        // visible-splat compaction is off (it re-sorts whenever the view data changes, i.e. every frame)
+        SkinnedSplatAvatar.HoldPositionRevision = sortEvery > 1;
+        int compaction = sortEvery > 1 ? -1 : 100000;
+        if (group.m_CompactionThreshold != compaction) group.m_CompactionThreshold = compaction;
         float fade = CompositeOpacity();
         DisplayOpacity = fade;
         Shader.SetGlobalFloat(OpacityId, fade);
         ApplyVisibility();
         FillOverSplats();
-        if (QuestPlayer && splatsOn && entries.Count > 0)
+        if (TierPlayer && splatsOn && entries.Count > 0)
         {
             Watchdog();
             if (Time.unscaledTime >= nextStatusLog) LogStatus();
@@ -498,7 +595,9 @@ public sealed class SplatDancers : MonoBehaviour
                           $"renderers hidden {e.Hidden.Count}, skinned frames {e.Splat.SkinnedFrames}, hair {(e.Splat.HairBinding != null ? (e.Splat.HairLive ? $"live ({e.Splat.HairFrames} frames)" : e.Splat.HairStatus) : "-")}");
         }
 
-        Debug.Log($"HM-SPLATS status: {(fellBack ? "FELL BACK to the avatars, " : "")}feature {(SplatUrpFeature.Injected ? "in" : "NOT in")} the URP renderer, depth patch '{SplatUrpFeature.DepthPatch}', path {renderPath}, " +
+        Debug.Log($"HM-SPLATS status: {(fellBack ? "FELL BACK to the avatars, " : "")}feature {(SplatUrpFeature.Injected ? "in" : "NOT in")} the URP renderer, " +
+                  $"{(SplatUrpFeature.LowResActive ? $"low-res layer '{SplatLowResFeature.Status}'" : $"depth patch '{SplatUrpFeature.DepthPatch}'")}, path {renderPath}, " +
+                  $"set '{(splatSet.Length > 0 ? splatSet : "full")}', cutoff {group?.m_AlphaCutoff:0.###}, sort every {group?.m_SortNthFrame}, " +
                   $"group '{group?.Status}', participating {group?.ParticipatingSplats ?? 0}, {Math.Round((group?.AllocatedBytes ?? 0) / 1048576.0, 1)} MB, over-splats '{overSplatsStatus}'{sb}");
     }
 
@@ -903,6 +1002,13 @@ public sealed class SplatDancers : MonoBehaviour
             ["displayOpacity"] = DisplayOpacity,
             ["renderPath"] = renderPath.ToString(),
             ["questTier"] = QuestTier,
+            ["reduceMax"] = reduceMax,
+            ["reduceSigma"] = reduceSigma,
+            ["splatSet"] = splatSet,
+            ["layerScale"] = SplatUrpFeature.LowResScale,
+            ["lowResLayer"] = SplatUrpFeature.LowResActive ? SplatLowResFeature.Status : "off",
+            ["alphaCutoff"] = group != null ? group.m_AlphaCutoff : -1f,
+            ["sortEvery"] = group != null ? group.m_SortNthFrame : -1,
             ["fellBackToAvatars"] = fellBack,
             ["depthPatch"] = SplatUrpFeature.DepthPatch,
             ["hairMode"] = hairMode.ToString(),

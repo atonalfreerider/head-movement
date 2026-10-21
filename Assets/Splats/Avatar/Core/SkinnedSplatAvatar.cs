@@ -59,6 +59,10 @@ namespace HmSplats
         public float OpacityScale { get; set; } = 1f;
         public Bounds LastPosedBounds { get; private set; }
 
+        /// <summary>true: the deformation frame keeps one position revision, so the renderer sorts on its own cadence (the group's
+        /// m_SortNthFrame) instead of after every skinned frame (sort amortisation; false = the package's rule, sort every frame)</summary>
+        public static bool HoldPositionRevision { get; set; }
+
         /// <summary>the data's hair binding (null: none)</summary>
         public SplatHairBinding HairBinding { get; private set; }
         public ISplatHairSource HairSource { get; private set; }
@@ -297,7 +301,10 @@ namespace HmSplats
                 return false;
             }
 
-            f = new GaussianSplat3DFrame(frame, positionRevision, attributeRevision);
+            // the renderer re-sorts whenever the position revision changes (every skinned frame); with HoldPositionRevision the
+            // revision stays fixed and the group's Sort Nth Frame sets the cadence (sort amortisation, the Quest: SplatDancers
+            // "splat_sort_every"); the view data still follows every frame (the attribute revision changes)
+            f = new GaussianSplat3DFrame(frame, HoldPositionRevision ? 1u : positionRevision, attributeRevision);
             return true;
         }
 

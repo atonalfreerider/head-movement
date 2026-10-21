@@ -86,7 +86,14 @@ level and LOD, hair triangles, bake progress, memory.
 **Splat dancers (2026-10-21).** The class recap shows the photoreal LHM++ splat dancers by default on the headset (the owner's choice);
 the other lessons keep their mesh avatars. Off for a session: `-hmsplats off`, for good: `"splats": false` in `quest_settings.json`; the
 Quest-only thinning (`splat_max`, `splat_max_sigma`), the render path and the splat depth are data too. Details, logcat lines and the
-measurements: `docs/SPLAT_DANCERS.md` "Quest".
+measurements: `docs/SPLAT_DANCERS.md` "Quest". The first install (2026-10-21 00:15, the full 2 x 160,000 Gaussians) ran at **5 fps**
+with the dancers in view (fill bound: app GPU ~190 ms); the Quest now loads a **distilled set** per dancer (`splat_set`,
+`splats/quest_25k/`: same look, 6-8 % of the fragments) and can draw the splats in a **lower-resolution layer** (`splat_scale`), see there.
+The Quest tier defaults are pushed as `hm_data/quest_settings.json` from `Tools/quest_settings.json` (`deploy_data.ps1 -Push`, which
+keeps a headset's own file unless `-ReplaceSettings`); it is never laid out in `Builds/data` (a Windows player reads that folder).
+Frame-rate desk tests: `python Tools/quest_splat_bench.py run|plan|table` (VrApi FPS, stale frames, CPU/GPU level, app GPU ms).
+**Charging**: on the PC's USB port the headset reports `Weak Charger: true` (900 mA): asleep it gains about 6 % an hour, a splat test
+run costs about 1 %; use the Quest's own charger for long sessions.
 
 **Test switches without hands** (adb): `adb shell am start -n com.headmovement.viewer/com.unity3d.player.UnityPlayerActivity -e unity "-hmplay recap -hmseek 120 -hmhair light"`
 starts a lesson by itself (`-hmplay <film id>`), jumps to a time a few seconds after it started (`-hmseek <s>`), sets the hair level.
@@ -94,7 +101,8 @@ starts a lesson by itself (`-hmplay <film id>`), jumps to a time a few seconds a
 `-hmshots N` writes N stereo stills of the eye images (both eyes side by side, the scene layer without the room) to
 `/sdcard/Android/data/com.headmovement.viewer/files/hmshots/` (one every 6 s from 9 s after the start; `ScreenCapture` BothEyes,
 not yet tried on the headset), and `-hmsplats on|off`,
-`-hmsplatmax N`, `-hmsplatsigma M`, `-hmsplatpath composite|direct`, `-hmsplatdepth on|off` set the splat tier for that run.
+`-hmsplatmax N`, `-hmsplatsigma M`, `-hmsplatpath composite|direct`, `-hmsplatdepth on|off`, `-hmsplatset NAME|full`,
+`-hmsplatscale S`, `-hmsplatcutoff A`, `-hmsplatsort N` set the splat tier for that run.
 A desk test needs a tracked headset: one that lay still in a dark room shows the system's "Finding position in room" dialog and holds
 every app launch until it is picked up (logcat `VioInitialization: Skipping: Device is static`); `prox_close` alone does not help.
 
@@ -180,6 +188,39 @@ Troubleshooting: the log line `VrMode: ...` in the editor console (and the Playe
 runtime registered", "the OpenXR runtime refused (is the headset connected and Quest Link / Air Link running?)", "XR started but no
 display is running"). `unity command hm_vr` prints the whole state (`runtime`, `xr`, `error`, `log`). `-hmvr off` keeps the viewer flat.
 
+### 2a. The Quest 3 over Link on this PC, with the splat dancers (2026-10-21)
+
+Ready on the PC: the Windows build `Builds/vr` (built 2026-10-21 from the working tree, section 6) with the lessons inside it and in
+`Builds/data`; Meta Horizon Link installed and the active OpenXR runtime (`HKLM\SOFTWARE\Khronos\OpenXR\1` `ActiveRuntime` =
+`C:\Program Files\Meta Horizon\Support\oculus-runtime\oculus_openxr_64.json`, OVRService running). Nothing on the PC, the headset or
+Link was changed. Measurements and what to expect: SPLAT_DANCERS.md "PC VR over Meta Quest Link".
+
+1. Connect the headset to a **USB 3** port with a data cable (the Link app's device page has a connection test), or use Air Link on
+   5 GHz Wi-Fi. Open the **Meta Horizon Link** app on the PC; leave its settings (Devices > Meta Quest 3 > Graphics preferences: the
+   logs show 72 Hz and the default render resolution, 1824 x 1952 per eye).
+2. In the headset: Quick Settings > **Link** (Quest Link) > this PC > Launch. The grey Link home appears.
+3. On the PC double-click **`head-movement\Builds\vr\Start Head Movement (Link).cmd`** (= `Tools/pcvr_link.ps1`: checks the runtime,
+   sets HM_DATA, starts `HeadMovement.exe -force-d3d12 -hmvr on -hmvr-display immersive -hmsplats on`, logs to `Builds/vr/logs/`). The
+   headset shows the lesson menu in the dark studio (passthrough is a standalone-only feature). Poke **Play** on *Class recap* or
+   *John + Lula*. Without hands, start a lesson by itself from a terminal in `head-movement`:
+   `powershell -ExecutionPolicy Bypass -File Tools/pcvr_link.ps1 -Play recap -Seek 23 -View start` (`-Play john_lula` for John & Lula).
+4. If the menu says "No hand tracking from the headset": Hand tracking on in the headset (Settings > Movement tracking), controllers
+   down; the Meta PC runtime may also want its Developer Runtime Features (Link app > Settings > Beta) for hands over Link - your call,
+   it is a Link setting. The `-Play` switches need no hands.
+5. **Look for**: the photoreal couple in BOTH eyes (close one eye, then the other), steady (no swimming, no flicker, no one-eye-only
+   image), the hair swinging, life size when you walk up. Mesh avatars instead of splats after a few seconds = the safety net
+   (`HM-SPLATS FALLBACK` in the summary). With the full set expect a low frame rate (Link's ASW halves to 36 fps or worse).
+6. Close: the menu footer's *Exit VR*, then close the desktop window; the console prints the `HM-SPLATS` / `HM-PERF` / `VrMode` lines.
+
+**What to measure** (nothing to install): the **Oculus Debug Tool** is installed
+(`C:\Program Files\Meta Horizon\Support\oculus-diagnostics\OculusDebugTool.exe`): *Performance HUD* = *Performance Summary* (app fps,
+ASW, dropped frames) and *Application Render Timing* (app GPU / CPU ms) in the headset; set it back to *Off* after (a Link debug setting
+you change yourself; the same for *Asynchronous Spacewarp: Off* if you want the raw app fps). The Player log has `HM-PERF` every 5 s
+(fps, frame ms, GPU / CPU frame time). OVR Metrics Tool shows standalone apps; over Link it would show the headset's compositor only.
+Runs of about 20 s at the floor edge (`-View start`) at `-Seek 23`, `39` and `273` (`-Play recap`), each with: (a) as installed,
+(b) `-SplatSigma 0.01`, (c) `-SplatSet quest_40k` (the distilled set: recap only so far), (d) `-Splats off` (the mesh avatars); then
+walk up to about 1 m from the couple in (a)-(c). Note app GPU ms, app fps, ASW, dropped frames, and how the dancers look.
+
 ## 3. Commands, tests, switches
 
 ```
@@ -230,6 +271,14 @@ Switches: command line `-hmvr auto|on|off|sim`, environment `HM_VR`; `-hmvr-tier
 Unity's own StreamingAssets copy. The captures and films resolve their files from the project and the workspace beside it, so a build
 that is moved elsewhere needs its data laid out: `Tools/deploy_data.ps1 -Out Builds/data`, then copy that folder over the build's
 `HeadMovement_Data/StreamingAssets`, or run the exe with `HM_DATA=<that folder>`.
+
+Done 2026-10-21 (for Link, section 2a): `unity command hm_vr_build --target windows --output Builds/vr --development false
+--timeout 5400` (625 s; the build rewrites `Assets/Bloom.asset`, `Assets/DefaultVolumeProfile.asset`,
+`Assets/UniversalRenderPipelineGlobalSettings.asset` and `ProjectSettings/ProjectSettings.asset` preloaded assets: `git checkout --`
+them), `Tools/deploy_data.ps1 -Out Builds/data`, then `robocopy Builds/data Builds/vr/HeadMovement_Data/StreamingAssets /MIR`. Start it
+with `Tools/pcvr_link.ps1` (or `Builds/vr/Start Head Movement (Link).cmd`): `-force-d3d12` is required for the splat dancers on this
+4-thread PC (Unity's automatic choice is D3D11, which has no splat path). In VR the Windows player shows the splat dancers by default
+for lessons with `splats/` (SPLAT_DANCERS.md "PC VR over Meta Quest Link"); on the desktop it does not.
 
 ## 7. Quest 2 standalone (Android): audit and plan
 
