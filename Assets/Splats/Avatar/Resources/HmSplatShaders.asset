@@ -1,0 +1,21 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f2affa356cabfb449b6f2189651e601d, type: 3}
+  m_Name: HmSplatShaders
+  m_EditorClassIdentifier: HmSplats::HmSplats.SplatShaderSet
+  splats: {fileID: 4800000, guid: ed800126ae8844a67aad1974ddddd59c, type: 3}
+  composite: {fileID: 4800000, guid: 7e184af7d01193a408eb916d8acafff9, type: 3}
+  debugPoints: {fileID: 4800000, guid: b44409fc67214394f8f47e4e2648425e, type: 3}
+  debugBoxes: {fileID: 4800000, guid: 4006f2680fd7c8b4cbcb881454c782be, type: 3}
+  utilities: {fileID: 7200000, guid: ec84f78b836bd4f96a105d6b804f08bd, type: 3}
+  skin: {fileID: 7200000, guid: 2da26a2f6a4648b4cadc47b8a3db4bc2, type: 3}
+  fadeComposite: {fileID: 4800000, guid: 08852e0896dafdd4da27f9c5f612c373, type: 3}

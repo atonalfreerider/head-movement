@@ -28,8 +28,8 @@ namespace HmSplats
     /// is reading them); SplatHairBinding is the CPU reference of both. Without a source, or with HairMotion off, the bound
     /// hair keeps its LBS.
     ///
-    /// Not done here (see SplatDancers): the 65 %-transparent display mode, a player build (the renderer's shaders and this
-    /// compute shader are resolved through the AssetDatabase, i.e. in the Editor only).
+    /// Not done here (see SplatDancers): the 65 %-transparent display mode. In a player (the Quest APK) the renderer's shaders and
+    /// this compute shader come from the Resources shader set (SplatShaderSet).
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class SkinnedSplatAvatar : MonoBehaviour, IGaussianSplat3DDeformation
@@ -190,6 +190,18 @@ namespace HmSplats
             asset.InitializeFloat(n, 0, floatSplats, floatSh, data.CanonicalBounds, id);
 
             Renderer = gameObject.AddComponent<GaussianSplat3DRenderer>();
+            // a player has no AssetDatabase: the renderer's own shader references (it refuses to start without all five, also
+            // inside a group) come from the Resources shader set (SplatShaderSet; the Editor resolves them itself)
+            SplatShaderSet shaders = SplatShaderSet.Get();
+            if (shaders != null)
+            {
+                if (Renderer.m_ShaderSplats == null) Renderer.m_ShaderSplats = shaders.splats;
+                if (Renderer.m_ShaderComposite == null) Renderer.m_ShaderComposite = shaders.composite;
+                if (Renderer.m_ShaderDebugPoints == null) Renderer.m_ShaderDebugPoints = shaders.debugPoints;
+                if (Renderer.m_ShaderDebugBoxes == null) Renderer.m_ShaderDebugBoxes = shaders.debugBoxes;
+                if (Renderer.m_CSSplatUtilities == null) Renderer.m_CSSplatUtilities = shaders.utilities;
+            }
+
             Renderer.m_Asset = asset;
             Renderer.m_SHOrder = 0;
             Renderer.SetDeformation(this);

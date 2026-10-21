@@ -42,6 +42,10 @@ namespace HmVr
         int timingN;
         FrameTiming[] timings = new FrameTiming[1];
         (float when, float to)? seekAt;
+        float viewAt = -1f;
+        string viewId;
+        float shotAt = -1f;
+        int shotsLeft;
         float lessonSince = -1f, adaptCooldown;
         float loadStart = -1f;
         bool wasLesson;
@@ -142,6 +146,13 @@ namespace HmVr
                 LogSkeletonProbe("lesson start");
                 string seek = VrArgs.Get("-hmseek");
                 if (seek != null && float.TryParse(seek, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float at)) seekAt = (Time.unscaledTime + 4f, at);
+                // -hmview start|front|side|overhead|phone:N (a desk test of a vantage point, immersive display): taken after the seek
+                viewId = VrArgs.Get("-hmview");
+                viewAt = viewId != null ? Time.unscaledTime + 5.5f : -1f;
+                // -hmshots N: N stereo stills of the eye buffers (both eyes side by side, the scene layer without the passthrough), one every
+                // 6 s from 9 s after the lesson starts, written to the app's files/hmshots/ (adb pull): what each eye is given
+                shotsLeft = int.TryParse(VrArgs.Get("-hmshots"), out int shots) ? Mathf.Clamp(shots, 0, 20) : 0;
+                shotAt = shotsLeft > 0 ? Time.unscaledTime + 9f : -1f;
             }
 
             if (skeletonProbeAt >= 0f && lesson && Time.unscaledTime >= skeletonProbeAt)
@@ -157,10 +168,65 @@ namespace HmVr
                 seekAt = null;
             }
 
+            if (viewAt >= 0f && Time.unscaledTime >= viewAt && lesson)
+            {
+                viewAt = -1f;
+                VrLocomotion loc = VrLocomotion.Instance;
+                bool ok = false;
+                if (loc != null)
+                {
+                    // the viewpoints are relative to where the couple is now (after the seek)
+                    FilmDirector d = VrFilm.Director;
+                    float t = d != null && !float.IsNaN(d.DanceTime) ? d.DanceTime : 0f;
+                    loc.SetViewpoints(VrViewpoints.Build(HeadMovement.Instance, VrFilm.Entry, t));
+                    ok = loc.GoTo(viewId, false);
+                }
+
+                Debug.Log($"HM-PERF view '{viewId}' (command line): {(ok ? "taken" : "not found")}");
+            }
+
+            if (shotAt >= 0f && Time.unscaledTime >= shotAt && lesson)
+            {
+                shotsLeft--;
+                shotAt = shotsLeft > 0 ? Time.unscaledTime + 6f : -1f;
+                StartCoroutine(StereoShot());
+            }
+
             if (!lesson) lessonSince = -1f;
             if (lib != null && lib.State != FilmLibrary.Mode.Loading && lesson) loadStart = -1f;
             if (lib != null && lib.State == FilmLibrary.Mode.Library) loadStart = -1f;
             wasLesson = lesson;
+        }
+
+        /// <summary>a still of both eyes' images (ScreenCapture, StereoScreenCaptureMode.BothEyes) to files/hmshots/ (desk tests: -hmshots N)</summary>
+        System.Collections.IEnumerator StereoShot()
+        {
+            yield return new WaitForEndOfFrame();
+            SaveStereoShot();
+        }
+
+        static void SaveStereoShot()
+        {
+            try
+            {
+                Texture2D t = ScreenCapture.CaptureScreenshotAsTexture(ScreenCapture.StereoScreenCaptureMode.BothEyes);
+                if (t == null)
+                {
+                    Debug.LogWarning("HM-PERF shot: no image (ScreenCapture returned null)");
+                    return;
+                }
+
+                string dir = System.IO.Path.Combine(Application.persistentDataPath, "hmshots");
+                System.IO.Directory.CreateDirectory(dir);
+                string file = System.IO.Path.Combine(dir, $"hm_{DateTime.Now:HHmmss}_film{VrFilm.Time:000.0}.png");
+                System.IO.File.WriteAllBytes(file, t.EncodeToPNG());
+                Debug.Log($"HM-PERF shot {t.width}x{t.height} -> {file}");
+                Destroy(t);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("HM-PERF shot failed: " + e.Message);
+            }
         }
 
         /// <summary>logcat (adb logcat -s Unity | grep "HM-VR skeleton"): what the skeleton is drawn with (shader, queue, blend, z state, colour alpha) and the

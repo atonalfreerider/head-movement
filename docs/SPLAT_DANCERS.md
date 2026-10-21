@@ -1,4 +1,4 @@
-# Splat dancers: skinned Gaussian-splat dancers in the viewer (PC)
+# Splat dancers: skinned Gaussian-splat dancers in the viewer (PC and Quest)
 
 Written 2026-10-20. VIEWER_SPEC 3.2a (the splat layer shows the dancers only and is off by default). The data contract is the
 workspace's `dancecap/docs/SPLAT_AVATAR_FORMAT.md` (`splats/<role>.splatav` + `<role>.json` in a capture folder; LHM++ skinned
@@ -47,9 +47,13 @@ built-in D3D12 device filter rejects 4 CPUs or fewer; the log says "D3D12 API de
 | CLI | `Assets/Splats/Avatar/Editor/SplatDancersCli.cs` (`hm_splatdancers`) |
 | tests | `Assets/Splats/Avatar/Tests/Editor/SplatAvatarTests.cs` (EditMode: reader, canonical round trip, single-joint pose, quaternion, GPU vs CPU), `SplatHairTests.cs` (binding round trip, rest = head-rigid, rigid swing, attach, face box, GPU hair pass vs CPU) |
 
-Assembly `HmSplats` (`Core/`) is built for the Editor and Windows 64-bit only, and `SplatDancers.cs` compiles only there: the Quest
-(Android) build gets no splat code of ours. The package's own runtime assemblies do compile for every platform (inert: nothing loads
-its shaders on Android).
+Assembly `HmSplats` (`Core/`) is built for the Editor, Windows 64-bit and Android, and `SplatDancers.cs` /
+`HairStrandsSplatSource.cs` compile there (2026-10-21; before, the Quest build had no splat code). A player finds the shaders through
+`Assets/Splats/Avatar/Resources/HmSplatShaders.asset` (`SplatShaderSet`: the package's `RenderGaussianSplats`, `GaussianComposite`,
+the two debug shaders the renderer refuses to start without, `SplatUtilities.compute`, and our `HM_SkinSplats.compute` /
+`HM_SplatComposite.shader`); the Editor fills the same set from the AssetDatabase. Refresh the asset with
+`unity command eval --code 'return HmSplats.SplatShaderSet.WriteAsset();'` when a shader moves. It holds shader references only, no
+likeness data.
 
 Posing (format section 4): G_0 = the avatar's pelvis bone world transform, G_j = G_parent [R_j | J_j - J_parent] with the splat file's
 own rest joints J and the avatar bones' local rotations, S_j = G_j T(-J_j); per Gaussian M = sum w_k S_k, centre = M mean, rotation =
@@ -152,8 +156,57 @@ cards, on the guides, do not); a bound Gaussian is on ONE segment of ONE guide (
 different guides can part; the simulation has no partner colliders (the cards neither); hair the guides press onto her back
 partly enters the body (hidden by the opaque body).
 
+## Quest (Android build, 2026-10-21)
+
+The owner chose **splats on by default** on the headset (2026-10-20, over "avatars + splat test switch" and "avatars only"). In a
+player build for Android (`SplatDancers.QuestPlayer`) the toggle starts ON; every lesson whose capture has `splats/` shows the
+splat dancers (`HasSplatData`): the class recap, and also the Jack & Jill lesson because its `splats/` folder was pushed too (the
+owner decides whether it stays); every other lesson shows its mesh avatars exactly as before (no Gaussians feature is added to the
+URP renderer for them). The PC default is unchanged (off; `hm_splatdancers --action on`).
+
+- **Data**: `Tools/deploy_data.ps1` copies the whole capture folder without `.meta`, `*.hmj`, `*.mp4`, so `splats/lead.*`,
+  `splats/follow.*` (with the hair binding in `follow.json`) and `hair_groom.json` reach
+  `/sdcard/Android/data/com.headmovement.viewer/files/hm_data/<capture>/` (checked with `adb shell ls -la` and
+  `sha256sum`: identical to StreamingAssets). Never in the APK: `Assets/StreamingAssets` is moved out for the build (QUEST.md 7).
+- **The tier is data** (`hm_data/quest_settings.json`, keys in `VrSettings.cs`; command-line switches for a test run):
+
+  | key | switch | default | meaning |
+  |---|---|---|---|
+  | `splats` | `-hmsplats on\|off` | true | the splat dancers (false: the mesh avatars) |
+  | `splat_max` | `-hmsplatmax N` | 0 = `QuestDefaultMax` (all) | at most N Gaussians per dancer, the most opaque kept (`SplatAvatarData.Reduce`, load time); -1 = all |
+  | `splat_max_sigma` | `-hmsplatsigma M` | 0 = `QuestDefaultSigma` (none) | clamp every standard deviation to M metres (fill cost); -1 = none |
+  | `splat_path` | `-hmsplatpath composite\|direct` | composite | composite = as on the PC (accumulate, composite, splat depth before the transparents); direct = drawn in the transparent queue (no intermediate texture; the splat depth goes after the transparents) |
+  | `splat_depth` | `-hmsplatdepth on\|off` | on | the splats write their depth (one more splat raster pass) |
+
+  `Reduce` keeps the N Gaussians with the largest opacity x (sigma_mid x sigma_max)^0.25 (faint ones go first, size breaks ties), keeps
+  record order, joints, weights and the hair binding (`SplatHairBinding` is rebuilt on the kept records), and logs how much of the summed
+  opacity it kept (EditMode test `Reduce_KeepsTheMostOpaqueAndTheHairBinding`).
+- **GLES3 / no compute**: the renderer has no OpenGL path; on a GLES3 device the toggle goes off and the avatars stay.
+- **Safety net**: when the renderer reports for 3 s that it cannot draw a shown dancer (`GaussiansGroup.RenderingError` or a
+  `MemberRenderingStatus` warning: an unsupported shader or kernel, resources that never become ready), the mesh avatars come back for
+  that capture (`HM-SPLATS FALLBACK ...` in logcat). It does not catch a picture that is drawn but wrong.
+- **Overlays in the headset**: no over-the-splats pass in XR (`SplatOverlayFeature` is not verified for single-pass stereo). The VR
+  skeleton draws over the bodies by itself (its second material, ZTest Always, queue 3100), so in the physics view the lines show
+  over the splats; in the other views the lines of a dancer whose splats show are switched off, as in the PC films (`skeleton
+  --mode physics`). Hand lights, COM spheres and the floor craft keep their own depth-correct draws in VR.
+- **Logcat** (`adb logcat -s Unity | grep HM-SPLATS`): `HM-SPLATS tier: ...` at each capture load (on/off, thinning, path, depth,
+  graphics API, settings file), `HM-SPLATS splat dancers: <role> N Gaussians ... in s; thinned: ...` per dancer, and every 5 s
+  `HM-SPLATS status: feature in the URP renderer, depth patch, path, group status, participating Gaussians, MB, over-splats, per
+  dancer shown / avatar visible / skinned frames / hair live`.
+- **Build**: the Vulkan and GLES3 variants of the package shaders and `HM_SkinSplats.compute` compile (warnings only); the APK is
+  55 MB (the compiled `SplatUtilities.compute` is 17.8 MB of it); 25 min for the first build with the splat shaders, 3 min warm.
+  The PC path was re-checked after the change (Editor Play mode, D3D12, recap: 320,000 participating Gaussians, hair live, the
+  image as before; EditMode tests 15/15, GPU vs CPU included).
+- **Measured on the headset**: see the table below; the first desk test was blocked (the Quest 3 lay still on the desk in a dark room:
+  the system's "Finding position in room" dialog held every launch, logcat `VioInitialization: Skipping: Device is static`). Until a
+  run on the headset, the frame rate of the splat recap on a Quest 3 and the look in both eyes are **untested**; switch the splats off
+  with `-hmsplats off` or `"splats": false` if they misbehave.
+
+| moment (recap) | splats | Gaussians | fps (VrApi) | GPU ms |
+|---|---|---|---|---|
+| (not measured yet: see above) | | | | |
+
 ## Not done yet
 
-- A Windows player build: the package shaders and `HM_SkinSplats.compute` / `HM_SplatComposite.shader` are found through the
-  AssetDatabase (Editor only); a player needs references that are not in a Resources folder shared with the Quest build.
-- Quest: not tried (APPEARANCE_DECISION section 6 in the workspace).
+- A Windows player build was not tried; the shader set above should give it the shaders too.
+- The Quest frame rate, the look in both eyes and the hair on the headset (above).

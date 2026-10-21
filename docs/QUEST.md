@@ -83,8 +83,20 @@ ignored, they are transients), never up. The tier is data: `hm_data/quest_settin
 (`HM-PERF`, every 5 s, tag Unity): fps, mean / p95 / worst frame ms, share of frames over budget, GPU and CPU frame time from `FrameTimingManager`, hair
 level and LOD, hair triangles, bake progress, memory.
 
+**Splat dancers (2026-10-21).** The class recap shows the photoreal LHM++ splat dancers by default on the headset (the owner's choice);
+the other lessons keep their mesh avatars. Off for a session: `-hmsplats off`, for good: `"splats": false` in `quest_settings.json`; the
+Quest-only thinning (`splat_max`, `splat_max_sigma`), the render path and the splat depth are data too. Details, logcat lines and the
+measurements: `docs/SPLAT_DANCERS.md` "Quest".
+
 **Test switches without hands** (adb): `adb shell am start -n com.headmovement.viewer/com.unity3d.player.UnityPlayerActivity -e unity "-hmplay recap -hmseek 120 -hmhair light"`
 starts a lesson by itself (`-hmplay <film id>`), jumps to a time a few seconds after it started (`-hmseek <s>`), sets the hair level.
+`-hmview start|front|side|overhead|phone:N` then takes that vantage point (immersive display: add `-hmvr-display immersive`),
+`-hmshots N` writes N stereo stills of the eye images (both eyes side by side, the scene layer without the room) to
+`/sdcard/Android/data/com.headmovement.viewer/files/hmshots/` (one every 6 s from 9 s after the start; `ScreenCapture` BothEyes,
+not yet tried on the headset), and `-hmsplats on|off`,
+`-hmsplatmax N`, `-hmsplatsigma M`, `-hmsplatpath composite|direct`, `-hmsplatdepth on|off` set the splat tier for that run.
+A desk test needs a tracked headset: one that lay still in a dark room shows the system's "Finding position in room" dialog and holds
+every app launch until it is picked up (logcat `VioInitialization: Skipping: Device is static`); `prox_close` alone does not help.
 
 **Rebuild and push (about 15 minutes with warm caches; the first build on a cold cache took 76 minutes)**
 1. Editor idle, lock held; move the contents of `Assets/StreamingAssets` out (an APK copies the whole folder): `Builds/_sa_hold`.

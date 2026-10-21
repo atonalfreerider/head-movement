@@ -1,12 +1,12 @@
-#if UNITY_EDITOR || UNITY_STANDALONE_WIN
+#if UNITY_EDITOR || UNITY_STANDALONE_WIN || UNITY_ANDROID
 using HmSplats;
 using Unity.Mathematics;
 using UnityEngine;
 
 /// <summary>
 /// Read-only access to the follow's simulated hair guides for the splat dancers (Assets/Splats/Avatar): the rest shape
-/// (head-bone space) and the current points. A new partial-class file (HairStrands.cs is unchanged); Editor / Windows
-/// only like the rest of the splat code.
+/// (head-bone space) and the current points. A new partial-class file (HairStrands.cs is unchanged); Editor, Windows and
+/// Android (the Quest) like the rest of the splat code.
 /// </summary>
 public partial class HairStrands
 {

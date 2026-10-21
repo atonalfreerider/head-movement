@@ -174,6 +174,94 @@ namespace HmSplats
             return d;
         }
 
+        /// <summary>
+        /// A lighter copy for a small GPU (the Quest; load time, thread-safe): keeps the <paramref name="keep"/> Gaussians with
+        /// the largest contribution score opacity x (sigma_mid x sigma_max)^0.25 (mostly opacity: faint Gaussians go first,
+        /// the size only breaks ties, so the opaque surface layer stays closed) and clamps every standard deviation to
+        /// <paramref name="maxSigma"/> metres (the very large Gaussians cost the most fill). keep &lt;= 0 or &gt;= Count keeps all;
+        /// maxSigma &lt;= 0 clamps nothing. Records keep their order, joints, weights and hair binding, so the skinning and the
+        /// hair pass are unchanged. Returns this object when nothing changes.
+        /// </summary>
+        public SplatAvatarData Reduce(int keep, float maxSigma, out string report)
+        {
+            bool prune = keep > 0 && keep < Count;
+            float maxLog = maxSigma > 0f ? math.log(maxSigma) : float.PositiveInfinity;
+            int clampedCount = 0;
+            if (!prune)
+            {
+                for (int i = 0; i < Count && clampedCount == 0; i++)
+                    if (math.cmax(LogScale[i]) > maxLog) clampedCount++;
+                if (clampedCount == 0)
+                {
+                    report = $"{Count} Gaussians (all kept, none above {(maxSigma > 0f ? $"{maxSigma * 100f:0.##} cm" : "any limit")})";
+                    return this;
+                }
+            }
+
+            int n = prune ? keep : Count;
+            int[] order = new int[Count];
+            for (int i = 0; i < Count; i++) order[i] = i;
+            if (prune)
+            {
+                float[] score = new float[Count];
+                for (int i = 0; i < Count; i++)
+                {
+                    float3 ls = LogScale[i];
+                    float lmax = math.cmax(ls), lmin = math.cmin(ls), lmid = math.csum(ls) - lmax - lmin;
+                    float opacity = 1f / (1f + math.exp(-OpacityLogit[i]));
+                    score[i] = opacity * math.exp(0.25f * (lmid + math.min(lmax, maxLog)));
+                }
+
+                Array.Sort((float[])score.Clone(), order);   // ascending score
+                Array.Reverse(order);
+                Array.Sort(order, 0, n);                       // the kept ones in file order
+            }
+
+            SplatAvatarData d = new()
+            {
+                Count = n, Header = Header, Role = Role, SourcePath = SourcePath, RestJoints = RestJoints, Parents = Parents,
+                Mean = new float3[n], Rotation = new float4[n], LogScale = new float3[n], OpacityLogit = new float[n],
+                Sh0 = new float3[n], JointIndex = new int4[n], Weight = new float4[n], Hair = new byte[n],
+                Strand = new int[n], Segment = new int[n], LocalOffset = new float3[n], LocalRotation = new float4[n]
+            };
+            int hair = 0, bound = 0, boundBefore = BoundHairCount;
+            clampedCount = 0;
+            double opacityKept = 0, opacityAll = 0;
+            for (int i = 0; i < Count; i++) opacityAll += 1.0 / (1.0 + Math.Exp(-OpacityLogit[i]));
+            for (int k = 0; k < n; k++)
+            {
+                int i = order[k];
+                d.Mean[k] = Mean[i];
+                d.Rotation[k] = Rotation[i];
+                float3 ls = LogScale[i];
+                if (math.cmax(ls) > maxLog)
+                {
+                    ls = math.min(ls, maxLog);
+                    clampedCount++;
+                }
+
+                d.LogScale[k] = ls;
+                d.OpacityLogit[k] = OpacityLogit[i];
+                opacityKept += 1.0 / (1.0 + Math.Exp(-OpacityLogit[i]));
+                d.Sh0[k] = Sh0[i];
+                d.JointIndex[k] = JointIndex[i];
+                d.Weight[k] = Weight[i];
+                d.Hair[k] = Hair[i];
+                d.Strand[k] = Strand[i];
+                d.Segment[k] = Segment[i];
+                d.LocalOffset[k] = LocalOffset[i];
+                d.LocalRotation[k] = LocalRotation[i];
+                if (d.Hair[k] != 0) hair++;
+                if (d.Strand[k] >= 0) bound++;
+            }
+
+            d.HairCount = hair;
+            d.BoundHairCount = bound;
+            report = $"{n} of {Count} Gaussians kept ({100.0 * opacityKept / Math.Max(opacityAll, 1e-9):0.0} % of the summed opacity), " +
+                     $"{clampedCount} clamped to {(maxSigma > 0f ? $"{maxSigma * 100f:0.##} cm" : "-")}, bound hair {bound} of {boundBefore}";
+            return d;
+        }
+
         static float3 F3(byte[] b, int o) => new(BitConverter.ToSingle(b, o), BitConverter.ToSingle(b, o + 4), BitConverter.ToSingle(b, o + 8));
 
         static float4 F4(byte[] b, int o) => new(BitConverter.ToSingle(b, o), BitConverter.ToSingle(b, o + 4),

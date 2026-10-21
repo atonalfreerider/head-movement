@@ -248,5 +248,41 @@ namespace HmSplats.Tests
 
             if (checkedCount == 0) Assert.Ignore("no splat avatar exports in StreamingAssets");
         }
+
+        [Test]
+        public void Reduce_KeepsTheMostOpaqueAndTheHairBinding()
+        {
+            string root = Application.streamingAssetsPath;
+            string[] headers = Directory.Exists(root) ? Directory.GetFiles(root, "*.json", SearchOption.AllDirectories) : Array.Empty<string>();
+            int checkedCount = 0;
+            foreach (string json in headers)
+            {
+                if (!string.Equals(Path.GetFileName(Path.GetDirectoryName(json)), "splats", StringComparison.OrdinalIgnoreCase)) continue;
+                string role = Path.GetFileNameWithoutExtension(json).ToLowerInvariant();
+                if (role != "lead" && role != "follow") continue;
+                SplatAvatarData d = SplatAvatarData.Load(json);
+                int keep = d.Count / 2;
+                SplatAvatarData r = d.Reduce(keep, 0.02f, out string report);
+                Assert.AreEqual(keep, r.Count, report);
+                float maxLog = Mathf.Log(0.02f) + 1e-5f;
+                double keptMean = 0, allMean = 0;
+                for (int i = 0; i < r.Count; i++)
+                {
+                    Assert.LessOrEqual(math.cmax(r.LogScale[i]), maxLog, "clamped sigma");
+                    keptMean += 1.0 / (1.0 + Math.Exp(-r.OpacityLogit[i]));
+                }
+
+                for (int i = 0; i < d.Count; i++) allMean += 1.0 / (1.0 + Math.Exp(-d.OpacityLogit[i]));
+                // the dropped half is the fainter one: the kept Gaussians are more opaque on average
+                Assert.Greater(keptMean / r.Count, allMean / d.Count, report);
+                Assert.LessOrEqual(r.BoundHairCount, d.BoundHairCount);
+                SplatHairBinding hb = SplatHairBinding.FromData(r);
+                if (r.BoundHairCount > 0) Assert.AreEqual(r.BoundHairCount, hb.Bound, "binding over the kept records");
+                Assert.AreSame(d, d.Reduce(0, 0f, out _), "nothing to do: the same data");
+                checkedCount++;
+            }
+
+            if (checkedCount == 0) Assert.Ignore("no splat avatar exports in StreamingAssets");
+        }
     }
 }

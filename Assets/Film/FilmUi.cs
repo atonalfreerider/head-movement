@@ -8,7 +8,7 @@ public static class FilmUi
     static Sprite rounded, disc, triangle;
 
     /// <summary>
-    /// The PC viewer's splat dancers (Assets/Splats/Avatar/SplatDancers.cs sets it; never set on the Quest): 0..1, how much of the
+    /// The splat dancers (Assets/Splats/Avatar/SplatDancers.cs sets it; on the Quest too, where these flat overlays are off in VR): 0..1, how much of the
     /// OPAQUE photoreal splat bodies shows in the frame being built (their composite opacity; 0 while they are off or hidden).
     /// The caption backing and the chapter card backing darken with it (text over a white shirt or jeans stays readable); with
     /// 0 - no splat dancers - every overlay is exactly as before.

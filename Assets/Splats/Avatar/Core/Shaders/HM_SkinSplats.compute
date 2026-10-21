@@ -121,13 +121,18 @@ float4 MinRotation(float3 a, float3 b)
     a = normalize(a);
     b = normalize(b);
     float d = dot(a, b);
+    float4 q;
     if (d < -1 + 1e-6)
     {
-        float3 p = normalize(cross(a, abs(a.x) < 0.9 ? float3(1, 0, 0) : float3(0, 1, 0)));
-        return float4(p, 0);
+        // 180 deg about a perpendicular axis (one return: no "potentially uninitialized" warning on Vulkan)
+        q = float4(normalize(cross(a, abs(a.x) < 0.9 ? float3(1, 0, 0) : float3(0, 1, 0))), 0);
+    }
+    else
+    {
+        q = normalize(float4(cross(a, b), 1 + d));
     }
 
-    return normalize(float4(cross(a, b), 1 + d));
+    return q;
 }
 
 [numthreads(64, 1, 1)]

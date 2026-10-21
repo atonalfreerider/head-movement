@@ -1,4 +1,4 @@
-#if UNITY_EDITOR || UNITY_STANDALONE_WIN
+#if UNITY_EDITOR || UNITY_STANDALONE_WIN || UNITY_ANDROID
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Gaussians.ThreeD;
 using HmSplats;
 using UnityEngine;
+using UnityEngine.XR;
 
 /// <summary>
 /// Viewer toggle "splat dancers" (default OFF: the viewer shows the current mesh avatars until the splat recordings are
@@ -24,8 +25,13 @@ using UnityEngine;
 /// (scales every Gaussian's alpha, so the inside and the back of the body show through).
 ///
 /// The renderer's URP feature is added to the URP renderer at run time only while splat dancers are on
-/// (SplatUrpFeature); nothing in the project's render or XR settings changes. Editor / Windows only (the HmSplats
-/// assembly is not built for Android: the Quest build is unchanged). Hair: when the splat file carries a hair binding
+/// (SplatUrpFeature); nothing in the project's render or XR settings changes. Editor, Windows and Android (the Quest).
+/// On the Quest (a player build for Android) the toggle is ON by default (the owner's choice, 2026-10-20): a lesson whose
+/// capture has splats/ (the class recap) shows the splat dancers, every other lesson its mesh avatars; the tier is data
+/// (quest_settings.json "splats", "splat_max", "splat_max_sigma", "splat_path", "splat_depth"; -hmsplats on|off and the
+/// other switches, VrSettings), and the Gaussians are thinned at load to the Quest default (QuestDefaultMax /
+/// QuestDefaultSigma: SplatAvatarData.Reduce) so the lesson holds 72 Hz. GLES (no compute path in the renderer) keeps the
+/// avatars. The PC default stays OFF. Hair: when the splat file carries a hair binding
 /// (dancecap mono4d/recap_splat_hair.py: the free hair Gaussians bound to the HairStrands guides) the dancer's simulated
 /// HairStrands (the same simulation that moves the hair cards, which are hidden with the rest of the avatar) drive the
 /// bound Gaussians every frame (HairStrandsSplatSource, SkinnedSplatAvatar's SkinHair pass); scalp-level hair and an
@@ -138,6 +144,7 @@ public sealed class SplatDancers : MonoBehaviour
         public float NextScan;
         public float NextHairScan;
         public double LoadSeconds;
+        public volatile string Reduction;
     }
 
     readonly List<Entry> entries = new();
@@ -152,13 +159,35 @@ public sealed class SplatDancers : MonoBehaviour
     /// editor session (SessionState, never saved to the project); a new editor session starts with it off.</summary>
     const string SessionKey = "HM.SplatDancers.On";
 
+    /// <summary>a player build for the Quest (Android): splats on by default, thinned to the Quest budget</summary>
+    public static readonly bool QuestPlayer =
+#if UNITY_ANDROID && !UNITY_EDITOR
+        true;
+#else
+        false;
+#endif
+
+    /// <summary>the Quest's Gaussians per dancer (load-time thinning, SplatAvatarData.Reduce; 0 = all), measured on a Quest 3
+    /// (docs/SPLAT_DANCERS.md "Quest"); quest_settings.json "splat_max" / -hmsplatmax override it</summary>
+    public const int QuestDefaultMax = 0;
+
+    /// <summary>the Quest's clamp of every Gaussian's standard deviation in metres (0 = none); "splat_max_sigma" / -hmsplatsigma</summary>
+    public const float QuestDefaultSigma = 0f;
+
+    /// <summary>the Quest's render path and splat depth (see Paths; "splat_path" / "splat_depth")</summary>
+    public const Paths QuestDefaultPath = Paths.Composite;
+    public const bool QuestDefaultDepth = true;
+
+    /// <summary>what the Quest tier applied at the last capture load (State, logcat)</summary>
+    public static string QuestTier { get; private set; } = "";
+
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
     static void ResetStatics()
     {
 #if UNITY_EDITOR
         splatsOn = UnityEditor.SessionState.GetBool(SessionKey, false);
 #else
-        splatsOn = false;
+        splatsOn = QuestPlayer; // the Quest: on by default (VrSettings "splats" / -hmsplats off turn it off at the capture load)
 #endif
         opacityMode = OpacityModes.Opaque;
         renderPath = Paths.Composite;
@@ -180,9 +209,54 @@ public sealed class SplatDancers : MonoBehaviour
 
     static void OnAvatarsLoaded(HeadMovement viewer)
     {
+        if (QuestPlayer) ApplyQuestTier(viewer);
         if (Instance != null) Instance.Rebuild(viewer);
         else if (splatsOn) Ensure().Rebuild(viewer);
-        if (splatsOn) SplatUrpFeature.Ensure();
+        if (!QuestPlayer)
+        {
+            if (splatsOn) SplatUrpFeature.Ensure();
+        }
+        else if (!splatsOn || Instance == null || !Instance.HasSplatData) SplatUrpFeature.Remove(); // a Quest lesson without splat data renders as before
+        // (on the Quest the Gaussians feature is added when the first splat dancer is built: Build)
+    }
+
+    /// <summary>the capture being loaded has a splat avatar for at least one dancer</summary>
+    public bool HasSplatData
+    {
+        get
+        {
+            foreach (Entry e in entries)
+            {
+                if (e.JsonPath != null) return true;
+            }
+
+            return false;
+        }
+    }
+
+    static int reduceMax;
+    static float reduceSigma;
+    static bool questDepth = true;
+
+    /// <summary>the Quest tier at each capture load (VrSettings: quest_settings.json + the command line): on / off, thinning,
+    /// render path, splat depth; logged as HM-SPLATS</summary>
+    static void ApplyQuestTier(HeadMovement viewer)
+    {
+        HmVr.VrSettings st = HmVr.VrSettings.Current;
+        bool on = st.Splats;
+        bool gles = SystemInfo.graphicsDeviceType is UnityEngine.Rendering.GraphicsDeviceType.OpenGLES3 or UnityEngine.Rendering.GraphicsDeviceType.OpenGLCore;
+        if (gles || !SystemInfo.supportsComputeShaders) on = false; // the renderer has no OpenGL path: the avatars stay
+        splatsOn = on;
+        reduceMax = st.SplatMax > 0 ? st.SplatMax : st.SplatMax < 0 ? 0 : QuestDefaultMax;
+        reduceSigma = st.SplatMaxSigma > 0f ? st.SplatMaxSigma : st.SplatMaxSigma < 0f ? 0f : QuestDefaultSigma;
+        renderPath = st.SplatPath == "direct" ? Paths.Direct : st.SplatPath == "composite" ? Paths.Composite : QuestDefaultPath;
+        questDepth = st.SplatDepth == "off" ? false : st.SplatDepth == "on" ? true : QuestDefaultDepth;
+        // the splat depth BEFORE the transparents is for the composite path (overlays depth-test against the dancers); on the direct
+        // path the splats are transparents themselves and would test against their own depth: the package's order (after) then
+        SplatUrpFeature.DepthBeforeTransparents = renderPath == Paths.Composite;
+        QuestTier = $"splats {(on ? "on" : "off")}{(gles ? " (GLES: no compute path, avatars)" : "")}, max {(reduceMax > 0 ? reduceMax.ToString() : "all")} per dancer, " +
+                    $"sigma clamp {(reduceSigma > 0f ? $"{reduceSigma * 100f:0.##} cm" : "none")}, path {renderPath}, depth {(questDepth ? "on" : "off")}, api {SystemInfo.graphicsDeviceType}, settings {st.Source}";
+        Debug.Log($"HM-SPLATS tier: {QuestTier} (capture {Path.GetFileName(viewer.Manifest?.Folder ?? "?")})");
     }
 
     static SplatDancers Ensure()
@@ -218,22 +292,28 @@ public sealed class SplatDancers : MonoBehaviour
 
     void Awake()
     {
-#if UNITY_EDITOR
-        compute = UnityEditor.AssetDatabase.LoadAssetAtPath<ComputeShader>(SkinnedSplatAvatar.ComputePath);
-#endif
+        // the Editor's AssetDatabase, or (a player: the Quest) the Resources shader set
+        SplatShaderSet shaders = SplatShaderSet.Get();
+        compute = shaders != null ? shaders.skin : null;
+        if (shaders == null || !shaders.Complete) Debug.LogError($"splat dancers: shader set incomplete (missing {(shaders != null ? shaders.Missing() : "the asset")}): {SplatShaderSet.AssetPath}");
         root = gameObject;
         group = gameObject.AddComponent<GaussiansGroup>();
+        if (shaders != null)
+        {
+            if (group.m_ShaderSplats == null) group.m_ShaderSplats = shaders.splats;
+            if (group.m_CSSplatUtilities == null) group.m_CSSplatUtilities = shaders.utilities;
+            if (group.m_ShaderComposite == null) group.m_ShaderComposite = shaders.composite;
+        }
         group.m_RenderPath = GaussianSplat3DRenderer.RenderPath.CompositeTexture;
         group.m_ProjectionMode = GaussianSplat3DRenderer.ProjectionMode.Optimal;
         group.m_ConvertGammaToLinear = true; // Direct path: LHM++ colours are sRGB display values; the project is Linear
                                              // (the Composite path converts at the resolve: GaussiansURPFeature default)
         group.m_SortNthFrame = 1;            // the posed positions change every frame
         group.m_WriteDepth = true;           // splat depth for the overlays (SplatUrpFeature.DepthBeforeTransparents)
-#if UNITY_EDITOR
-        Shader composite = UnityEditor.AssetDatabase.LoadAssetAtPath<Shader>(CompositeShaderPath);
+        if (QuestPlayer) group.m_WriteDepth = questDepth; // set once here, never toggled at run time (see FilmVideoFade)
+        Shader composite = shaders != null ? shaders.fadeComposite : null;
         if (composite != null && composite.isSupported) group.m_ShaderComposite = composite;
         else Debug.LogWarning($"splat dancers: {CompositeShaderPath} missing or unsupported - the package composite is used (no fade)");
-#endif
         Shader.SetGlobalFloat(OpacityId, 1f);
     }
 
@@ -250,10 +330,19 @@ public sealed class SplatDancers : MonoBehaviour
             if (kv.Value == null) continue;
             string json = SplatAvatarData.JsonPath(capture, kv.Key == Role.Lead ? "lead" : "follow");
             Entry e = new() { Role = kv.Key, Avatar = kv.Value, JsonPath = json };
-            if (json != null)
+            if (json != null && (splatsOn || !QuestPlayer))
             {
                 string path = json;
-                e.Loading = Task.Run(() => SplatAvatarData.Load(path));
+                int max = QuestPlayer ? reduceMax : 0;
+                float sigma = QuestPlayer ? reduceSigma : 0f;
+                e.Loading = Task.Run(() =>
+                {
+                    SplatAvatarData d = SplatAvatarData.Load(path);
+                    if (max <= 0 && sigma <= 0f) return d;
+                    SplatAvatarData r = d.Reduce(max, sigma, out string report);
+                    e.Reduction = report;
+                    return r;
+                });
             }
 
             entries.Add(e);
@@ -262,6 +351,8 @@ public sealed class SplatDancers : MonoBehaviour
 
     void Clear()
     {
+        fellBack = false;
+        badSince = -1f;
         LinesBackOn();
         beadDraws.Clear();
         foreach (Entry e in entries)
@@ -326,7 +417,9 @@ public sealed class SplatDancers : MonoBehaviour
             SplatUrpFeature.SplatLayer = e.Avatar.gameObject.layer;
             group.AddMember(e.Splat.Renderer);
             e.LoadSeconds = loadWatch.Elapsed.TotalSeconds;
-            Debug.Log($"splat dancers: {e.Role} {data.Count} Gaussians ({data.HairCount} hair, {data.BoundHairCount} bound) from {data.SourcePath}");
+            Debug.Log($"{(QuestPlayer ? "HM-SPLATS " : "")}splat dancers: {e.Role} {data.Count} Gaussians ({data.HairCount} hair, {data.BoundHairCount} bound) from {data.SourcePath}" +
+                      $" in {e.LoadSeconds:0.0} s{(e.Reduction != null ? "; thinned: " + e.Reduction : "")}");
+            if (QuestPlayer) SplatUrpFeature.Ensure();
         }
         catch (Exception ex)
         {
@@ -344,6 +437,69 @@ public sealed class SplatDancers : MonoBehaviour
         Shader.SetGlobalFloat(OpacityId, fade);
         ApplyVisibility();
         FillOverSplats();
+        if (QuestPlayer && splatsOn && entries.Count > 0)
+        {
+            Watchdog();
+            if (Time.unscaledTime >= nextStatusLog) LogStatus();
+        }
+    }
+
+    bool fellBack;
+    float badSince = -1f;
+
+    /// <summary>the Quest's safety net (an untested GPU path must not leave the lesson without dancers): when the renderer reports
+    /// that it cannot draw a shown splat dancer (an unsupported shader or kernel, resources that never become ready) for 3 s, the
+    /// mesh avatars come back for the rest of this capture and logcat says why (HM-SPLATS FALLBACK)</summary>
+    void Watchdog()
+    {
+        if (fellBack || group == null) return;
+        string reason = group.RenderingError;
+        if (reason == null)
+        {
+            foreach (Entry e in entries)
+            {
+                if (e.Splat == null || !e.Splat.gameObject.activeInHierarchy || e.Splat.Renderer == null) continue;
+                string st = group.MemberRenderingStatus(e.Splat.Renderer, out bool warning);
+                if (warning)
+                {
+                    reason = $"{e.Role}: {st}";
+                    break;
+                }
+            }
+        }
+
+        if (reason == null)
+        {
+            badSince = -1f;
+            return;
+        }
+
+        if (badSince < 0f) badSince = Time.unscaledTime;
+        if (Time.unscaledTime - badSince < 3f) return;
+        fellBack = true;
+        Debug.LogError($"HM-SPLATS FALLBACK: the splat dancers cannot be drawn on this device ({reason}); the mesh avatars are shown instead");
+    }
+
+    float nextStatusLog;
+
+    /// <summary>logcat every 5 s on the Quest (adb logcat -s Unity | grep HM-SPLATS): what is drawn</summary>
+    void LogStatus()
+    {
+        nextStatusLog = Time.unscaledTime + 5f;
+        System.Text.StringBuilder sb = new();
+        foreach (Entry e in entries)
+        {
+            sb.Append($" | {e.Role}: ");
+            if (e.Error != null) sb.Append("error " + e.Error);
+            else if (e.Loading != null) sb.Append("loading");
+            else if (e.Splat == null) sb.Append(e.JsonPath == null ? "no splat data (avatar)" : "not built");
+            else
+                sb.Append($"{e.Splat.Data.Count} Gaussians, shown {e.Splat.gameObject.activeInHierarchy}, avatar visible {e.Avatar != null && e.Avatar.Visible}, " +
+                          $"renderers hidden {e.Hidden.Count}, skinned frames {e.Splat.SkinnedFrames}, hair {(e.Splat.HairBinding != null ? (e.Splat.HairLive ? $"live ({e.Splat.HairFrames} frames)" : e.Splat.HairStatus) : "-")}");
+        }
+
+        Debug.Log($"HM-SPLATS status: {(fellBack ? "FELL BACK to the avatars, " : "")}feature {(SplatUrpFeature.Injected ? "in" : "NOT in")} the URP renderer, depth patch '{SplatUrpFeature.DepthPatch}', path {renderPath}, " +
+                  $"group '{group?.Status}', participating {group?.ParticipatingSplats ?? 0}, {Math.Round((group?.AllocatedBytes ?? 0) / 1048576.0, 1)} MB, over-splats '{overSplatsStatus}'{sb}");
     }
 
     // ------------------------------------------------------------------ the film's fade into / out of a phone's video
@@ -510,7 +666,12 @@ public sealed class SplatDancers : MonoBehaviour
         linesScratch.Clear();
         bool followShown = false;
         bool physicsView = hm != null && hm.SkeletonMode == SkeletonStyle.Mode.Physics;
-        bool over = splatsOn && hm != null && (skeletonOver == SkeletonOverModes.Always || (skeletonOver == SkeletonOverModes.Physics && physicsView));
+        // a headset (XR: the Quest, PC VR): no extra pass over the splats (SplatOverlayFeature is not verified for single-pass
+        // stereo). The VR skeleton draws over the bodies by itself (its second material: ZTest Always, queue 3100), so the lines
+        // still show in the physics view and are switched off in the other views; the hand lights, COM spheres and the floor
+        // craft keep their own depth-correct draws (nothing is switched off for an over-the-splats pass that would not run)
+        bool xr = XRSettings.isDeviceActive;
+        bool over = splatsOn && hm != null && !xr && (skeletonOver == SkeletonOverModes.Always || (skeletonOver == SkeletonOverModes.Physics && physicsView));
         bool off = splatsOn && hm != null && skeletonOver == SkeletonOverModes.Physics && !physicsView;
         bool leadShown = false;
         if ((over || off) && SkeletonLinesMethod != null)
@@ -557,7 +718,7 @@ public sealed class SplatDancers : MonoBehaviour
 
         // the hand-contact lights (the glow where the partners' hands meet) sit inside the joined hands: over the splats in every
         // view (they are no skeleton line, and the film's "connection" call-outs point at them), as through the avatars
-        if ((over || off) && leadShown && hm.TryGetComponent(out ContactDetection contacts))
+        if ((over || off) && !xr && leadShown && hm.TryGetComponent(out ContactDetection contacts))
         {
             foreach (FieldInfo f in OrbFields)
             {
@@ -611,7 +772,7 @@ public sealed class SplatDancers : MonoBehaviour
         // stay depth-correct (a ring behind a foot is hidden by it). Additive glow: drawn by the over-the-splats pass only.
         Camera eye = ViewCamera();
         bool overhead = eye != null && eye.transform.forward.y < -OverheadBelowY;
-        if (splatsOn && hm != null && skeletonOver != SkeletonOverModes.Never && overhead && AnySplatShown() &&
+        if (splatsOn && hm != null && !xr && skeletonOver != SkeletonOverModes.Never && overhead && AnySplatShown() &&
             DanceLayers.Instance != null && DanceLayers.Instance.FloorCraft != null)
         {
             DanceLayers.Instance.FloorCraft.GetComponentsInChildren(false, floorScratch);
@@ -634,6 +795,7 @@ public sealed class SplatDancers : MonoBehaviour
 
         overSplatsStatus = !splatsOn ? "off"
             : SkeletonLinesMethod == null ? "Dancer.SkeletonLines not found (viewer code changed?): lines as before"
+            : xr ? (off ? $"headset: lines off while the splats show ({linesOff.Count} lines)" : physicsView ? "headset physics view: the VR skeleton's own over-the-bodies draw" : "headset")
             : over ? $"over the splats: {list.Count} renderers + {SplatUrpFeature.OverSplatsOnly.Count} glow + {SplatUrpFeature.OverSplatsInstanced.Count} instanced"
             : off ? $"lines off while the splats show: {linesOff.Count} lines; over the splats: {list.Count} hand lights, {SplatUrpFeature.OverSplatsOnly.Count} floor-craft glow"
             : skeletonOver == SkeletonOverModes.Never ? "never: depth-correct lines" : "no dancer shown";
@@ -669,7 +831,7 @@ public sealed class SplatDancers : MonoBehaviour
                 continue;
             }
 
-            bool show = splatsOn && e.Splat != null && e.Avatar.Visible;
+            bool show = splatsOn && !fellBack && e.Splat != null && e.Avatar.Visible;
             if (e.Splat != null)
             {
                 if (e.Splat.gameObject.activeSelf != show) e.Splat.gameObject.SetActive(show);
@@ -740,6 +902,8 @@ public sealed class SplatDancers : MonoBehaviour
             ["opacityMode"] = opacityMode.ToString(),
             ["displayOpacity"] = DisplayOpacity,
             ["renderPath"] = renderPath.ToString(),
+            ["questTier"] = QuestTier,
+            ["fellBackToAvatars"] = fellBack,
             ["depthPatch"] = SplatUrpFeature.DepthPatch,
             ["hairMode"] = hairMode.ToString(),
             ["hairMotion"] = hairMotion,

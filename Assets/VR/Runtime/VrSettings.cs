@@ -28,7 +28,13 @@ namespace HmVr
     ///     "msaa": 0,                   // 0 = by device (Quest 3 and later 4x, Quest 2 2x)
     ///     "eye_scale": 0.0,            // 0 = by device (1.0 on Quest 3, 0.9 on Quest 2)
     ///     "refresh_hz": 72,            // asked from the runtime when it offers it
-    ///     "perf_log": true }           // frame statistics to logcat every 5 s (tag Unity, prefix HM-PERF)
+    ///     "perf_log": true,            // frame statistics to logcat every 5 s (tag Unity, prefix HM-PERF)
+    ///     "splats": true,              // the splat dancers (photoreal Gaussians) for a lesson whose capture has splats/ (the recap); false = the mesh avatars
+    ///     "splat_max": 0,              // at most this many Gaussians per dancer (0 = the Quest default, SplatDancers.QuestDefaultMax; -1 = all)
+    ///     "splat_max_sigma": 0.0,      // clamp every Gaussian's standard deviation to this many metres (0 = the Quest default; -1 = none)
+    ///     "splat_path": "",            // "composite" | "direct" (empty = the Quest default)
+    ///     "splat_depth": "" }          // "on" | "off": the splats write their depth (overlays depth-test against them); empty = the Quest default
+    /// Command line (adb ... -e unity "..."): -hmsplats on|off, -hmsplatmax N, -hmsplatsigma M, -hmsplatpath composite|direct, -hmsplatdepth on|off.
     /// </summary>
     public sealed class VrSettings
     {
@@ -50,6 +56,10 @@ namespace HmVr
         public float EyeScale;
         public int RefreshHz = 72;
         public bool PerfLog = true;
+        public bool Splats = true;
+        public int SplatMax;
+        public float SplatMaxSigma;
+        public string SplatPath = "", SplatDepth = "";
         public string Source = "defaults";
 
         public static VrSettings Current { get; private set; } = new();
@@ -81,6 +91,11 @@ namespace HmVr
                     if (j["eye_scale"] != null) s.EyeScale = j.Value<float>("eye_scale");
                     if (j["refresh_hz"] != null) s.RefreshHz = j.Value<int>("refresh_hz");
                     if (j["perf_log"] != null) s.PerfLog = j.Value<bool>("perf_log");
+                    if (j["splats"] != null) s.Splats = j.Value<bool>("splats");
+                    if (j["splat_max"] != null) s.SplatMax = j.Value<int>("splat_max");
+                    if (j["splat_max_sigma"] != null) s.SplatMaxSigma = j.Value<float>("splat_max_sigma");
+                    if (j["splat_path"] != null) s.SplatPath = j.Value<string>("splat_path").Trim().ToLowerInvariant();
+                    if (j["splat_depth"] != null) s.SplatDepth = j.Value<string>("splat_depth").Trim().ToLowerInvariant();
                 }
             }
             catch (Exception e)
@@ -90,6 +105,14 @@ namespace HmVr
 
             string hair = VrArgs.Get("-hmhair");
             if (hair != null) s.Hair = ParseLevel(hair, s.Hair);
+            string splats = VrArgs.Get("-hmsplats");
+            if (splats != null) s.Splats = !string.Equals(splats.Trim(), "off", StringComparison.OrdinalIgnoreCase) && splats.Trim() != "0" && !string.Equals(splats.Trim(), "false", StringComparison.OrdinalIgnoreCase);
+            if (int.TryParse(VrArgs.Get("-hmsplatmax"), out int smax)) s.SplatMax = smax;
+            if (float.TryParse(VrArgs.Get("-hmsplatsigma"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float ssig)) s.SplatMaxSigma = ssig;
+            string spath = VrArgs.Get("-hmsplatpath");
+            if (spath != null) s.SplatPath = spath.Trim().ToLowerInvariant();
+            string sdepth = VrArgs.Get("-hmsplatdepth");
+            if (sdepth != null) s.SplatDepth = sdepth.Trim().ToLowerInvariant();
             Current = s;
             return s;
         }
@@ -134,7 +157,7 @@ namespace HmVr
 
     /// <summary>
     /// Command-line switches for tests on a headset without hands (adb shell am start ... -e unity "-hmplay recap -hmseek 120 -hmhair light"):
-    /// -hmplay &lt;film id&gt; starts a lesson by itself, -hmseek &lt;seconds&gt; jumps there a few seconds after it started, -hmhair full|light|off.
+    /// -hmplay &lt;film id&gt; starts a lesson by itself, -hmseek &lt;seconds&gt; jumps there a few seconds after it started, -hmhair full|light|off, -hmview start|front|side|overhead|phone:N (a vantage point after the seek; immersive display), -hmsplats on|off (VrSettings).
     /// </summary>
     public static class VrArgs
     {
