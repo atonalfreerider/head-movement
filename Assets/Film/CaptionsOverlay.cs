@@ -39,6 +39,12 @@ public class CaptionsOverlay : MonoBehaviour
     string filmDir;
     int laidOut = -1, laidW, laidH, wordCount;
     float fontPx, unit;
+    Rect blockNoTag;      // the backing's rect without the speaker tag (screen px)
+    bool backingWithTag;  // the backing covers the speaker tag too (over the opaque splat dancers)
+
+    /// <summary>the backing's alpha (the mesh avatars' look) and, over the opaque splat dancers (FilmUi.OpaqueBodies), the darker one
+    /// (the white shirt / light jeans of the photoreal bodies under the speaker-coloured words: splat film review, 2026-10-20)</summary>
+    public const float BackingAlpha = 0.38f, BackingAlphaOverBodies = 0.85f;
 
     public string CurrentWord { get; private set; }
     public string CurrentText { get; private set; }
@@ -140,7 +146,17 @@ public class CaptionsOverlay : MonoBehaviour
         CurrentWord = cur >= 0 ? c.Words[cur].Text : null;
 
         backing.enabled = true;
-        FilmUi.SetAlpha(backing, 0.38f * a);
+        // over the opaque splat dancers (PC viewer, FilmUi.OpaqueBodies) a darker backing that also takes in the speaker tag; 0 = as before
+        float bodies = FilmUi.OpaqueBodiesNow();
+        bool withTag = bodies > 0.001f && speakerTag.enabled;
+        if (withTag != backingWithTag)
+        {
+            backingWithTag = withTag;
+            Rect br = withTag ? BlockRect : blockNoTag;
+            FilmUi.Place(backing.rectTransform, br.center, br.size);
+        }
+
+        FilmUi.SetAlpha(backing, FilmUi.BackingAlpha(BackingAlpha, BackingAlphaOverBodies, bodies) * a);
         if (speakerTag.enabled)
         {
             Color sc0 = c.Tint ?? style.Text;
@@ -325,6 +341,8 @@ public class CaptionsOverlay : MonoBehaviour
 
         Rect block = new(W * 0.5f - widest * 0.5f - pad.x, bottom, widest + 2f * pad.x, blockH);
         FilmUi.Place(backing.rectTransform, block.center, block.size);
+        blockNoTag = block;
+        backingWithTag = false;
         backing.pixelsPerUnitMultiplier = 24f / Mathf.Max(1f, 16f * unit);
         highlight.pixelsPerUnitMultiplier = 24f / Mathf.Max(1f, style.CornerPx * unit);
 

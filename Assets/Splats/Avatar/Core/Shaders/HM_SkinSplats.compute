@@ -1,0 +1,196 @@
+// Skinned Gaussian-splat dancers (SPLAT_AVATAR_FORMAT.md section 4): linear blend skinning of the canonical (zero-pose)
+// Gaussians with the 55 skin matrices of this frame, written in the layout the renderer reads as a deformation frame
+// (net.kleinbeck.gaussians GaussianSplat3DData: float4 position/opacity, float4 scale/pad, float4 rotation xyzw; activated
+// opacity and scale). SplatSkinning.cs is the CPU reference of the same maths.
+#pragma kernel Skin
+#pragma kernel SkinHair
+#pragma kernel HairSegments
+
+struct Canon
+{
+    float4 meanOpacity;   // canonical centre (Unity coords), opacity = sigmoid(logit)
+    float4 scaleFlags;    // exp(log_scale), asfloat(flags): bit 0 hair
+    float4 rotation;      // canonical rotation xyzw
+    float4 weights;       // 4 LBS weights, sum 1
+    uint4 joints;         // 4 joint indices 0..54
+};
+
+struct Splat
+{
+    float4 positionOpacity;
+    float4 scale;
+    float4 rotation;
+};
+
+StructuredBuffer<Canon> _Canon;
+StructuredBuffer<float4x4> _Skin;   // 55 skin matrices S_j = G_j T(-J_j), Unity Matrix4x4 memory layout (column-major)
+RWStructuredBuffer<Splat> _Out;
+uint _Count;
+uint _HairMode;                     // 0 = draw hair Gaussians skinned, 1 = hide them (opacity 0), 2 = show only hair
+float _OpacityScale;
+
+// hair binding (SPLAT_AVATAR_FORMAT.md section 6; SplatHairBinding.cs is the CPU reference): run after Skin over the bound
+// hair Gaussians only; replaces their LBS centre / rotation by the pose on their simulated strand segment (Skin already
+// wrote opacity and scale, hair mode included)
+struct HairBind
+{
+    uint4 ids;            // x = Gaussian index, y = segment A, z = neighbour segment N (global segment indices)
+    float4 alongAW;       // xyz = (canonical head-bone centre - live rest origin of A) along A's rest tangent, w = neighbour weight
+    float4 alongNAttach;  // xyz = same for N, w = attach weight (0 = head-rigid, 1 = strand)
+    float4 perpAK;        // xyz = the offset's part across A's tangent, w = k (1 = turns with the segment, 0 = with the head)
+    float4 perpN;         // xyz = same for N, w = the side of the face it hangs on at rest (+1 / -1)
+    float4 qhb;           // canonical rotation (head-bone axes), xyzw
+};
+
+StructuredBuffer<HairBind> _HairBind;
+StructuredBuffer<float4> _HairSeg;  // per global segment: [2 s] = origin (world), [2 s + 1] = segment rotation D_s (xyzw)
+uint _HairCount;
+float4 _HeadRot;                    // rotation of the splat skeleton's head skin matrix S_15 (xyzw)
+float4 _HeadPos;                    // xyz = S_15 J_15 (the shown head)
+// HairSegments (before SkinHair): per global segment, from the simulated points re-anchored to the shown head
+StructuredBuffer<float4> _HairSim;      // simulated guide points, world (xyz), guide-major
+StructuredBuffer<float4> _HairRestT;    // per global segment: the simulation's rest tangent (head-bone space)
+RWStructuredBuffer<float4> _HairSegOut; // = _HairSeg of SkinHair
+uint4 _SegDims;                         // segments, segments per guide, points per guide
+float4 _SimHeadPos, _SimHeadRot;        // the head pose the simulation used (world)
+float4 _Face0, _Face1, _Face2;      // the simulation's face box (SplatHairBinding.FacePush): centre (head-bone) + r;
+                                    // fwdMin, yLo, yHi, halfWidth (x r); margin, sideBias (x r), enabled
+
+float4 QuatFromMatrix(float3x3 m)
+{
+    // m[row][col]; same branches as SplatSkinning.QuatFromMatrix
+    float tr = m[0][0] + m[1][1] + m[2][2];
+    float4 q;
+    if (tr > 0)
+    {
+        float s = sqrt(tr + 1) * 2;
+        q = float4((m[2][1] - m[1][2]) / s, (m[0][2] - m[2][0]) / s, (m[1][0] - m[0][1]) / s, 0.25 * s);
+    }
+    else if (m[0][0] > m[1][1] && m[0][0] > m[2][2])
+    {
+        float s = sqrt(max(1 + m[0][0] - m[1][1] - m[2][2], 1e-12)) * 2;
+        q = float4(0.25 * s, (m[0][1] + m[1][0]) / s, (m[0][2] + m[2][0]) / s, (m[2][1] - m[1][2]) / s);
+    }
+    else if (m[1][1] > m[2][2])
+    {
+        float s = sqrt(max(1 + m[1][1] - m[0][0] - m[2][2], 1e-12)) * 2;
+        q = float4((m[0][1] + m[1][0]) / s, 0.25 * s, (m[1][2] + m[2][1]) / s, (m[0][2] - m[2][0]) / s);
+    }
+    else
+    {
+        float s = sqrt(max(1 + m[2][2] - m[0][0] - m[1][1], 1e-12)) * 2;
+        q = float4((m[0][2] + m[2][0]) / s, (m[1][2] + m[2][1]) / s, 0.25 * s, (m[1][0] - m[0][1]) / s);
+    }
+    return normalize(q);
+}
+
+float4 QuatMul(float4 a, float4 b)
+{
+    return float4(a.w * b.xyz + b.w * a.xyz + cross(a.xyz, b.xyz), a.w * b.w - dot(a.xyz, b.xyz));
+}
+
+[numthreads(128, 1, 1)]
+void Skin(uint3 tid : SV_DispatchThreadID)
+{
+    uint i = tid.x;
+    if (i >= _Count) return;
+    Canon c = _Canon[i];
+    float4x4 m = c.weights.x * _Skin[c.joints.x] + c.weights.y * _Skin[c.joints.y] +
+                 c.weights.z * _Skin[c.joints.z] + c.weights.w * _Skin[c.joints.w];
+    float3 p = mul(m, float4(c.meanOpacity.xyz, 1)).xyz;
+    float4 q = QuatMul(QuatFromMatrix((float3x3)m), c.rotation);
+    uint flags = asuint(c.scaleFlags.w);
+    bool hair = (flags & 1u) != 0;
+    float opacity = c.meanOpacity.w * _OpacityScale;
+    if ((_HairMode == 1 && hair) || (_HairMode == 2 && !hair)) opacity = 0;
+    Splat s;
+    s.positionOpacity = float4(p, opacity);
+    s.scale = float4(c.scaleFlags.xyz, 0);
+    s.rotation = normalize(q);
+    _Out[i] = s;
+}
+
+float3 QuatRotate(float4 q, float3 v)
+{
+    float3 t = 2 * cross(q.xyz, v);
+    return v + q.w * t + cross(q.xyz, t);
+}
+
+float4 MinRotation(float3 a, float3 b)
+{
+    a = normalize(a);
+    b = normalize(b);
+    float d = dot(a, b);
+    if (d < -1 + 1e-6)
+    {
+        float3 p = normalize(cross(a, abs(a.x) < 0.9 ? float3(1, 0, 0) : float3(0, 1, 0)));
+        return float4(p, 0);
+    }
+
+    return normalize(float4(cross(a, b), 1 + d));
+}
+
+[numthreads(64, 1, 1)]
+void HairSegments(uint3 tid : SV_DispatchThreadID)
+{
+    uint gs = tid.x;
+    if (gs >= _SegDims.x) return;
+    uint p = gs / _SegDims.y * _SegDims.z + gs % _SegDims.y;
+    float4 a = normalize(QuatMul(_HeadRot, float4(-_SimHeadRot.xyz, _SimHeadRot.w)));
+    float3 pa = _HeadPos.xyz + QuatRotate(a, _HairSim[p].xyz - _SimHeadPos.xyz);
+    float3 pb = _HeadPos.xyz + QuatRotate(a, _HairSim[p + 1].xyz - _SimHeadPos.xyz);
+    float3 tc = QuatRotate(_HeadRot, _HairRestT[gs].xyz);
+    float4 d = normalize(QuatMul(MinRotation(tc, pb - pa), _HeadRot));
+    _HairSegOut[2 * gs] = float4(pa, 0);
+    _HairSegOut[2 * gs + 1] = d;
+}
+
+float4 Nlerp(float4 a, float4 b, float t)
+{
+    if (dot(a, b) < 0) b = -b;
+    return normalize(lerp(a, b, t));
+}
+
+[numthreads(64, 1, 1)]
+void SkinHair(uint3 tid : SV_DispatchThreadID)
+{
+    uint t = tid.x;
+    if (t >= _HairCount) return;
+    HairBind b = _HairBind[t];
+    uint i = b.ids.x;
+    float4 qa = _HairSeg[2 * b.ids.y + 1], qn = _HairSeg[2 * b.ids.z + 1];
+    float k = b.perpAK.w;
+    float4 ka = Nlerp(_HeadRot, qa, k), kn = Nlerp(_HeadRot, qn, k);
+    float3 pa = _HairSeg[2 * b.ids.y].xyz + QuatRotate(qa, b.alongAW.xyz) + QuatRotate(ka, b.perpAK.xyz);
+    float3 pn = _HairSeg[2 * b.ids.z].xyz + QuatRotate(qn, b.alongNAttach.xyz) + QuatRotate(kn, b.perpN.xyz);
+    float w = b.alongAW.w;
+    float3 p = lerp(pa, pn, w);
+    float4 q = QuatMul(Nlerp(ka, kn, w), b.qhb);
+    if (_Face2.z > 0.5)
+    {
+        float4 hinv = float4(-_HeadRot.xyz, _HeadRot.w);
+        float r = _Face0.w;
+        float3 d = QuatRotate(hinv, p - _HeadPos.xyz) - _Face0.xyz;
+        if (-d.z > _Face1.x * r && d.y > _Face1.y * r && d.y < _Face1.z * r && abs(d.x) < _Face1.w * r)
+        {
+            float side = b.perpN.w;
+            float edge = _Face1.w * r + _Face2.x;
+            float sx = d.x + _Face2.y * r * side;
+            sx = sx > 0 ? 1 : (sx < 0 ? -1 : (side >= 0 ? 1 : -1));
+            float dx = sx * edge - d.x;
+            float dy = _Face1.y * r - _Face2.x - d.y;
+            float3 push = -dy < abs(dx) ? float3(0, dy, 0) : float3(dx, 0, 0);
+            p += QuatRotate(_HeadRot, push);
+        }
+    }
+
+    float a = b.alongNAttach.w;
+    float4x4 m = _Skin[15];
+    float3 pr = mul(m, float4(_Canon[i].meanOpacity.xyz, 1)).xyz;
+    float4 qr = QuatMul(_HeadRot, b.qhb);
+    if (dot(qr, q) < 0) q = -q;
+    Splat s = _Out[i];
+    s.positionOpacity.xyz = lerp(pr, p, a);
+    s.rotation = normalize(lerp(qr, q, a));
+    _Out[i] = s;
+}

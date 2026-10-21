@@ -28,6 +28,10 @@ public class ChapterCards
     bool laidVertical;
     float shownUnit = 1f;
 
+    /// <summary>the card backing's alpha (the mesh avatars' look) and, over the opaque splat dancers (FilmUi.OpaqueBodies), the
+    /// darker one (a white title over a photoreal head: splat film review, 2026-10-20)</summary>
+    public const float BackingAlpha = 0.62f, BackingAlphaOverBodies = 0.9f;
+
     /// <summary>opacity of the card now (0..1)</summary>
     public float Alpha { get; private set; }
 
@@ -60,7 +64,7 @@ public class ChapterCards
         group = root.gameObject.AddComponent<CanvasGroup>();
         group.alpha = 0f;
         group.interactable = group.blocksRaycasts = false;
-        back = FilmUi.Box(root, "Card backing", FilmUi.Rounded, new Color(0.03f, 0.03f, 0.05f, 0.62f));
+        back = FilmUi.Box(root, "Card backing", FilmUi.Rounded, new Color(0.03f, 0.03f, 0.05f, BackingAlpha));
         badge = FilmUi.Box(root, "Chapter number disc", FilmUi.Disc, accent);
         number = FilmUi.Label(root, "Chapter number", 40, new Color(0.067f, 0.067f, 0.067f), TextAnchor.MiddleCenter, true);
         title = FilmUi.Label(root, "Chapter title", 44, Color.white, TextAnchor.MiddleLeft, true);
@@ -109,6 +113,13 @@ public class ChapterCards
 
         CurrentTitle = c.Title;
         if (!ReferenceEquals(c, laid) || laidW != Screen.width || laidH != Screen.height || laidVertical != vertical) Layout(c, vertical, W, H, unit, aspect);
+        // over the opaque splat dancers (PC viewer, FilmUi.OpaqueBodies) a darker backing that also fades in and out more slowly than
+        // the title (the group's alpha scales both: backing x a -> backing x sqrt(a)), so a fading title keeps a dark ground over a
+        // bright photoreal face; 0 = as before
+        float bodies = FilmUi.OpaqueBodiesNow();
+        float backA = FilmUi.BackingAlpha(BackingAlpha, BackingAlphaOverBodies, bodies);
+        if (bodies > 0f && a > 0.001f) backA = Mathf.Lerp(backA, Mathf.Min(1f, backA / Mathf.Sqrt(a)), bodies);
+        FilmUi.SetAlpha(back, backA);
         group.alpha = a;
         root.anchoredPosition = new Vector2(0f, -(1f - a) * 16f * shownUnit);
     }

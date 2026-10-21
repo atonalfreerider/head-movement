@@ -506,6 +506,13 @@ public static class FilmRenderCheck
         s.AppendLine($"| Director | {(j.directorType ?? "missing")}; Prepare {(j.prepareCalled ? "used" : "not used")}; Begin({(j.begin3 ? "path, aspect, start" : "path, aspect")}) |");
         s.AppendLine($"| Ended | {j.stopReason ?? j.message} |");
         s.AppendLine($"| Unity / Recorder / GPU | {j.unity} / {j.recorderVersion} / {j.gpu} |");
+        if (j.orderedReadback || j.splatDancers || j.readbackMode == "observe")
+        {
+            s.AppendLine($"| Splat dancers | {(j.splatDancers ? "on" : "off")} ({j.graphicsApi}); audio repair after these checks: {(j.audioFix ? "yes (dancecap.film_audiofix, section below)" : "no")} |");
+            s.AppendLine($"| Frame readback | {j.readbackStatus}; {j.readbackFrames} frames polled ({F(j.readbackWaitMs / Math.Max(1, j.readbackFrames), "0.0")} ms each), " +
+                         $"at most {j.readbackMaxPending} unwritten before Unity's readback update ({j.readbackPendingFrames} frames with more than one), " +
+                         $"{j.readbackTimeouts} not done within {OrderedReadback.PollTimeoutMs} ms |");
+        }
         if (r.sync.Count > 0) s.AppendLine($"| Sync | {string.Join("; ", r.sync.Select(kv => $"{kv.Key}={(kv.Value is List<string> l ? string.Join(", ", l) : kv.Value)}"))} |");
         if (j.warnings.Count > 0)
         {

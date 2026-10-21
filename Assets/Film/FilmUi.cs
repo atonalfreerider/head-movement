@@ -7,6 +7,32 @@ public static class FilmUi
 {
     static Sprite rounded, disc, triangle;
 
+    /// <summary>
+    /// The PC viewer's splat dancers (Assets/Splats/Avatar/SplatDancers.cs sets it; never set on the Quest): 0..1, how much of the
+    /// OPAQUE photoreal splat bodies shows in the frame being built (their composite opacity; 0 while they are off or hidden).
+    /// The caption backing and the chapter card backing darken with it (text over a white shirt or jeans stays readable); with
+    /// 0 - no splat dancers - every overlay is exactly as before.
+    /// </summary>
+    public static System.Func<float> OpaqueBodies;
+
+    /// <summary>OpaqueBodies now, clamped (0 when unset or failing)</summary>
+    public static float OpaqueBodiesNow()
+    {
+        if (OpaqueBodies == null) return 0f;
+        try
+        {
+            float v = OpaqueBodies();
+            return float.IsFinite(v) ? Mathf.Clamp01(v) : 0f;
+        }
+        catch (System.Exception)
+        {
+            return 0f;
+        }
+    }
+
+    /// <summary>a backing's alpha: its own (the mesh avatars' look) blended towards the darker one over opaque splat bodies</summary>
+    public static float BackingAlpha(float own, float overBodies, float bodies) => bodies <= 0f ? own : Mathf.Lerp(own, Mathf.Max(own, overBodies), Mathf.Clamp01(bodies));
+
     /// <summary>a white rounded box (corner radius 24 px of a 64 px texture), 9-sliced: scale the corner with
     /// Image.pixelsPerUnitMultiplier</summary>
     public static Sprite Rounded

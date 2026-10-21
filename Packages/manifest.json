@@ -5,6 +5,7 @@
     "com.unity.ide.visualstudio": "2.0.26",
     "com.unity.inputsystem": "1.20.0",
     "com.unity.multiplayer.center": "2.0.1",
+    "net.kleinbeck.gaussians": "https://github.com/ninjamode/Unity-VR-Gaussian-Splatting.git#9675b7a60ab359f233f0e95671ae699bdf8b1e69",
     "com.unity.nuget.newtonsoft-json": "3.2.2",
     "com.unity.pipeline": "0.8.0-exp.1",
     "com.unity.recorder": "5.1.7",

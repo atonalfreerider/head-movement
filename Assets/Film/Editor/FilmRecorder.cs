@@ -81,6 +81,24 @@ public static class FilmRecorder
         public string gpu, unity, recorderVersion;
         public List<string> warnings = new();
 
+        // the splat dancers were on for this recording (SplatDancers.Enabled at the start)
+        public bool splatDancers;
+        public string graphicsApi;
+
+        // ordered readbacks (see OrderedReadback): "auto" (on with the splat dancers or a D3D12 / Vulkan device) | "ordered" | "async"
+        // | "observe" (async, with the pending-frame statistics)
+        public string readbackMode = "auto";
+        public bool orderedReadback;
+        public string readbackStatus;
+        public int readbackFrames, readbackMaxPending, readbackPendingFrames, readbackTimeouts;
+        public double readbackWaitMs;
+
+        // the audio repair after the checks (dancecap.film_audiofix): "auto" (with the splat dancers) | "on" | "off"
+        public string audioFixMode = "auto";
+        public bool audioFix;
+        public string audioFixResult, audioFixReport, rawOutput, audioFixLog;
+        public bool validatedPass;
+
         public bool Active => state != null && Array.IndexOf(Terminal, state) < 0;
     }
 
@@ -169,6 +187,7 @@ public static class FilmRecorder
 
                 break;
             case PlayModeStateChange.ExitingPlayMode:
+                OrderedReadback.End();
                 if (j.state is "loading" or "preparing" or "arming" or "recording")
                 {
                     // the user (or something else) left Play mode: the Recorder finalises the file on its own
@@ -230,6 +249,9 @@ public static class FilmRecorder
             case "validating":
                 FilmRenderCheck.Tick(j, OnValidated);
                 break;
+            case "audiofix":
+                TickAudioFix(j);
+                break;
             case "loading":
             case "preparing":
             case "arming":
@@ -257,6 +279,9 @@ public static class FilmRecorder
         // plain test only: play the capture's film soundtrack (direction mix, from film time `start`, on a frame clock)
         // instead of HeadMovement's song - tests the soundtrack player, the Recorder's audio capture and the A/V sync check
         public bool mix;
+
+        // auto | ordered | async (Job.readbackMode) and auto | on | off (Job.audioFixMode)
+        public string readback = "auto", audioFix = "auto";
     }
 
     /// <summary>queue a recording; returns null on success or an error message</summary>
@@ -272,6 +297,10 @@ public static class FilmRecorder
         string size = (o.size ?? "hd").Trim().ToLowerInvariant();
         if (size != "hd" && size != "4k") return $"size must be hd or 4k, not '{o.size}'";
         if (o.fps != 30 && o.fps != 60) return "fps must be 30 or 60";
+        string readback = (o.readback ?? "auto").Trim().ToLowerInvariant();
+        if (readback is not ("auto" or "ordered" or "async" or "observe")) return $"readback must be auto, ordered, async or observe, not '{o.readback}'";
+        string audioFix = (o.audioFix ?? "auto").Trim().ToLowerInvariant();
+        if (audioFix != "auto" && audioFix != "on" && audioFix != "off") return $"audiofix must be auto, on or off, not '{o.audioFix}'";
         (int w, int h) = size == "4k" ? (aspect == "vertical" ? (2160, 3840) : (3840, 2160)) : (aspect == "vertical" ? (1080, 1920) : (1920, 1080));
 
         string capture = string.IsNullOrWhiteSpace(o.capture) ? DefaultCapture() : o.capture.Trim();
@@ -284,7 +313,8 @@ public static class FilmRecorder
             id = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture), created = Now(), source = o.source,
             capture = capture, aspect = aspect, size = size, width = w, height = h, fps = o.fps,
             preset = $"{aspect}_{size}", start = Mathf.Max(0f, o.start), duration = Mathf.Max(0f, o.duration),
-            unity = Application.unityVersion, recorderVersion = RecorderVersion(), gpu = SystemInfo.graphicsDeviceName
+            unity = Application.unityVersion, recorderVersion = RecorderVersion(), gpu = SystemInfo.graphicsDeviceName,
+            readbackMode = readback, audioFixMode = audioFix
         };
 
         bool director = DirectorType() != null && !o.plain;
@@ -885,6 +915,16 @@ public static class FilmRecorder
             return;
         }
 
+        j.splatDancers = SplatDancers.Enabled;
+        j.graphicsApi = SystemInfo.graphicsDeviceType.ToString();
+        bool modernApi = SystemInfo.graphicsDeviceType is UnityEngine.Rendering.GraphicsDeviceType.Direct3D12 or UnityEngine.Rendering.GraphicsDeviceType.Vulkan;
+        j.orderedReadback = j.readbackMode == "ordered" || (j.readbackMode == "auto" && (j.splatDancers || modernApi));
+        j.readbackStatus = j.orderedReadback ? OrderedReadback.Begin(controller, j)
+            : j.readbackMode == "observe" ? OrderedReadback.Begin(controller, j, poll: false)
+            : $"async (the Recorder's own order; mode {j.readbackMode})";
+        j.audioFix = j.mode == "director" && (j.audioFixMode == "on" || (j.audioFixMode == "auto" && j.splatDancers));
+        if (j.orderedReadback) Debug.Log($"[film] ordered readbacks: {j.readbackStatus}");
+
         // Frame S (this one): the Recorder starts but does NOT capture frame S - its first video frame is S+1 (measured
         // with the marker self-test, hm_film --plain true --mix true). The soundtrack starts here at the film start: the
         // offline AudioRenderer delivers it from sample 0 whichever way it counts frame S. The director begins on S+1
@@ -1115,6 +1155,7 @@ public static class FilmRecorder
 
     static void StopRecorder(Job j)
     {
+        OrderedReadback.End();
         if (controller == null) return;
         j.recorderFrames = RecordedFrames();
         try
@@ -1172,7 +1213,122 @@ public static class FilmRecorder
     {
         j.report = reportPath;
         j.finished = Now();
+        j.validatedPass = pass;
+        if (j.audioFix && !j.aborted)
+        {
+            string why = File.Exists(j.mix) ? Python() == null ? "no python (.venv-nopo4d / .venv or EditorPrefs HM.Film.Python)" : null : $"mix missing: {j.mix}";
+            if (why == null)
+            {
+                SetState(j, "audiofix", $"{(pass ? "PASS" : "CHECK FAILED")}: {Path.GetFileName(j.output)}; replacing its audio with the film mix (dancecap.film_audiofix)");
+                return;
+            }
+
+            j.audioFixResult = $"not run: {why}";
+            j.warnings.Add($"audio repair not run ({why}): the recorder's AAC track is kept (NOTES_R10 burst)");
+            pass = false;
+        }
+
         string state = j.aborted ? "aborted" : pass ? "done" : "failed";
         SetState(j, state, $"{(pass ? "PASS" : "CHECK FAILED")}: {Path.GetFileName(j.output)} (report {Path.GetFileName(reportPath)})");
+    }
+
+    // ------------------------------------------------------------------ the audio repair (dancecap.film_audiofix)
+
+    static System.Diagnostics.Process fixProcess;
+    static System.Text.StringBuilder fixLog;
+
+    /// <summary>
+    /// After the checks of a recording with the splat dancers (or --audiofix on): the Unity Recorder's AAC track has a burst the
+    /// mix does not have (13-16 ms at film 56.876 s, ~200 x full scale: NOTES_R10, the splat film review of 2026-10-20). dancecap
+    /// film_audiofix keeps the recorder's file as &lt;stem&gt;_rawaudio.mp4, writes &lt;stem&gt;.mp4 with the video stream copied and the
+    /// mix (from the job's film start) as AAC 192k, verifies sync / loudness / peak / no burst against the mix and adds its result to
+    /// the report (.json "audio_fix", a section in the .md).
+    /// </summary>
+    static void TickAudioFix(Job j)
+    {
+        if (fixProcess == null)
+        {
+            string dancecap = Path.Combine(WorkspaceRoot, "dancecap");
+            string args = $"-m dancecap.film_audiofix \"{j.output}\" --mix \"{j.mix}\" --start {j.start.ToString("0.######", CultureInfo.InvariantCulture)} " +
+                          $"--report \"{j.report}\"";
+            string ff = FilmRenderCheck.Tool("ffmpeg"), fp = FilmRenderCheck.Tool("ffprobe");
+            if (ff != null) args += $" --ffmpeg \"{ff}\"";
+            if (fp != null) args += $" --ffprobe \"{fp}\"";
+            try
+            {
+                System.Diagnostics.ProcessStartInfo psi = new(Python(), args)
+                {
+                    WorkingDirectory = dancecap, UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true
+                };
+                fixLog = new System.Text.StringBuilder();
+                fixProcess = new System.Diagnostics.Process { StartInfo = psi, EnableRaisingEvents = false };
+                fixProcess.OutputDataReceived += (_, e) => { if (e.Data != null) lock (fixLog) fixLog.AppendLine(e.Data); };
+                fixProcess.ErrorDataReceived += (_, e) => { if (e.Data != null) lock (fixLog) fixLog.AppendLine(e.Data); };
+                fixProcess.Start();
+                fixProcess.BeginOutputReadLine();
+                fixProcess.BeginErrorReadLine();
+            }
+            catch (Exception e)
+            {
+                fixProcess = null;
+                FinishAudioFix(j, false, $"could not run dancecap.film_audiofix: {e.Message}");
+            }
+
+            return;
+        }
+
+        if (!fixProcess.HasExited)
+        {
+            if (EditorApplication.timeSinceStartup - j.phaseStart > 900)
+            {
+                try
+                {
+                    fixProcess.Kill();
+                }
+                catch
+                {
+                    // ignore
+                }
+
+                fixProcess = null;
+                FinishAudioFix(j, false, "dancecap.film_audiofix took more than 15 min");
+            }
+
+            return;
+        }
+
+        fixProcess.WaitForExit(); // drains the redirected output
+        int code = fixProcess.ExitCode;
+        fixProcess.Dispose();
+        fixProcess = null;
+        string log;
+        lock (fixLog) log = fixLog.ToString();
+        j.audioFixLog = Path.ChangeExtension(j.output, ".audiofix.log");
+        try
+        {
+            File.WriteAllText(j.audioFixLog, log);
+        }
+        catch
+        {
+            // the log is optional
+        }
+
+        string json = Path.ChangeExtension(j.output, ".audiofix.json");
+        string summary = log.Split('\n').Select(x => x.Trim()).LastOrDefault(x => x.StartsWith("[audiofix] PASS", StringComparison.Ordinal) ||
+                                                                               x.StartsWith("[audiofix] FAIL", StringComparison.Ordinal)) ?? log.Trim();
+        j.audioFixReport = File.Exists(json) ? json : null;
+        string raw = Path.Combine(Path.GetDirectoryName(j.output)!, Path.GetFileNameWithoutExtension(j.output) + "_rawaudio.mp4");
+        j.rawOutput = File.Exists(raw) ? raw : null;
+        FinishAudioFix(j, code == 0, code == 0 ? summary : $"exit {code}: {summary}");
+    }
+
+    static void FinishAudioFix(Job j, bool ok, string result)
+    {
+        j.audioFixResult = (ok ? "" : "FAILED: ") + result;
+        if (!ok) j.warnings.Add($"audio repair failed ({result}); see {j.audioFixLog ?? "the Console"}");
+        bool pass = j.validatedPass && ok;
+        j.finished = Now();
+        SetState(j, pass ? "done" : "failed",
+            $"{(pass ? "PASS" : "CHECK FAILED")}: {Path.GetFileName(j.output)} (report {Path.GetFileName(j.report)}; audio {(ok ? "replaced from the mix" : "repair FAILED")})");
     }
 }

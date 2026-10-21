@@ -317,6 +317,17 @@
       },
       "url": "https://packages.unity.com"
     },
+    "net.kleinbeck.gaussians": {
+      "version": "https://github.com/ninjamode/Unity-VR-Gaussian-Splatting.git#9675b7a60ab359f233f0e95671ae699bdf8b1e69",
+      "depth": 0,
+      "source": "git",
+      "dependencies": {
+        "com.unity.burst": "1.8.8",
+        "com.unity.collections": "2.1.4",
+        "com.unity.mathematics": "1.2.6"
+      },
+      "hash": "9675b7a60ab359f233f0e95671ae699bdf8b1e69"
+    },
     "com.unity.modules.accessibility": {
       "version": "1.0.0",
       "depth": 0,
