@@ -80,6 +80,39 @@ public static class FilmCameraVideo
         rig.SetVideo(camera, opacity, danceTime, composite);
     }
 
+    // ------------------------------------------------------------------ v3 flow (optional members the director reads by reflection)
+
+    /// <summary>the phones' frustums with their live video at depth m along the optical axis (alpha 0..1 each; top = the hand-off cover share),
+    /// CameraVideoRig.SetSurfaces. Called every frame while any is shown; an empty list hides them.</summary>
+    public static void SetSurfaces(string[] cameras, float[] alphas, float[] tops, float[] depths, float danceTime)
+    {
+        if (rig == null || !rig.Loaded) return;
+        if (cameras == null || cameras.Length == 0)
+        {
+            rig.HideSurfaces();
+            return;
+        }
+
+        rig.SetSurfaces(cameras, alphas, tops, depths, danceTime);
+    }
+
+    /// <summary>the full-frame video drawn again over every overlay (0..1; FlowTimeline.VideoCover); set before SetVideo</summary>
+    public static void SetVideoCover(float cover)
+    {
+        if (rig != null) rig.VideoCover = cover;
+    }
+
+    /// <summary>a phone's image rectangle at depth (m): apex and the corners top-left, top-right, bottom-right, bottom-left (world)</summary>
+    public static bool TryGetSurfaceCorners(string camera, float danceTime, float depth, out Vector3 apex, out Vector3 tl, out Vector3 tr, out Vector3 br, out Vector3 bl)
+    {
+        apex = tl = tr = br = bl = Vector3.zero;
+        return rig != null && rig.Loaded && rig.SurfaceCorners(camera, danceTime, depth, out apex, out tl, out tr, out br, out bl);
+    }
+
+    /// <summary>the surfaces drawn this frame (the face sidecar)</summary>
+    public static IReadOnlyList<(string phone, float alpha, Vector3 tl, Vector3 tr, Vector3 br, Vector3 bl)> SurfacesDrawn =>
+        rig != null ? rig.SurfacesDrawn : Array.Empty<(string, float, Vector3, Vector3, Vector3, Vector3)>();
+
     // ------------------------------------------------------------------ availability (optional members the director reads by reflection)
     // (these four are read by FilmCameraSource: the on-screen "original video" label depends on VideoShowing)
 

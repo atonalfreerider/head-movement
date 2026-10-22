@@ -2,7 +2,8 @@
 // 3d_over_video: Background queue, ZTest Always, no depth write -> drawn first, every other object paints over it, so the
 // phone's frame is the backdrop of the 3D (skeletons, avatars, floor marks, annotations) exactly as the phone saw it.
 // video_over_3d: Overlay queue, ZTest Always. Frustum-glyph thumbnails: ZTest LEqual in the transparent queue.
-// Alpha = _Alpha (fades the video in and out). No culling, no depth write. Single-pass instanced stereo safe.
+// Alpha = _Alpha (fades the video in and out). No culling, no depth write (_ZWrite 0) except a v3 frustum surface at full opacity
+// (CameraVideoRig.SetSurfaces: queue 3100, ZTest LEqual, _ZWrite 1 - what stands behind it is hidden by it). Single-pass instanced stereo safe.
 Shader "HeadMovement/CameraVideo"
 {
     Properties
@@ -10,6 +11,7 @@ Shader "HeadMovement/CameraVideo"
         _MainTex ("Frame", 2D) = "black" {}
         _Alpha ("Opacity", Range(0, 1)) = 1
         [Enum(UnityEngine.Rendering.CompareFunction)] _ZTest ("ZTest (Always = backdrop / overlay; LessEqual = glyph thumbnail)", Float) = 8
+        [Enum(Off, 0, On, 1)] _ZWrite ("ZWrite (On only for an opaque frustum surface)", Float) = 0
     }
     SubShader
     {
@@ -20,7 +22,7 @@ Shader "HeadMovement/CameraVideo"
             Name "CameraVideo"
             Tags { "LightMode" = "UniversalForward" }
             Blend SrcAlpha OneMinusSrcAlpha
-            ZWrite Off
+            ZWrite [_ZWrite]
             ZTest [_ZTest]
             Cull Off
 

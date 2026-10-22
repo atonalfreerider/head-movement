@@ -649,10 +649,31 @@ public sealed class SplatDancers : MonoBehaviour
     /// on through the fade: switching the group's Write Depth off below half opacity crashed the D3D12 device at the first fade
     /// ("failed to Close a command list (80070057)", four editor crashes on 2026-10-21) - never toggle m_WriteDepth at run time.
     /// </summary>
+    /// <summary>the skinned splat avatar of a role while the splat dancers are on (the film's face sidecar), else null</summary>
+    public static SkinnedSplatAvatar SplatOf(Role role)
+    {
+        if (!splatsOn || Instance == null) return null;
+        foreach (Entry e in Instance.entries)
+        {
+            if (e.Role == role && e.Splat != null) return e.Splat;
+        }
+
+        return null;
+    }
+
     public static float FilmVideoFade()
     {
         FilmDirector fd = FilmDirector.Instance;
         if (fd == null || fd.SegmentIndex < 0) return 1f;
+        // v3 flow: hidden from a phone's arrival (the frustum surface stood in front of them until then and the hand-off cover hides the
+        // switch), back in over splats_back_in_s from the departure - unless the phone's video is missing (the shot is never empty)
+        if (fd.FlowSplatVisibility.HasValue)
+        {
+            float v = fd.FlowSplatVisibility.Value;
+            if (v < 1f && fd.FilmCam?.PovCamera != null && fd.Sources != null && !fd.Sources.VideoShowing) return 1f;
+            return v;
+        }
+
         FilmDirector.SegLayers l = fd.LayersOf(fd.SegmentIndex);
         if (l == null || !l.AvatarsFadeWithVideo || l.AvatarsOverVideo) return 1f;
         FilmCamera cam = fd.FilmCam;

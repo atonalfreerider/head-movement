@@ -24,7 +24,7 @@ using UnityEngine;
 /// </summary>
 public static class FilmRecorderCli
 {
-    [CliCommand("hm_film", "Film recording (VIEWER_SPEC 8, Unity Recorder): record | status | stop | list. record --aspect vertical|horizontal [--capture <folder>] [--size hd|4k] [--start s --duration s] [--plain true [--mix true]] [--readback auto|ordered|async] [--audiofix auto|on|off]; then poll status")]
+    [CliCommand("hm_film", "Film recording (VIEWER_SPEC 8, Unity Recorder): record | status | stop | list. record --aspect vertical|horizontal [--capture <folder>] [--direction <json>] [--size hd|4k] [--start s --duration s] [--plain true [--mix true]] [--readback auto|ordered|async] [--audiofix auto|on|off] [--faces auto|on|off] [--tag v3]; then poll status")]
     public static string Film(
         [CliArg("action", "record | status | stop | list")] string action = "status",
         [CliArg("aspect", "vertical (1080x1920) | horizontal (1920x1080)")] string aspect = "vertical",
@@ -36,7 +36,10 @@ public static class FilmRecorderCli
         [CliArg("plain", "true = record HeadMovement's own playback (pipeline test) even when a director exists")] bool plain = false,
         [CliArg("mix", "plain test only: true = play the film soundtrack (from --start, frame clock) instead of the capture's song; checks audio capture + A/V sync")] bool mix = false,
         [CliArg("readback", "auto (default: ordered with the splat dancers or on D3D12 / Vulkan) | ordered | async | observe (async + statistics) - the Recorder's frame readbacks completed one by one in film order (OrderedReadback)")] string readback = "auto",
-        [CliArg("audiofix", "auto (default: with the splat dancers) | on | off - after the checks, replace the recorder's AAC track with the film mix (dancecap.film_audiofix; the raw file is kept as <name>_rawaudio.mp4)")] string audiofix = "auto")
+        [CliArg("audiofix", "auto (default: with the splat dancers) | on | off - after the checks, replace the recorder's AAC track with the film mix (dancecap.film_audiofix; the raw file is kept as <name>_rawaudio.mp4)")] string audiofix = "auto",
+        [CliArg("faces", "auto (default: with the splat dancers) | on | off - write <name>.faces.json (the face sidecar for dancecap.film_faceswap)")] string faces = "auto",
+        [CliArg("direction", "direction json path (default: found for the capture: StreamingAssets/<capture>/film, then work/<take>/v3/direction, then work/<take>/film)")] string direction = null,
+        [CliArg("tag", "file name tag (default: v3 for a direction with a top-level flow; empty = none)")] string tag = null)
     {
         switch ((action ?? "status").Trim().ToLowerInvariant())
         {
@@ -45,7 +48,7 @@ public static class FilmRecorderCli
                 string err = FilmRecorder.Queue(new FilmRecorder.Options
                 {
                     aspect = aspect, size = size, capture = capture, start = start, duration = duration, fps = fps, plain = plain, mix = mix, source = "cli",
-                    readback = readback, audioFix = audiofix
+                    readback = readback, audioFix = audiofix, faces = faces, direction = direction, tag = tag
                 }, false);
                 if (err != null) throw new InvalidOperationException(err);
                 return Status();

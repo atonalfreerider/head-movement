@@ -497,6 +497,58 @@ public class FilmCameraSource
         }
     }
 
+    // ------------------------------------------------------------------ v3 flow: the phones' frustum surfaces and the hand-off cover
+
+    string[] surfCams = Array.Empty<string>();
+    float[] surfAlpha = Array.Empty<float>(), surfTop = Array.Empty<float>(), surfDepth = Array.Empty<float>();
+    bool surfacesShown;
+
+    /// <summary>the frustum surfaces of this frame (FlowTimeline.Surfaces); an empty list hides them. Feature only (the fallback has no video).</summary>
+    public void SetSurfaces(List<HmFilm.FlowSurface> list, float dance)
+    {
+        if (ext == null) return;
+        int n = list?.Count ?? 0;
+        if (n == 0 && !surfacesShown) return;
+        if (surfCams.Length != n)
+        {
+            surfCams = new string[n];
+            surfAlpha = new float[n];
+            surfTop = new float[n];
+            surfDepth = new float[n];
+        }
+
+        for (int i = 0; i < n; i++)
+        {
+            surfCams[i] = list[i].Camera;
+            surfAlpha[i] = list[i].Alpha;
+            surfTop[i] = list[i].Top;
+            surfDepth[i] = list[i].DepthM;
+        }
+
+        try
+        {
+            FilmCameraVideo.SetSurfaces(surfCams, surfAlpha, surfTop, surfDepth, dance);
+            surfacesShown = n > 0;
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"FilmCameraVideo.SetSurfaces failed: {e.Message}");
+        }
+    }
+
+    /// <summary>the full-frame video's cover over every overlay (FlowTimeline.VideoCover), applied by the next SetVideo</summary>
+    public void SetVideoCover(float cover)
+    {
+        if (ext != null) FilmCameraVideo.SetVideoCover(cover);
+    }
+
+    /// <summary>the surfaces drawn this frame: phone, alpha, world corners of the image (top-left, top-right, bottom-right, bottom-left)</summary>
+    public IReadOnlyList<(string phone, float alpha, Vector3 tl, Vector3 tr, Vector3 br, Vector3 bl)> SurfacesDrawn => FilmCameraVideo.SurfacesDrawn;
+
+    /// <summary>a phone's image rectangle at depth (m) at a dance time (apex = the phone)</summary>
+    public bool TryGetSurfaceCorners(string camera, float dance, float depth, out Vector3 apex, out Vector3 tl, out Vector3 tr, out Vector3 br, out Vector3 bl) =>
+        FilmCameraVideo.TryGetSurfaceCorners(camera, dance, depth, out apex, out tl, out tr, out br, out bl);
+
     /// <summary>a phone's video is asked for (the pill is up) but not drawn: remember the outage, report it once when it ends</summary>
     void TrackOutage(string camera, float opacity, float dance)
     {

@@ -691,6 +691,15 @@ adds the following keys. A direction without them plays exactly as before.
   panel and the frame beside it shows the same picture magnified, blurred and dimmed to that brightness; the 3D stays registered on the panel),
   `portrait_zoom` (a factor on the crop zoom of a portrait clip, capped at 2.1x; a crop's pan is also limited so the narrowed view stays inside the picture),
   `safe.side_frac` (left / right margin of the labels, chapter card and physics legend) and `legend_scale` (the physics legend's size).
+- **Flow: no cut anywhere (direction top-level `flow`, "hm film flow v1"; opt-in, additive; dancecap `film_recap_flow`, docs/RECAP_FILM.md "The schema" and
+  "Unity director v3")**: every shot but the first carries `camera.transition_in` and the camera flies there from the previous shot's live pose (one
+  smootherstep; `arc`, `crane`, `arc_then_axis`, `axis_then_arc`, `axis_arc_axis`); `blend_s` and the replay's cut are ignored. A phone is entered and left
+  through its frustum: `flow.frustums[]` draw the phone's live picture on its image rectangle in the world over an envelope `[a, b, c, d]` that hands
+  over to the full-frame video on the arrival frame (and back on the departure frame) under a cover of the video drawn over the 3D overlays, which
+  then fade in. 3D shots read `world_azimuth_deg` / `drift_deg_s`, `ground_level`, `inline_lift_max_m`, physics_3q `elevation_deg` / `look_target`,
+  overhead `up_policy: from_entry`; layers `floorcraft: "pivot_dials"`, `floorcraft_current_t`, `physics_limbs`; the replay flashes at both ends.
+  Code: `Assets/Film/Flow/` (assembly HmFilmFlow, edit-mode tests), FilmCamera, FilmDirector, CameraVideoRig; checks `hm_film_flow`. A direction
+  without `flow` plays exactly as before.
 
 ---
 

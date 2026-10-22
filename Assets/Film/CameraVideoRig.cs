@@ -57,9 +57,9 @@ public sealed class CameraVideoRig : MonoBehaviour
     Shader shader;
     GlowMesh lines;
     Material lineMaterial;
-    MeshRenderer videoRenderer, fillRenderer;
+    MeshRenderer videoRenderer, fillRenderer, coverRenderer;
     Mesh videoMesh, fillMesh;
-    Material videoMaterial, fillMaterial;
+    Material videoMaterial, fillMaterial, coverMaterial;
     string videoPhone, fillPhone;
     int videoQueue = -1;
     int lastGlyphFrame = -100, lastVideoFrame = -100;
@@ -77,6 +77,16 @@ public sealed class CameraVideoRig : MonoBehaviour
     public string LastVideoWhyNot { get; private set; }
     public bool VideoVisible => videoRenderer != null && videoRenderer.enabled;
     public int GlyphsDrawn { get; private set; }
+
+    /// <summary>v3 hand-off cover (FilmDirector, FlowTimeline.VideoCover): the share of the full-frame video drawn a second time OVER every 3D
+    /// overlay (queue 4500, ZTest Always). 1 at a phone's arrival (the picture is the video alone, as the frustum surface showed it the frame
+    /// before), fading to 0 over overlays_on_top_in_s - the skeleton lines, arrows and floor marks registered on the video fade in together -
+    /// and back to 1 before the departure. 0 (the default) = no cover: older films unchanged.</summary>
+    public float VideoCover;
+
+    /// <summary>the frustum surfaces drawn by the last SetSurfaces (diagnostics, the face sidecar): phone, alpha, world corners top-left,
+    /// top-right, bottom-right, bottom-left of the phone's image</summary>
+    public readonly List<(string phone, float alpha, Vector3 tl, Vector3 tr, Vector3 br, Vector3 bl)> SurfacesDrawn = new();
 
     public static CameraVideoRig Create()
     {
@@ -415,7 +425,8 @@ public sealed class CameraVideoRig : MonoBehaviour
 
         videoMaterial.SetFloat("_Alpha", Mathf.Clamp01(opacity));
         videoRenderer.enabled = true;
-        SetSideFill(p, opacity, over, pos, rot, hh, hw, c);
+        SetCover(p, opacity * Mathf.Clamp01(VideoCover));
+        SetSideFill(p, opacity * (1f - Mathf.Clamp01(VideoCover)), over, pos, rot, hh, hw, c);
         LastVideoCamera = p.Id;
         LastVideoFrameTime = strip.Time[idx];
         LastVideoFrameIndex = idx;
@@ -426,7 +437,28 @@ public sealed class CameraVideoRig : MonoBehaviour
     {
         if (videoRenderer != null && videoRenderer.enabled) videoRenderer.enabled = false;
         if (fillRenderer != null && fillRenderer.enabled) fillRenderer.enabled = false;
+        if (coverRenderer != null && coverRenderer.enabled) coverRenderer.enabled = false;
         LastVideoOpacity = 0f;
+    }
+
+    /// <summary>the video quad drawn again over everything (VideoCover): same mesh, texture and projection as the backdrop</summary>
+    void SetCover(Phone p, float alpha)
+    {
+        if (alpha <= 0.001f)
+        {
+            if (coverRenderer != null && coverRenderer.enabled) coverRenderer.enabled = false;
+            return;
+        }
+
+        if (coverRenderer == null)
+        {
+            coverMaterial = NewMaterial("Film camera video cover", CoverQueue, CompareFunction.Always);
+            coverRenderer = NewQuad("Film camera video cover", transform, videoMesh, coverMaterial);
+        }
+
+        coverMaterial.mainTexture = p.FullTexture;
+        coverMaterial.SetFloat("_Alpha", Mathf.Clamp01(alpha));
+        coverRenderer.enabled = true;
     }
 
     /// <summary>true while the side fill is drawn behind the phone's picture (diagnostics)</summary>
@@ -477,6 +509,181 @@ public sealed class CameraVideoRig : MonoBehaviour
         fillMaterial.SetFloat("_Dim", Mathf.Clamp01(dim));
         fillMaterial.SetFloat("_Alpha", Mathf.Clamp01(opacity));
         fillRenderer.enabled = true;
+    }
+
+    // ------------------------------------------------------------------ v3 frustum surfaces (RECAP_FILM.md "What the Unity director must implement" 3)
+
+    /// <summary>queue of an opaque-able frustum surface: after the splat composite, the over-the-splats lines and the transparent queue (a line
+    /// behind a fading surface is dimmed by it, not drawn over it), before the overlay queue</summary>
+    public const int SurfaceQueue = 3100;
+    /// <summary>queue of the hand-off covers (surface top copy, video cover): over every 3D overlay incl. the call-outs (Overlay + 10)</summary>
+    public const int CoverQueue = 4500;
+
+    sealed class SurfaceView
+    {
+        public Mesh Mesh;
+        public Material Mat, TopMat;
+        public MeshRenderer Renderer, Top;
+    }
+
+    readonly Dictionary<string, SurfaceView> surfaceViews = new();
+    GlowMesh frustumLines;
+    Material frustumLineMaterial;
+    int lastSurfaceFrame = -100;
+
+    /// <summary>a phone's image rectangle at depth (m) along its optical axis at a dance time: world corners of the image's top-left, top-right,
+    /// bottom-right, bottom-left (the full frame: the phone's own vertical FOV and aspect, not the crop); false without a pose</summary>
+    public bool SurfaceCorners(string camera, float dance, float depth, out Vector3 apex, out Vector3 tl, out Vector3 tr, out Vector3 br, out Vector3 bl)
+    {
+        apex = tl = tr = br = bl = Vector3.zero;
+        if (camera == null || !phones.TryGetValue(camera, out Phone p)) return false;
+        if (!p.Track.TryAt(dance, PoseToleranceSeconds, out Vector3 pos, out Quaternion rot, out float vfov)) return false;
+        pos += DanceOrigin.Offset;
+        float hh = depth * Mathf.Tan(vfov * 0.5f * Mathf.Deg2Rad), hw = hh * p.Track.Aspect;
+        Vector3 c = pos + rot * Vector3.forward * depth, right = rot * Vector3.right * hw, up = rot * Vector3.up * hh;
+        apex = pos;
+        tl = c - right + up;
+        tr = c + right + up;
+        br = c + right - up;
+        bl = c - right - up;
+        return true;
+    }
+
+    /// <summary>
+    /// The phones' frustums with their live video standing in the 3D world (the ways into and out of a phone's point of view): for each phone, the
+    /// frustum lines (apex at the phone, the four edges to the corners of its full image rectangle at depth m along the optical axis, and the rim)
+    /// in the phone's colour, and its live full strip frame (the frame nearest the dance time) on that rectangle at alpha. At alpha 1 the
+    /// rectangle is opaque and writes depth (what stands behind it is hidden); while fading it is alpha-blended. top[i] = the share of it drawn
+    /// again over every overlay (the hand-off cover). Seen from the phone's own pose the rectangle projects exactly onto the full-frame video
+    /// quad (SetVideo): the switch between them does not change the picture. Called every frame while any is shown.
+    /// </summary>
+    public void SetSurfaces(IList<string> cameras, IList<float> alphas, IList<float> tops, IList<float> depths, float dance)
+    {
+        lastSurfaceFrame = Time.frameCount;
+        SurfacesDrawn.Clear();
+        HashSet<string> shown = null;
+        if (frustumLines == null)
+        {
+            frustumLineMaterial = GlowMesh.NewMaterial("Film frustum lines", 1.6f);
+            frustumLineMaterial.renderQueue = SurfaceQueue + 10;
+            frustumLines = GlowMesh.Create("Film frustum lines", transform, frustumLineMaterial);
+        }
+
+        Camera view = DanceText.ViewCamera;
+        frustumLines.Viewer = view != null ? view.transform.position : null;
+        frustumLines.Begin();
+        for (int i = 0; i < cameras.Count; i++)
+        {
+            string cam = cameras[i];
+            float alpha = Mathf.Clamp01(alphas[i]);
+            float depth = depths != null && i < depths.Count && depths[i] > 0.05f ? depths[i] : 0.9f;
+            if (alpha <= 1e-4f || !SurfaceCorners(cam, dance, depth, out Vector3 apex, out Vector3 tl, out Vector3 tr, out Vector3 br, out Vector3 bl)) continue;
+            Vector3 eyeNow = view != null ? view.transform.position : apex + (tl - apex) * 10f;
+            // an eye passing close beside or in front of the picture (a way that swings round it) sees it dissolve instead of sweeping across
+            // the lens as a hard wipe: alpha x smoothstep(0.25 .. 0.9 m from the rectangle). Not on the phone's side of the picture inside its
+            // outline (the dolly along the axis and the hand-off, where it must stay opaque)
+            alpha *= ProximityFade(eyeNow, apex, tl, tr, br, bl);
+            if (alpha <= 1e-4f) continue;
+            Color col = ColourOf(cam) * alpha;
+            // line widths about constant on screen (thin close by: a 1.2 cm line half a metre from the lens is a bar across the picture)
+            float W(Vector3 m) => Mathf.Clamp(0.0045f * Vector3.Distance(eyeNow, m), 0.002f, 0.012f);
+            // the four edges meet at the phone: as the eye comes within 2 m of it (the dolly along the optical axis) they would pass next to the
+            // lens - they fade out there (the rim stays: it frames the picture to the end)
+            float near = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.6f, 2.0f, Vector3.Distance(eyeNow, apex)));
+            if (near > 0.002f)
+            {
+                Color edge = col * (0.8f * near);
+                frustumLines.Line(apex, tl, W((apex + tl) * 0.5f), edge);
+                frustumLines.Line(apex, tr, W((apex + tr) * 0.5f), edge);
+                frustumLines.Line(apex, br, W((apex + br) * 0.5f), edge);
+                frustumLines.Line(apex, bl, W((apex + bl) * 0.5f), edge);
+                frustumLines.Sphere(apex, Mathf.Clamp(0.008f * Vector3.Distance(eyeNow, apex), 0.008f, 0.035f), col * near);
+            }
+
+            float w = W((tl + br) * 0.5f);
+
+            // the rim a centimetre toward the apex (never coplanar with the picture); it goes with the hand-off cover (at the phone's pose it lies on
+            // the frame's edge, half outside the cover)
+            Vector3 Rim(Vector3 v) => Vector3.Lerp(v, apex, 0.012f);
+            Color rim = col * (1f - Mathf.Clamp01(tops != null && i < tops.Count ? tops[i] : 0f));
+            frustumLines.Line(Rim(tl), Rim(tr), w * 1.3f, rim);
+            frustumLines.Line(Rim(tr), Rim(br), w * 1.3f, rim);
+            frustumLines.Line(Rim(br), Rim(bl), w * 1.3f, rim);
+            frustumLines.Line(Rim(bl), Rim(tl), w * 1.3f, rim);
+
+            // the picture: the same frame the full-frame video would show (same texture, same frame index)
+            string why = CheckVideo(cam, dance, out Phone p, out CameraVideoStrip strip, out int idx, out _, out _, out _);
+            if (why != null) continue;
+            if (p.FullTexture == null) p.FullTexture = NewTexture($"phone {p.Id} frame");
+            if (idx != p.FullIndex)
+            {
+                if (!strip.Read(idx, p.FullTexture)) continue;
+                p.FullIndex = idx;
+            }
+
+            if (!surfaceViews.TryGetValue(cam, out SurfaceView sv))
+            {
+                sv = new SurfaceView { Mesh = NewQuadMesh($"phone {cam} frustum surface") };
+                sv.Mat = NewMaterial($"phone {cam} frustum surface", SurfaceQueue, CompareFunction.LessEqual);
+                sv.TopMat = NewMaterial($"phone {cam} frustum surface cover", CoverQueue, CompareFunction.Always);
+                sv.Renderer = NewQuad($"phone {cam} frustum surface", transform, sv.Mesh, sv.Mat);
+                sv.Top = NewQuad($"phone {cam} frustum surface cover", transform, sv.Mesh, sv.TopMat);
+                surfaceViews[cam] = sv;
+            }
+
+            quad[0] = bl;
+            quad[1] = br;
+            quad[2] = tr;
+            quad[3] = tl;
+            sv.Mesh.vertices = quad;
+            sv.Mesh.uv = uvNormal;
+            sv.Mesh.bounds = new Bounds((tl + br) * 0.5f, new Vector3(1000, 1000, 1000));
+            sv.Mat.mainTexture = p.FullTexture;
+            sv.Mat.SetFloat("_Alpha", alpha);
+            sv.Mat.SetFloat("_ZWrite", alpha >= 0.999f ? 1f : 0f);
+            sv.Renderer.enabled = true;
+            float top = alpha * Mathf.Clamp01(tops != null && i < tops.Count ? tops[i] : 0f);
+            sv.TopMat.mainTexture = p.FullTexture;
+            sv.TopMat.SetFloat("_Alpha", top);
+            sv.Top.enabled = top > 0.001f;
+            (shown ??= new HashSet<string>()).Add(cam);
+            SurfacesDrawn.Add((cam, alpha, tl, tr, br, bl));
+        }
+
+        frustumLines.End();
+        frustumLines.SetVisible(true);
+        foreach (KeyValuePair<string, SurfaceView> kv in surfaceViews)
+        {
+            if (shown != null && shown.Contains(kv.Key)) continue;
+            if (kv.Value.Renderer.enabled) kv.Value.Renderer.enabled = false;
+            if (kv.Value.Top.enabled) kv.Value.Top.enabled = false;
+        }
+    }
+
+    /// <summary>1, or less while the eye is within 0.9 m of the picture rectangle and not on the phone's side of it inside its outline</summary>
+    public static float ProximityFade(Vector3 eye, Vector3 apex, Vector3 tl, Vector3 tr, Vector3 br, Vector3 bl)
+    {
+        Vector3 centre = (tl + br) * 0.5f, right = tr - tl, up = tl - bl;
+        float hw = right.magnitude * 0.5f, hh = up.magnitude * 0.5f;
+        if (hw < 1e-4f || hh < 1e-4f) return 1f;
+        right /= hw * 2f;
+        up /= hh * 2f;
+        Vector3 fwd = (centre - apex).normalized, d = eye - centre;
+        float x = Vector3.Dot(d, right), y = Vector3.Dot(d, up), z = Vector3.Dot(d, fwd);
+        if (z <= 0f && Mathf.Abs(x) <= hw && Mathf.Abs(y) <= hh) return 1f;
+        Vector3 q = centre + Mathf.Clamp(x, -hw, hw) * right + Mathf.Clamp(y, -hh, hh) * up;
+        return Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.25f, 0.9f, Vector3.Distance(eye, q)));
+    }
+
+    public void HideSurfaces()
+    {
+        SurfacesDrawn.Clear();
+        if (frustumLines != null && frustumLines.Visible) frustumLines.SetVisible(false);
+        foreach (SurfaceView sv in surfaceViews.Values)
+        {
+            if (sv.Renderer.enabled) sv.Renderer.enabled = false;
+            if (sv.Top.enabled) sv.Top.enabled = false;
+        }
     }
 
     // ------------------------------------------------------------------ frustum glyphs + live thumbnails
@@ -598,6 +805,7 @@ public sealed class CameraVideoRig : MonoBehaviour
     {
         HideVideo();
         HideGlyphs();
+        HideSurfaces();
         foreach (Phone p in phones.Values)
         {
             p.Full?.Close();
@@ -610,6 +818,7 @@ public sealed class CameraVideoRig : MonoBehaviour
         // the director calls SetGlyphs / SetVideo every frame while they are shown: stale = stopped
         if (Time.frameCount - lastGlyphFrame > 2) HideGlyphs();
         if (Time.frameCount - lastVideoFrame > 2) HideVideo();
+        if (Time.frameCount - lastSurfaceFrame > 2) HideSurfaces();
     }
 
     void OnDestroy()
@@ -620,7 +829,17 @@ public sealed class CameraVideoRig : MonoBehaviour
         if (videoMaterial != null) Destroy(videoMaterial);
         if (fillMesh != null) Destroy(fillMesh);
         if (fillMaterial != null) Destroy(fillMaterial);
+        if (coverMaterial != null) Destroy(coverMaterial);
         if (lineMaterial != null) Destroy(lineMaterial);
+        if (frustumLineMaterial != null) Destroy(frustumLineMaterial);
+        foreach (SurfaceView sv in surfaceViews.Values)
+        {
+            if (sv.Mesh != null) Destroy(sv.Mesh);
+            if (sv.Mat != null) Destroy(sv.Mat);
+            if (sv.TopMat != null) Destroy(sv.TopMat);
+        }
+
+        surfaceViews.Clear();
     }
 
     public Dictionary<string, object> State()
@@ -643,7 +862,8 @@ public sealed class CameraVideoRig : MonoBehaviour
         {
             ["loaded"] = Loaded, ["status"] = Status, ["folder"] = Folder, ["phones"] = list, ["glyphsDrawn"] = GlyphsDrawn,
             ["videoVisible"] = VideoVisible, ["videoCamera"] = LastVideoCamera, ["videoFrameIndex"] = LastVideoFrameIndex,
-            ["videoFrameTime"] = LastVideoFrameTime, ["videoOpacity"] = LastVideoOpacity, ["videoWhyNot"] = LastVideoWhyNot
+            ["videoFrameTime"] = LastVideoFrameTime, ["videoOpacity"] = LastVideoOpacity, ["videoWhyNot"] = LastVideoWhyNot,
+            ["videoCover"] = VideoCover, ["surfaces"] = SurfacesDrawn.ConvertAll(x => $"{x.phone}:{x.alpha:0.###}")
         };
     }
 }

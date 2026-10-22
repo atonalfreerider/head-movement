@@ -87,9 +87,39 @@ public class FilmDirector : MonoBehaviour
     FloorPatterns.FootprintMode savedFootprints = FloorPatterns.FootprintMode.Recent;
     int appliedSegment = -1;
     SegLayers[] segLayers;
-    float skeletonNow = 1f, avatarNow = -1f, graphNow = -1f, contactsNow = -1f;
+    float skeletonNow = 1f, avatarNow = -1f, graphNow = -1f, contactsNow = -1f, limbNow = 1f;
     bool yawOverridden;
     bool videoShown;
+
+    // ------------------------------------------------------------------ v3 flow (direction top-level "flow"; null / empty for older films)
+
+    /// <summary>when a set of layers takes over: every segment at its F0, the first segment of a shot with a transition at F0 + layers_switch_s
+    /// (into a phone: at the arrival; out of one: at the departure), and a phone-to-phone way's transit layers over their window</summary>
+    sealed class LayerEntry
+    {
+        public float Start;
+        public SegLayers L;
+        public int Seg;
+        public bool Cut;
+        public string Name;
+    }
+
+    readonly List<LayerEntry> layerEntries = new();
+    readonly List<HmFilm.FlowSurface> flowSurfaces = new();
+    SegLayers layersNow;
+
+    /// <summary>v3: the splat dancers' visibility now (FlowTimeline.SplatVisibility: hidden from a phone's arrival, back in after its departure);
+    /// null for older films (SplatDancers.FilmVideoFade then follows the phone video's opacity as before)</summary>
+    public float? FlowSplatVisibility { get; private set; }
+
+    /// <summary>v3: the full-frame video's cover over the 3D overlays now (FlowTimeline.VideoCover; 0 outside a phone's window)</summary>
+    public float FlowVideoCover { get; private set; }
+
+    /// <summary>v3: the frustum surfaces drawn now (camera, alpha, cover share)</summary>
+    public IReadOnlyList<HmFilm.FlowSurface> FlowSurfacesNow => flowSurfaces;
+
+    /// <summary>the layers on screen now (v3: the layer entry in force; else the segment's)</summary>
+    public SegLayers LayersNow => layersNow ?? LayersOf(SegmentIndex);
 
     /// <summary>layer values of one segment (view-state defaults + the segment's "layers")</summary>
     public class SegLayers
@@ -107,6 +137,8 @@ public class FilmDirector : MonoBehaviour
         public float TWidth = float.NaN, OldTWidth = float.NaN, TBrightness = float.NaN; // the leader's T on the floor (m / 0..1)
         public DanceGraphLayer.Mode GraphMode = DanceGraphLayer.Mode.Off;
         public FloorPatterns.FootprintMode Footprints = FloorPatterns.FootprintMode.Recent;
+        public bool DialsOnly;                                          // v3 floorcraft "pivot_dials": only the counterbalance dials and their record
+        public float LimbScale = 1f;                                    // v3 physics_limbs.width_scale: arm and leg lines in physics mode
     }
 
     // ------------------------------------------------------------------ INTERFACE.md section 1
@@ -286,6 +318,8 @@ public class FilmDirector : MonoBehaviour
         annotations.Init(this, overlay.LabelRoot);
         gameObject.AddComponent<FilmLate>().Director = this;
         segLayers = d.Segments.Select(ReadLayers).ToArray();
+        BuildLayerEntries();
+        if (filmCamera.FlowError != null) Warnings.Add(filmCamera.FlowError);
         if (!CaptureMatches())
         {
             loadRequested = true;
@@ -516,13 +550,38 @@ public class FilmDirector : MonoBehaviour
         if (cam != null)
         {
             // near plane: close-ups at the feet and the flight into a phone's lens
-            float near = filmCamera.Current != null && (filmCamera.Current.Mode is "feet_closeup" or "fly_to_camera" or "camera_tour") ? 0.03f : camNear;
+            float near = filmCamera.Current != null && (filmCamera.Current.Mode is "feet_closeup" or "fly_to_camera" or "camera_tour") || filmCamera.TransitionTouchesPhone
+                ? 0.03f : camNear;
             if (near > 0 && Mathf.Abs(cam.nearClipPlane - near) > 1e-4f) cam.nearClipPlane = near;
         }
 
         // the phones: glyphs from above, the full-frame video at a phone's POV
         float glyphs = LayerValue(film, si, l => l.Glyphs);
         sources.SetGlyphs(glyphs, dance, cam);
+        HmFilm.FlowTimeline flow = filmCamera.Flow;
+        if (flow != null && !HeadIsCamera)
+        {
+            // v3: the frustum surfaces of the ways in and out, the hand-off cover (set before SetVideo, which draws it) and the splats' visibility
+            flow.Surfaces(film, flowSurfaces);
+            for (int i = 0; i < flowSurfaces.Count; i++)
+            {
+                HmFilm.FlowSurface s = flowSurfaces[i];
+                s.DepthM = filmCamera.SurfaceDepth(s.Frustum);
+                flowSurfaces[i] = s;
+            }
+
+            sources.SetSurfaces(flowSurfaces, dance);
+            FlowVideoCover = flow.VideoCover(film);
+            sources.SetVideoCover(FlowVideoCover);
+            FlowSplatVisibility = flow.SplatVisibility(film);
+        }
+        else
+        {
+            flowSurfaces.Clear();
+            FlowVideoCover = 0f;
+            FlowSplatVisibility = null;
+        }
+
         string pov = filmCamera.PovCamera;
         if (pov != null && filmCamera.PovVideoOpacity > 0.001f && !HeadIsCamera)
         {
@@ -537,10 +596,11 @@ public class FilmDirector : MonoBehaviour
 
         // a phone shot whose layers say so: the 3D dancers are there while the camera flies to the phone and fade out as its video fades in (a cut
         // to the phone has them gone at once); without the video (an outage) they stay, so the shot is never empty
-        if (segLayers[si].AvatarsFadeWithVideo)
+        SegLayers now = LayersNow ?? segLayers[si];
+        if (now.AvatarsFadeWithVideo)
         {
             float fade = pov != null && sources.VideoShowing ? Mathf.Clamp01(filmCamera.PovVideoOpacity) : 0f;
-            float a = LayerValue(film, si, x => x.Avatar) * Mathf.Clamp01(LayerValue(film, si, x => x.Skeleton)) * (1f - (segLayers[si].AvatarsOverVideo ? 0f : fade));
+            float a = LayerNowValue(film, si, x => x.Avatar) * Mathf.Clamp01(LayerNowValue(film, si, x => x.Skeleton)) * (1f - (now.AvatarsOverVideo ? 0f : fade));
             if (Mathf.Abs(a - avatarNow) > 1e-3f)
             {
                 avatarNow = a;
@@ -597,9 +657,11 @@ public class FilmDirector : MonoBehaviour
         string fc = s.Layers["floorcraft"]?.Type == Newtonsoft.Json.Linq.JTokenType.Boolean
             ? s.LayerBool("floorcraft", false) ? "full_record" : "off"
             : s.LayerString("floorcraft", "off");
-        l.Axis = fc is "current_t" or "full_record" or "on";
-        l.Record = fc is "full_record" or "on";
-        l.AllPivots = l.Record;
+        l.DialsOnly = fc == "pivot_dials";
+        l.Axis = fc is "current_t" or "full_record" or "on" || (l.DialsOnly && s.LayerBool("floorcraft_current_t", false));
+        l.Record = fc is "full_record" or "on" || l.DialsOnly;
+        l.AllPivots = fc is "full_record" or "on";
+        if (l.Physics && s.Layers["physics_limbs"] is JObject limbs) l.LimbScale = Mathf.Clamp(FilmDirection.F(limbs["width_scale"], 1f), 0.25f, 4f);
         l.Moves = s.LayerBool("moves", true);
         l.Inset = s.LayerBool("graph_inset", false) && !graphView;
         string graph = s.LayerString("graph", graphView ? "full" : "off");
@@ -614,6 +676,62 @@ public class FilmDirector : MonoBehaviour
     }
 
     public SegLayers LayersOf(int segment) => segLayers != null && segment >= 0 && segment < segLayers.Length ? segLayers[segment] : null;
+
+    void BuildLayerEntries()
+    {
+        layerEntries.Clear();
+        HmFilm.FlowTimeline tl = filmCamera.Flow;
+        if (tl == null) return;
+        for (int i = 0; i < direction.Segments.Count; i++)
+        {
+            bool cut = i > 0 && Mathf.Abs(direction.Segments[i - 1].D1 - direction.Segments[i].D0) > FilmClock.CutJump;
+            layerEntries.Add(new LayerEntry { Start = tl.LayerStart(i), L = segLayers[i], Seg = i, Cut = cut, Name = direction.Segments[i].Id });
+        }
+
+        foreach (HmFilm.FlowShot sh in tl.Shots)
+        {
+            if (sh.T?.TransitLayers == null || float.IsNaN(sh.T.TransitFilm0)) continue;
+            JObject j = new()
+            {
+                ["id"] = "transit_" + sh.FirstSegmentId, ["layers"] = sh.T.TransitLayers.DeepClone(), ["view_state"] = "orbit",
+                ["camera"] = new JObject { ["mode"] = "orbit" }, ["film"] = new JArray(sh.T.TransitFilm0, sh.T.TransitFilm1)
+            };
+            FilmSegment fake = FilmSegment.Read(j, -1);
+            layerEntries.Add(new LayerEntry { Start = sh.T.TransitFilm0, L = ReadLayers(fake), Seg = Mathf.Max(0, sh.FirstSegment - 1), Name = fake.Id });
+        }
+
+        List<LayerEntry> sorted = layerEntries.OrderBy(e => e.Start).ToList();
+        layerEntries.Clear();
+        layerEntries.AddRange(sorted);
+    }
+
+    int LayerEntryAt(float film)
+    {
+        int lo = 0, hi = layerEntries.Count - 1;
+        if (hi < 0 || film < layerEntries[0].Start) return 0;
+        while (lo < hi)
+        {
+            int mid = (lo + hi + 1) >> 1;
+            if (layerEntries[mid].Start <= film) lo = mid;
+            else hi = mid - 1;
+        }
+
+        return lo;
+    }
+
+    /// <summary>v3: a continuous layer value of the layer entry in force, blended from the previous entry over LayerBlendSeconds (a cut switches at once)</summary>
+    float EntryValue(float film, int ei, Func<SegLayers, float> get)
+    {
+        LayerEntry e = layerEntries[ei];
+        float v = get(e.L);
+        if (ei == 0 || e.Cut) return v;
+        float k = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01((film - e.Start) / LayerBlendSeconds));
+        return Mathf.Lerp(get(layerEntries[ei - 1].L), v, k);
+    }
+
+    /// <summary>the layer value on screen now: the v3 entry's, else the segment's</summary>
+    float LayerNowValue(float film, int si, Func<SegLayers, float> get) =>
+        layerEntries.Count > 0 ? EntryValue(film, LayerEntryAt(film), get) : LayerValue(film, si, get);
 
     /// <summary>a continuous layer value at film time f: blended from the previous segment's over LayerBlendSeconds
     /// (cuts switch at once)</summary>
@@ -721,6 +839,7 @@ public class FilmDirector : MonoBehaviour
                 tLookOwner.OldTWidth = savedOldTWidth;
                 tLookOwner.TBrightness = savedTBrightness;
                 tLookOwner.LabelsOnlyCurrent = false;
+                tLookOwner.DialsOnly = false;
             }
 
             tLookSaved = false;
@@ -752,8 +871,22 @@ public class FilmDirector : MonoBehaviour
 
     void ApplyLayers(float film, int si)
     {
+        if (layerEntries.Count > 0)
+        {
+            int ei = LayerEntryAt(film);
+            layersNow = layerEntries[ei].L;
+            ApplyLayerSet(film, layersNow, ei, get => EntryValue(film, ei, get));
+        }
+        else
+        {
+            layersNow = null;
+            ApplyLayerSet(film, segLayers[si], si, get => LayerValue(film, si, get));
+        }
+    }
+
+    void ApplyLayerSet(float film, SegLayers l, int si, Func<Func<SegLayers, float>, float> value)
+    {
         DanceLayers layers = DanceLayers.Instance;
-        SegLayers l = segLayers[si];
         object key = layers != null ? (object)layers.Graph ?? layers.Counterbalance ?? (object)layers : null;
         if (!ReferenceEquals(key, layersKey))
         {
@@ -801,20 +934,21 @@ public class FilmDirector : MonoBehaviour
             }
         }
 
-        float avatar = LayerValue(film, si, x => x.Avatar);
-        float skeleton = LayerValue(film, si, x => x.Skeleton);
-        float graph = LayerValue(film, si, x => x.Graph);
+        float avatar = value(x => x.Avatar);
+        float skeleton = value(x => x.Skeleton);
+        float graph = value(x => x.Graph);
         // the full-size dance fades with the graph view: avatar opacity scales with the dance's size factor
         avatar *= Mathf.Clamp01(skeleton * 1.0f);
-        if (!segLayers[si].AvatarsFadeWithVideo && Mathf.Abs(avatar - avatarNow) > 1e-3f)
+        if (!l.AvatarsFadeWithVideo && Mathf.Abs(avatar - avatarNow) > 1e-3f)
         {
             avatarNow = avatar;
             hm.SetDirectorAvatarOpacity(avatar);
         }
 
-        float lines = skeleton * LayerValue(film, si, x => x.Lines);
-        if (Mathf.Abs(lines - skeletonNow) > 1e-3f) SetSkeletonWidth(lines);
-        float contacts = LayerValue(film, si, x => x.Contacts);
+        float lines = skeleton * value(x => x.Lines);
+        float limb = value(x => x.LimbScale);
+        if (Mathf.Abs(lines - skeletonNow) > 1e-3f || Mathf.Abs(limb - limbNow) > 1e-3f) SetSkeletonWidth(lines, limb);
+        float contacts = value(x => x.Contacts);
         if (Mathf.Abs(contacts - contactsNow) > 1e-3f)
         {
             contactsNow = contacts;
@@ -856,6 +990,7 @@ public class FilmDirector : MonoBehaviour
         fc.OldTWidth = float.IsNaN(l.OldTWidth) ? savedOldTWidth : l.OldTWidth;
         fc.TBrightness = float.IsNaN(l.TBrightness) ? savedTBrightness : l.TBrightness;
         fc.LabelsOnlyCurrent = l.FcLabelsCurrent;
+        fc.DialsOnly = l.DialsOnly;
     }
 
     void SetHead(string layer, bool on)
@@ -872,12 +1007,14 @@ public class FilmDirector : MonoBehaviour
 
     /// <summary>the full-size dance's skeleton lines (and ContactDetection's contact lines) scaled by k (the graph
     /// view isolates the state machine); spine beads follow the skeleton's width</summary>
-    void SetSkeletonWidth(float k)
+    void SetSkeletonWidth(float k, float limb = 1f)
     {
         skeletonNow = k;
+        limbNow = limb;
         if (Dancer.SolidSkeletonOn && k > 0.02f) k = 1f; // VR: the solid skeleton is never faded to a thin line (hidden at ~0 still hides it)
-        WidthOf(hm.LeadDancer, k);
-        WidthOf(hm.FollowDancer, k);
+        if (Dancer.SolidSkeletonOn) limb = 1f;
+        WidthOf(hm.LeadDancer, k, limb);
+        WidthOf(hm.FollowDancer, k, limb);
         if (contactLines == null)
         {
             contactLines = new List<LineRenderer>();
@@ -895,20 +1032,38 @@ public class FilmDirector : MonoBehaviour
         foreach (LineRenderer line in contactLines) Scale(line, k);
     }
 
-    void WidthOf(Dancer d, float k)
+    // v3 physics_limbs: the arm and leg lines of each dancer (Dancer's private renderers, by name)
+    static readonly System.Reflection.FieldInfo[] LimbFields = new[]
+        {
+            "followLegsRenderer", "followLeftArmRenderer", "followRightArmRenderer", "leadArmsRenderer", "leadLeftLegRenderer", "leadRightLegRenderer"
+        }.Select(n => typeof(Dancer).GetField(n, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic))
+        .Where(f => f != null).ToArray();
+
+    readonly HashSet<LineRenderer> limbBuffer = new();
+
+    void WidthOf(Dancer d, float k, float limb = 1f)
     {
         if (d == null) return;
+        limbBuffer.Clear();
+        if (Mathf.Abs(limb - 1f) > 1e-4f)
+        {
+            foreach (System.Reflection.FieldInfo f in LimbFields)
+            {
+                if (f.GetValue(d) is LineRenderer lr && lr != null) limbBuffer.Add(lr);
+            }
+        }
+
         d.GetComponentsInChildren(true, lineBuffer);
-        foreach (LineRenderer line in lineBuffer) Scale(line, k);
+        foreach (LineRenderer line in lineBuffer) Scale(line, limbBuffer.Contains(line) ? k * limb : k);
     }
 
-    /// <summary>a line at k x its own width (hidden near 0); lines are only touched once the dance shrinks</summary>
+    /// <summary>a line at k x its own width (hidden near 0); lines are only touched once their factor leaves 1</summary>
     void Scale(LineRenderer line, float k)
     {
         if (line == null) return;
         if (!savedWidth.TryGetValue(line, out (float width, bool on) w))
         {
-            if (k >= 0.999f) return;
+            if (Mathf.Abs(k - 1f) < 1e-3f) return;
             w = (line.widthMultiplier, line.enabled);
             savedWidth[line] = w;
         }
@@ -940,6 +1095,18 @@ public class FilmDirector : MonoBehaviour
             ["error"] = lastError, ["warnings"] = Warnings.Distinct().ToList(),
             ["skippedAnnotations"] = direction != null ? direction.SkippedAnnotations.ToList() : null
         };
+        if (filmCamera?.Flow != null)
+        {
+            s["flow"] = new Dictionary<string, object>
+            {
+                ["transition"] = filmCamera.TransitionShot != null ? $"{filmCamera.TransitionShot.Flow.T.Type} into {filmCamera.TransitionShot.Segments[0].Id}" : null,
+                ["u"] = Math.Round(filmCamera.TransitionU, 3), ["cameraShot"] = filmCamera.CameraShot?.Segments[0].Id,
+                ["layers"] = layerEntries.Count > 0 ? layerEntries[LayerEntryAt(filmTime)].Name : null,
+                ["surfaces"] = flowSurfaces.Select(x => $"{x.Camera} {x.Role} a={x.Alpha:0.###} top={x.Top:0.###}").ToList(),
+                ["videoCover"] = Math.Round(FlowVideoCover, 3), ["splatVisibility"] = FlowSplatVisibility.HasValue ? Math.Round(FlowSplatVisibility.Value, 3) : null,
+                ["limb"] = Math.Round(limbNow, 3)
+            };
+        }
         if (overlay != null) s["overlay"] = overlay.State();
         if (annotations != null) s["annotations"] = annotations.State();
         if (cam != null)
@@ -980,6 +1147,8 @@ public class FilmLate : MonoBehaviour
 
     void LateUpdate()
     {
-        if (Director != null) Director.LateTick();
+        if (Director == null) return;
+        Director.LateTick();
+        FilmFaceSidecar.Tick(); // a recording's face sidecar samples the frame being rendered (no-op unless the recorder started one)
     }
 }

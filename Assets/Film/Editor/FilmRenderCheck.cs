@@ -514,6 +514,8 @@ public static class FilmRenderCheck
                          $"{j.readbackTimeouts} not done within {OrderedReadback.PollTimeoutMs} ms |");
         }
         if (r.sync.Count > 0) s.AppendLine($"| Sync | {string.Join("; ", r.sync.Select(kv => $"{kv.Key}={(kv.Value is List<string> l ? string.Join(", ", l) : kv.Value)}"))} |");
+        if (j.faces || j.facesResult != null)
+            s.AppendLine($"| Face sidecar | {(j.facesPath != null ? $"`{Path.GetFileName(j.facesPath)}` ({j.facesFrames} frames, hm film faces v1 for dancecap.film_faceswap swap --sidecar)" : j.facesResult)} |");
         if (j.warnings.Count > 0)
         {
             s.AppendLine();

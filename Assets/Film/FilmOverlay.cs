@@ -38,6 +38,9 @@ public class FilmOverlay : MonoBehaviour
 
     public RectTransform LabelRoot { get; private set; }
 
+    /// <summary>the film's screen canvas (the face sidecar reads the visible overlay rectangles from it)</summary>
+    public Canvas Canvas => canvas;
+
     /// <summary>labels and readouts stay above this screen y (px from the bottom): the caption block + a margin</summary>
     public float LabelFloor { get; private set; }
 
@@ -211,13 +214,28 @@ public class FilmOverlay : MonoBehaviour
         if (fc?.PovCamera != null && fc.PovVideoOpacity > 0.05f)
         {
             string text = director.Sources.VideoShowing ? $"phone {fc.PovCamera} · the original video" : $"phone {fc.PovCamera} · its point of view";
-            director.Annotations.Extra.Add(("pov", text, FilmCameraSource.ColourOf(fc.PovCamera), Mathf.Clamp01(fc.PovVideoOpacity * 1.5f)));
+            // v3: the pill fades in and out with the 3D overlays (the hand-off cover), not at once on the arrival frame
+            director.Annotations.Extra.Add(("pov", text, FilmCameraSource.ColourOf(fc.PovCamera), Mathf.Clamp01(fc.PovVideoOpacity * 1.5f) * (1f - director.FlowVideoCover)));
         }
 
         // replay flash, fades
         float flashA = 0f;
         FilmSegment seg = director.Segment;
-        if (seg != null && seg.Replay && film - seg.F0 < 0.3f && seg.Index > 0) flashA = 0.55f * (1f - (film - seg.F0) / 0.3f);
+        bool flowFilm = director.Direction?.Flow != null;
+        if (seg != null && seg.Replay && film - seg.F0 < 0.3f && seg.Index > 0)
+        {
+            float rest = 1f - (film - seg.F0) / 0.3f;
+            // v3: the alpha falls as rest^2.2 - the white over the picture then fades evenly on screen (a linear alpha in a linear colour space
+            // still showed a grey of about 70 on its last frame and dropped to the picture in one step)
+            flashA = 0.55f * (flowFilm ? Mathf.Pow(rest, 2.2f) : rest);
+        }
+        // v3 (a replay_out transition with flash_s): the flash also marks the first frame after the replay, where the dance jumps forward again
+        if (seg != null && !seg.Replay && seg.Index > 0 && director.Direction.Segments[seg.Index - 1].Replay &&
+            seg.Camera["transition_in"]?["flash_s"] is JToken fs && (fs.Type == JTokenType.Float || fs.Type == JTokenType.Integer))
+        {
+            float dur = Mathf.Max(0.05f, fs.Value<float>());
+            if (film - seg.F0 < dur) flashA = Mathf.Max(flashA, 0.55f * Mathf.Pow(1f - (film - seg.F0) / dur, 2.2f));
+        }
         SetImage(flash, flashA);
         float fadeA = Mathf.Max(1f - Mathf.Clamp01(film / 0.5f), Mathf.Clamp01((film - (director.FilmDuration - 0.9f)) / 0.9f));
         SetImage(fade, fadeA);

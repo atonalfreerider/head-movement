@@ -473,6 +473,22 @@ public class FloorCraftOverlay : MonoBehaviour
     /// <summary>film director: only the dial that is running keeps its degree read-out; the turn arcs and old dials of the
     /// floor record show no numbers (a call-out shot is not cluttered by the record's labels)</summary>
     public bool LabelsOnlyCurrent;
+
+    /// <summary>film director, v3 floorcraft "pivot_dials" (the counterbalance pivot that "back to the axis" means): the record shows ONLY the
+    /// counterbalance dials (the yellow pivot ring at her anchored foot, the running degrees, a tick per beat) and their record - no old Ts, no
+    /// T-to-T path, no axis pivots, no spin dials; the current T only where the layer asks for it (floorcraft_current_t)</summary>
+    public bool DialsOnly
+    {
+        get => dialsOnly;
+        set
+        {
+            if (dialsOnly == value) return;
+            dialsOnly = value;
+            dirty = true;
+        }
+    }
+
+    bool dialsOnly;
     public float THeadLength = 0.15f, THeadWidth = 0.13f;
 
     [Header("record (layer floorcraft)")]
@@ -897,9 +913,13 @@ public class FloorCraftOverlay : MonoBehaviour
             int current = TIndexAt(time);
             if (showRecord)
             {
-                Transitions(time);
-                OldTs(time, current);
-                AxisPivots(time);
+                if (!dialsOnly)
+                {
+                    Transitions(time);
+                    OldTs(time, current);
+                    AxisPivots(time);
+                }
+
                 DialRecord(time);
             }
 
@@ -1117,6 +1137,7 @@ public class FloorCraftOverlay : MonoBehaviour
         foreach (FloorCraftData.Dial d in dials)
         {
             if (time < d.T0 || Muted(d.T0, d.T1)) continue;
+            if (dialsOnly && d.Kind != "counterbalance") continue;
             bool running = time <= d.T1;
             float run = running ? RunAt(d, time) : d.Degrees;
             float age = time - d.T1;

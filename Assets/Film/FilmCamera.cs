@@ -52,6 +52,9 @@ public class FilmShot
     /// render of one with it, is exactly what it always was.</summary>
     public bool Horizontal;
 
+    /// <summary>v3 flow (direction top-level "flow"): this shot in FilmDirection.Flow, with its camera.transition_in; null for older films</summary>
+    public HmFilm.FlowShot Flow;
+
     JToken Tok(string key) => Horizontal && Camera["horizontal"] is JObject h && h[key] != null ? h[key] : Camera[key];
     public float P(string key, float fallback) => FilmDirection.F(Tok(key), fallback);
     public string S(string key, string fallback) => Tok(key)?.Type == JTokenType.String ? Tok(key).Value<string>() : fallback;
@@ -82,6 +85,9 @@ public class FilmCamera
             if (vertical == value) return;
             vertical = value;
             foreach (FilmShot sh in Shots) sh.Horizontal = !value;
+            entryAzimuth.Clear();
+            planOf.Clear();
+            if (flow != null) foreach (HmFilm.FlowFrustum fr in flow.Frustums) fr.DepthUsed = float.NaN;
         }
     }
 
@@ -106,6 +112,36 @@ public class FilmCamera
         targets = t;
         sources = s;
         BuildShots();
+        AttachFlow();
+    }
+
+    /// <summary>the v3 flow of the direction (null = an older film: blends and cuts as before)</summary>
+    public HmFilm.FlowTimeline Flow => flow;
+
+    HmFilm.FlowTimeline flow;
+    public string FlowError { get; private set; }
+
+    void AttachFlow()
+    {
+        HmFilm.FlowTimeline tl = direction.Flow;
+        if (tl == null) return;
+        if (tl.Shots.Count != Shots.Count)
+        {
+            FlowError = $"flow: {tl.Shots.Count} flow shots != {Shots.Count} camera shots; the transitions are ignored";
+            return;
+        }
+
+        for (int i = 0; i < Shots.Count; i++)
+        {
+            if (Mathf.Abs(tl.Shots[i].F0 - Shots[i].F0) > 1e-3f)
+            {
+                FlowError = $"flow: shot {i} starts at {tl.Shots[i].F0} in the flow and {Shots[i].F0} on the camera; the transitions are ignored";
+                return;
+            }
+        }
+
+        for (int i = 0; i < Shots.Count; i++) Shots[i].Flow = tl.Shots[i];
+        flow = tl;
     }
 
     void BuildShots()
@@ -152,7 +188,15 @@ public class FilmCamera
         Current = s;
         PovCamera = null;
         PovVideoOpacity = 0f;
+        TransitionShot = CameraShot = null;
+        TransitionU = 0f;
         if (s == null) return Default(film);
+        if (flow != null)
+        {
+            Last = EvaluateFlow(film);
+            return Last;
+        }
+
         FilmPose p = Pose(s, film, 0);
         if (s.Prev != null && s.BlendIn > 0f && film - s.F0 < s.BlendIn && s.Mode != "fly_to_camera")
         {
@@ -266,6 +310,19 @@ public class FilmCamera
 
     FilmPose PoseCore(FilmShot s, float film, int depth)
     {
+        FilmPose p = PoseMode(s, film, depth);
+        // v3 `ground_level`: an eye above the ground band is lowered to its top (the look point kept), never below its bottom
+        if (flow != null && !p.Pov && s.B("ground_level"))
+        {
+            float y = Mathf.Clamp(p.Eye.y, flow.GroundLo, flow.GroundHi);
+            if (!Mathf.Approximately(y, p.Eye.y)) p.Eye.y = y;
+        }
+
+        return p;
+    }
+
+    FilmPose PoseMode(FilmShot s, float film, int depth)
+    {
         if (depth > 3) return Default(film);
         float dance = clock.Dance(Mathf.Clamp(film, 0f, direction.FilmDuration));
         switch (s.Mode)
@@ -335,7 +392,10 @@ public class FilmCamera
     /// <summary>Follow, keeping the height (a feature zoom frames a joint, not the floor under it)</summary>
     Vector3 Follow3(FilmShot s, float film, float tau, Func<float, Vector3> target)
     {
-        float runStart = Shots[s.RunStart].F0;
+        // v3 flow: the average reaches back over shot boundaries (the camera flies between them) and only stops at a dance-time cut (a
+        // replay), and a sample comes in with a weight ramp instead of a step - the follow is continuous in film time (a step of a few cm
+        // at the run start was hidden by the old cuts and blends; a flight shows it)
+        float runStart = flow != null ? LastCutAtOrBefore(film) : Shots[s.RunStart].F0;
         const int n = 10;
         float dt = tau / 3f;
         Vector3 sum = Vector3.zero;
@@ -347,6 +407,7 @@ public class FilmCamera
             Vector3 p = target(clock.Dance(Mathf.Clamp(f, 0f, direction.FilmDuration)));
             if (float.IsNaN(p.x)) continue;
             float w = Mathf.Exp(-i * dt / tau);
+            if (flow != null && i > 0) w *= Mathf.Clamp01((f - runStart) / dt);
             sum += p * w;
             wsum += w;
         }
@@ -411,10 +472,17 @@ public class FilmCamera
 
         // opt-in (the auto-directed heat films, FILM_LIBRARY.md): azimuth_deg = the eye's absolute azimuth (atan2(z, x) in world degrees) at the
         // shot's start, drift_deg_s = how fast it glides from there; a camera that stays on one side of the room instead of circling the couple
-        float phi = s.Camera["azimuth_deg"] != null
+        float phi = WorldAzimuth(s, film, out float wphi) ? wphi
+            : s.Camera["azimuth_deg"] != null
             ? (s.P("azimuth_deg", 0f) + s.P("drift_deg_s", 0f) * Mathf.Max(0f, film - s.F0)) * Mathf.Deg2Rad
             : SideAzimuth(s, 1) + RunAngle(s, film, r => OrbitRate(r));
-        if (s.B("avoid_inline")) height += InlineLift(s, film, phi);
+        if (s.B("avoid_inline"))
+        {
+            float lift = InlineLift(s, film, phi);
+            // v3: the planned azimuth may run along the dancers' line; the lift is capped (ground level)
+            if (s.Camera["inline_lift_max_m"] != null) lift = Mathf.Min(lift, s.P("inline_lift_max_m", 0.4f));
+            height += lift;
+        }
         Vector3 eye = c + new Vector3(Mathf.Cos(phi) * radius, height, Mathf.Sin(phi) * radius);
         Vector3 look = c + Vector3.up * lookH;
         FilmPose p = new() { Eye = eye, Look = look, Up = Vector3.up, Fov = CoupleFov(Vector3.Distance(eye, look)), ScreenY = ScreenYFor() };
@@ -495,7 +563,7 @@ public class FilmCamera
         bandLo = s.P("band_lo", bandLo);
         bandHi = s.P("band_hi", bandHi);
         Vector3 c = CoupleFollow(s, film);
-        float phi = SideAzimuth(s, 1) + RunAngle(s, film, r => OrbitRate(r));
+        float phi = WorldAzimuth(s, film, out float wphi) ? wphi : SideAzimuth(s, 1) + RunAngle(s, film, r => OrbitRate(r));
         float radius = Vertical ? 3.9f : 3.3f; // the start; FitBand sets the lens (and backs the eye off) to fit the couple
         Vector3 eye = c + new Vector3(Mathf.Cos(phi) * radius, eyeH, Mathf.Sin(phi) * radius);
         Vector3 look = c + Vector3.up * lookH;
@@ -524,9 +592,25 @@ public class FilmCamera
         float d0 = clock.Dance(first.F0);
         Vector3 l = targets.Joint(targets.DancerOf("follow"), SmplJoint.Pelvis, d0) - targets.Joint(targets.DancerOf("lead"), SmplJoint.Pelvis, d0);
         float line = float.IsNaN(l.x) ? 0f : Mathf.Atan2(l.z, l.x);
-        float phi = line + Mathf.PI * 0.5f + azimuth + RunAngle(s, film, r => r.P("drift_deg_s", 4f) * Mathf.Deg2Rad);
-        float dist = s.P("distance_m", Vertical ? 4.3f : 3.3f), el = 18f * Mathf.Deg2Rad;
+        float phi = WorldAzimuth(s, film, out float wphi) ? wphi : line + Mathf.PI * 0.5f + azimuth + RunAngle(s, film, r => r.P("drift_deg_s", 4f) * Mathf.Deg2Rad);
+        float dist = s.P("distance_m", Vertical ? 4.3f : 3.3f), el = s.P("elevation_deg", 18f) * Mathf.Deg2Rad;
         Vector3 look = c + Vector3.up * 0.9f;
+        // v3 `look_target` (a FilmTargets target, e.g. the counterbalance pivot foot) + `look_target_weight`: the look point moves that share
+        // toward it, horizontally (damped like the couple follow)
+        if (s.Camera["look_target"] is JObject lt)
+        {
+            float w = Mathf.Clamp01(s.P("look_target_weight", 0f));
+            if (w > 1e-4f)
+            {
+                Vector3 tp = Follow(s, film, 0.6f, d => targets.Resolve(lt, d, out Vector3 q) ? q : FilmTargets.Nan);
+                if (!float.IsNaN(tp.x))
+                {
+                    look.x += (tp.x - look.x) * w;
+                    look.z += (tp.z - look.z) * w;
+                }
+            }
+        }
+
         Vector3 eye = look + new Vector3(Mathf.Cos(el) * Mathf.Cos(phi), Mathf.Sin(el), Mathf.Cos(el) * Mathf.Sin(phi)) * dist;
         FilmPose p = new() { Eye = eye, Look = look, Up = Vector3.up, Fov = CoupleFov(dist), ScreenY = ScreenYFor() };
         // opt-in (the class recap): the whole couple inside the band between the captions and the physics legend, as close as that allows
@@ -754,6 +838,7 @@ public class FilmCamera
         dir.Normalize();
         // across the step a little: his foot nearest, her feet visible beside it
         dir = Quaternion.AngleAxis(s.P("azimuth_offset_deg", 25f), Vector3.up) * dir;
+        if (WorldAzimuth(s, film, out float wphi)) dir = new Vector3(Mathf.Cos(wphi), 0f, Mathf.Sin(wphi)); // v3: the planned side
         float spread = 0f;
         Vector3[] feet =
         {
@@ -857,7 +942,7 @@ public class FilmCamera
 
         Vector3 centre = Follow3(s, film, 0.45f, Centroid);
         if (float.IsNaN(centre.x)) centre = targets.CoupleCentre(dance) + Vector3.up * 1.1f;
-        float phi = SideAzimuth(s, 1) + s.P("azimuth_offset_deg", 25f) * Mathf.Deg2Rad;
+        float phi = WorldAzimuth(s, film, out float wphi) ? wphi : SideAzimuth(s, 1) + s.P("azimuth_offset_deg", 25f) * Mathf.Deg2Rad;
         float el = s.P("elevation_deg", 5f) * Mathf.Deg2Rad;
         Vector3 toEye = new(Mathf.Cos(el) * Mathf.Cos(phi), Mathf.Sin(el), Mathf.Cos(el) * Mathf.Sin(phi));
         Vector3 f = -toEye;
@@ -931,12 +1016,48 @@ public class FilmCamera
 
             if (s.P("across_m", 0f) > 0f) across = Mathf.Max(across, feetSpread + 1.3f);
             dist = Mathf.Max(across * 0.5f / (ty * bandY), across * 0.5f / (tx * 0.92f));
-            if (s.P("fill", 0f) > 0.01f) dist = OverheadFillDistance(s, film, ref look, tx, ty, bandY, s.B("parallax"));
+            if (s.P("fill", 0f) > 0.01f)
+            {
+                if (flow == null)
+                {
+                    dist = OverheadFillDistance(s, film, ref look, tx, ty, bandY, s.B("parallax"));
+                }
+                else
+                {
+                    // v3: the height a weighted mean over +-0.24 s (the instant 'never crop' need follows swinging limbs frame by frame: the
+                    // camera height jittered by up to 20 cm per frame in the overheads of the pivots)
+                    float sum = 0f, ws = 0f;
+                    Vector3 lk = look;
+                    for (int i = -3; i <= 3; i++)
+                    {
+                        Vector3 l2 = look;
+                        float w = 4f - Mathf.Abs(i);
+                        sum += w * OverheadFillDistance(s, film + i * 0.08f, ref l2, tx, ty, bandY, s.B("parallax"));
+                        ws += w;
+                        if (i == 0) lk = l2;
+                    }
+
+                    dist = sum / ws;
+                    look = lk;
+                }
+            }
         }
 
         dist = Mathf.Clamp(dist, 3f, 30f);
         Vector3 eye = look + new Vector3(0f, dist, -0.001f);
         FilmPose p = new() { Eye = eye, Look = look, Up = Vector3.forward, Fov = fov, ScreenY = Vertical ? 0.6f : 0.53f };
+        // v3 `up_policy: from_entry`: the top of the picture is the view direction of the shot the crane rose from (Up = -(cos a, 0, sin a),
+        // a = that eye's azimuth about its look point, LIVE at the transition's start; else `up_azimuth_deg`), and the eye stands at 89.9 deg on
+        // that azimuth: the crane up / down arrives / leaves without a roll
+        if (s.S("up_policy", "") == "from_entry")
+        {
+            float a = EntryAzimuth(s);
+            if (!float.IsNaN(a))
+            {
+                p.Eye = look + HmFilm.FlowMath.Spherical(a, OverheadElevation) * dist;
+                p.Up = -new Vector3(Mathf.Cos(a), 0f, Mathf.Sin(a));
+            }
+        }
         if (s.B("tilt_to_3q"))
         {
             // start overhead, tilt down to a high 3/4 (55 deg) from the south side so her lean reads
@@ -1096,6 +1217,387 @@ public class FilmCamera
         Vector3 eye = look + new Vector3(Mathf.Cos(phi) * d, h, Mathf.Sin(phi) * d);
         return new FilmPose { Eye = eye, Look = look, Up = Vector3.up, Fov = fov, ScreenY = Vertical ? 0.57f : 0.5f };
     }
+
+    // ------------------------------------------------------------------ v3 flow: transitions instead of blends and cuts (RECAP_FILM.md "What the Unity director must implement" 1-2)
+
+    /// <summary>the shot whose transition_in is running now (null = a shot's own pose is on screen)</summary>
+    public FilmShot TransitionShot { get; private set; }
+
+    /// <summary>the shot whose own pose is on screen (null during a transition)</summary>
+    public FilmShot CameraShot { get; private set; }
+
+    /// <summary>0..1 through the running transition (linear in film time; the path uses its smootherstep)</summary>
+    public float TransitionU { get; private set; }
+
+    /// <summary>the running transition has a phone at one of its ends (the director keeps the near plane small)</summary>
+    public bool TransitionTouchesPhone => TransitionShot != null && (TransitionShot.Mode == "camera_tour" || TransitionShot.Prev?.Mode == "camera_tour");
+
+    public const float OverheadElevation = 89.9f * Mathf.Deg2Rad;
+
+    /// <summary>how far (0..1) the aim of a phone way is pulled from the couple toward the phone's picture mid-way (Composite)</summary>
+    public static float AimToPicture = 0f; // tried 0.5: readable surfaces 26 -> 27 of 81, the couple out of frame 7 -> 11 frames - not worth it
+    const float FrozenEps = 1e-3f;
+    readonly Dictionary<int, float> entryAzimuth = new();
+    readonly Dictionary<int, Vector2> planOf = new();
+    readonly Dictionary<int, float> planScore = new();
+    readonly HmFilm.FlowPath path = new();
+
+    FilmPose EvaluateFlow(float film)
+    {
+        flow.CameraAt(film, out int own, out int trans, out float u);
+        TransitionShot = trans >= 0 ? Shots[trans] : null;
+        CameraShot = own >= 0 ? Shots[own] : null;
+        TransitionU = u;
+        Current = TransitionShot ?? CameraShot ?? ShotAt(film);
+        if (TransitionShot != null) return TransitionPose(TransitionShot, film, u);
+        // a phone shot's own pose sets PovCamera / PovVideoOpacity = 1: the full-frame video from the arrival to the next way out
+        return CameraShot != null ? Pose(CameraShot, film, 0) : Default(film);
+    }
+
+    /// <summary>the eye's planned azimuth (rad) of a v3 3D shot: world_azimuth_deg + drift_deg_s x (film - F0) (not clamped before F0: a
+    /// transition into the shot starts before it and sees the same smooth drift)</summary>
+    bool WorldAzimuth(FilmShot s, float film, out float phi)
+    {
+        phi = 0f;
+        if (s.Camera["world_azimuth_deg"] == null) return false;
+        phi = (s.P("world_azimuth_deg", 0f) + s.P("drift_deg_s", 0f) * (film - s.F0)) * Mathf.Deg2Rad;
+        return true;
+    }
+
+    float LastCutAtOrBefore(float film)
+    {
+        float c = float.NegativeInfinity;
+        foreach (float x in clock.Cuts)
+        {
+            if (x <= film + 1e-5f && x > c) c = x;
+        }
+
+        return c;
+    }
+
+    /// <summary>the couple's centre on the floor at a film time (the axis of the cylindrical paths)</summary>
+    Vector3 CentreAt(float film)
+    {
+        Vector3 c = targets.CoupleCentre(clock.Dance(Mathf.Clamp(film, 0f, direction.FilmDuration)));
+        if (float.IsNaN(c.x)) c = Vector3.zero;
+        c.y = 0f;
+        return c;
+    }
+
+    /// <summary>the phone of a camera_tour shot at a dance time (its cameras[] window containing it)</summary>
+    static string TourCamera(FilmShot s, float dance)
+    {
+        if (s.Camera["cameras"] is not JArray list) return null;
+        foreach (JToken c in list)
+        {
+            if (c["dance_t"] is not JArray w || w.Count != 2) continue;
+            if (dance < w[0].Value<float>() - 1e-3f || dance > w[1].Value<float>() + 1e-3f) continue;
+            return c.Value<string>("camera");
+        }
+
+        return null;
+    }
+
+    /// <summary>a phone shot's phone position and its FULL (uncropped) optical axis at a film time</summary>
+    bool PhoneAxis(FilmShot s, float film, out Vector3 pos, out Vector3 fwd)
+    {
+        pos = fwd = Vector3.zero;
+        float dance = clock.Dance(Mathf.Clamp(film, 0f, direction.FilmDuration));
+        string cam = TourCamera(s, dance);
+        if (cam == null || !sources.TryGetPose(cam, dance, out pos, out Quaternion rot, out _, out _)) return false;
+        fwd = rot * Vector3.forward;
+        return true;
+    }
+
+    /// <summary>the azimuth (rad) of the view an overhead was entered from: the previous shot's eye about its look point at the start of the
+    /// overhead's transition (a phone: opposite its view direction), cached per shot; else the plan's up_azimuth_deg; NaN without either</summary>
+    public float EntryAzimuth(FilmShot over)
+    {
+        if (entryAzimuth.TryGetValue(over.Index, out float v)) return v;
+        float az = over.P("up_azimuth_deg", float.NaN) * Mathf.Deg2Rad;
+        if (over.Flow?.T != null && over.Prev != null)
+        {
+            entryAzimuth[over.Index] = az; // re-entrancy guard
+            float t0 = over.Flow.T.Frozen ? over.F0 - FrozenEps : over.Flow.TransStart;
+            FilmPose p = Pose(over.Prev, t0, 2);
+            Vector3 d = p.Pov ? -(p.Rot * Vector3.forward) : p.Eye - p.Look;
+            if (new Vector2(d.x, d.z).sqrMagnitude > 1e-6f) az = Mathf.Atan2(d.z, d.x);
+        }
+
+        entryAzimuth[over.Index] = az;
+        return az;
+    }
+
+    FilmPose TransitionPose(FilmShot tr, float film, float u)
+    {
+        HmFilm.FlowTransition f = tr.Flow.T;
+        float k = HmFilm.FlowMath.Smootherstep(u);
+        FilmShot prev = tr.Prev;
+        float fromT = f.Frozen ? tr.F0 - FrozenEps : film;
+        FilmPose a = prev != null ? Pose(prev, fromT, 1) : Default(film);
+        FilmPose b = Pose(tr, film, 1);
+        if (k <= 0f) return a;
+        if (k >= 1f) return b;
+        Vector3 c = CentreAt(film);
+        bool aPhone = prev != null && prev.Mode == "camera_tour" && a.Pov;
+        bool bPhone = tr.Mode == "camera_tour" && b.Pov;
+        bool aOver = prev != null && prev.Mode == "overhead_floorcraft";
+        bool bOver = tr.Mode == "overhead_floorcraft";
+        if (!aPhone && !bPhone && !aOver && !bOver && !a.Pov && !b.Pov) return ArcLook(a, b, k, c, f);
+        return Composite(tr, prev, a, b, film, fromT, k, c, f, aPhone, bPhone, aOver, bOver);
+    }
+
+    /// <summary>arc (3D to 3D, replays): cylindrical about the couple's centre - azimuth the plan's way round, horizontal radius and height lerped
+    /// (the radius never below the clear radius, the height inside the ground band unless an end is outside it), look point / FOV / composition
+    /// lerped, no roll; the aim stays on the couple because the look point does</summary>
+    static FilmPose ArcLook(FilmPose a, FilmPose b, float k, Vector3 c, HmFilm.FlowTransition f)
+    {
+        Vector3 ca = HmFilm.FlowMath.ToCyl(a.Eye, c), cb = HmFilm.FlowMath.ToCyl(b.Eye, c);
+        float delta = HmFilm.FlowMath.Branch(cb.x - ca.x, f.PlanDeltaRad);
+        float r = Mathf.Max(Mathf.Lerp(ca.y, cb.y, k), Mathf.Min(f.ClearRadiusM, ca.y, cb.y));
+        float y = Mathf.Clamp(Mathf.Lerp(ca.z, cb.z, k), Mathf.Min(f.HeightLo, ca.z, cb.z), Mathf.Max(f.HeightHi, ca.z, cb.z));
+        Vector3 eye = HmFilm.FlowMath.FromCyl(new Vector3(ca.x + delta * k, r, y), c);
+        return new FilmPose
+        {
+            Eye = eye, Look = Vector3.Lerp(a.Look, b.Look, k), Up = Vector3.Slerp(a.Up, b.Up, k).normalized, Fov = Mathf.Lerp(a.Fov, b.Fov, k),
+            ScreenY = Mathf.Lerp(a.ScreenY, b.ScreenY, k), LensShift = Vector2.Lerp(a.LensShift, b.LensShift, k)
+        };
+    }
+
+    /// <summary>
+    /// The ways into, out of and between phones and the cranes (RECAP_FILM.md item 1): one path of keys sampled by cost length -
+    ///   [out along phone A's optical axis to its portal] or [a crane down from the overhead to a ground pose at its entry azimuth]
+    ///   + a cylindrical Bezier about the couple (G1 with the axes)
+    ///   + [in along phone B's optical axis from its portal] or [a crane up to the overhead from a ground pose at its entry azimuth].
+    /// The portal is axis_run_m behind the phone on its full optical axis, turned to the phone's CROPPED view; the rotation reaches the cropped
+    /// view at the portal and keeps it on the dolly; the FOV lerps to the crop's. The live poses are the ends: exact at k = 0 and 1.
+    /// </summary>
+    /// <summary>the azimuth bulge of a transition's cylindrical part (FlowPath.AvoidBulge): fixed for the whole way - decided from the geometry at its
+    /// start (a pure function of the shot, cached), so the path never switches shape mid-flight</summary>
+    Vector2 PlanOf(FilmShot tr)
+    {
+        if (planOf.TryGetValue(tr.Index, out Vector2 v)) return v;
+        planOf[tr.Index] = Vector2.zero; // re-entrancy guard
+        float t = tr.Flow.TransStart + 1e-3f;
+        HmFilm.FlowTransition f = tr.Flow.T;
+        FilmShot prev = tr.Prev;
+        float fromT = f.Frozen ? tr.F0 - FrozenEps : t;
+        FilmPose a = prev != null ? Pose(prev, fromT, 1) : Default(t);
+        FilmPose b = Pose(tr, t, 1);
+        bool aPhone = prev != null && prev.Mode == "camera_tour" && a.Pov, bPhone = tr.Mode == "camera_tour" && b.Pov;
+        bool aOver = prev != null && prev.Mode == "overhead_floorcraft", bOver = tr.Mode == "overhead_floorcraft";
+        // the geometry at the way's start, middle and end (the live ends move during it: a 3D view that ends 0.5 m further in front of a phone
+        // than it started made a plan from the start alone fly through the picture)
+        List<HmFilm.FlowPath.CylGeo> outerGeos = planGeos, mine = new();
+        planGeos = mine; // nested plans (SurfaceDepth) gather into their own lists
+        foreach (float uu in new[] { 0f, 0.5f, 1f })
+        {
+            float tt = tr.Flow.TransStart + 1e-3f + uu * (f.DurationS - 2e-3f);
+            float ft = f.Frozen ? tr.F0 - FrozenEps : tt;
+            FilmPose a2 = prev != null ? Pose(prev, ft, 1) : Default(tt);
+            FilmPose b2 = Pose(tr, tt, 1);
+            Composite(tr, prev, a2, b2, tt, ft, 0.5f, CentreAt(tt), f, prev != null && prev.Mode == "camera_tour" && a2.Pov, tr.Mode == "camera_tour" && b2.Pov,
+                aOver, bOver, true);
+        }
+
+        planGeos = outerGeos;
+        Vector2 plan = HmFilm.FlowPath.AvoidPlan(mine, out float bad);
+        if (PlanDebug.TryGetValue(tr.Index, out string db)) PlanDebug[tr.Index] = db + $" || over start / middle / end: bulge {plan.x * Mathf.Rad2Deg:0} deg lift {plan.y:0.00} m, summed badness + effort {bad:0.0}";
+        planOf[tr.Index] = plan;
+        planScore[tr.Index] = bad;
+        return plan;
+    }
+
+    Vector2 lastPlan;
+    List<HmFilm.FlowPath.CylGeo> planGeos = new();
+
+    /// <summary>how each transition's plan was chosen (hm_film_flow --action plan)</summary>
+    public readonly Dictionary<int, string> PlanDebug = new();
+
+    /// <summary>the plan of the transition into this shot (computes it when needed)</summary>
+    public string PlanReport(FilmShot tr)
+    {
+        if (tr?.Flow?.T == null) return "no transition";
+        planOf.Remove(tr.Index);
+        PlanOf(tr);
+        return PlanDebug.TryGetValue(tr.Index, out string v) ? v : $"plan {planOf[tr.Index]} (no cylindrical part)";
+    }
+
+    /// <summary>the depth (m) of a frustum surface: the plan's (0.9), or closer to its phone when the 3D end of its way (the view the camera
+    /// comes from or goes to) stands inside the frustum before the picture - from there the picture would cover the whole view; it then stands
+    /// 0.35 m before that view (at least 0.3 m from the phone). Decided once from the poses at the way's start; the projection from the phone is
+    /// the same at any depth, so the hand-off to the full-frame video does not change.</summary>
+    public float SurfaceDepth(HmFilm.FlowFrustum fr)
+    {
+        if (!float.IsNaN(fr.DepthUsed)) return fr.DepthUsed;
+        fr.DepthUsed = fr.DepthM;
+        if (flow == null || fr.ShotIndex < 0 || fr.ShotIndex >= Shots.Count) return fr.DepthUsed;
+        // the way: into the phone shot (enter) or out of it into the next shot (leave)
+        FilmShot phoneShot = Shots[fr.ShotIndex];
+        FilmShot way = fr.Enter ? phoneShot : phoneShot.Next;
+        if (way?.Flow?.T == null) return fr.DepthUsed;
+        float t = fr.Enter ? way.Flow.TransStart : way.Flow.TransEnd;
+        FilmShot other = fr.Enter ? phoneShot.Prev : way;
+        if (other == null) return fr.DepthUsed;
+        FilmPose e = Pose(other, fr.Enter && way.Flow.T.Frozen ? way.F0 - FrozenEps : t, 2);
+        float dance = clock.Dance(Mathf.Clamp(t, 0f, direction.FilmDuration));
+        if (!sources.TryGetPose(fr.Camera, dance, out Vector3 pos, out Quaternion rot, out float vfov, out _)) return fr.DepthUsed;
+        sources.TryGetAspect(fr.Camera, out float aspect);
+        Vector3 fwd = rot * Vector3.forward, right = rot * Vector3.right, up = rot * Vector3.up;
+        float tv = Mathf.Tan(vfov * 0.5f * Mathf.Deg2Rad), th = tv * aspect;
+        Vector3 portal = pos - fwd * way.Flow.T.AxisRunM;
+        float run = way.Flow.T.AxisRunM;
+        // the 3D end inside the frustum before the picture: the picture would cover its whole view
+        Vector3 d = e.Eye - pos;
+        float fz = Vector3.Dot(d, fwd), x = Vector3.Dot(d, right), y = Vector3.Dot(d, up);
+        bool inside = fz > 0.05f && fz < fr.DepthM + 0.15f && Mathf.Abs(x) < fz * th + 0.25f && Mathf.Abs(y) < fz * tv + 0.25f;
+        float best = inside ? Mathf.Clamp(fz - 0.35f, 0.3f, fr.DepthM) : fr.DepthM;
+        // the depth with the cleanest way: of best / 0.75 / 0.6 / 0.45 / 0.3 m the one whose plan (FlowPath.AvoidPlan over the way's start,
+        // middle and end: crossings, hairpins, detour effort) scores lowest, a smaller picture costing 1.5 per metre. A straight-line test
+        // shrank most phone-to-phone pictures to 0.3 m (too small to read); keeping 0.9 m whenever the default curve crossed made some ways
+        // swing 100 deg round a picture the 3D view stands right behind
+        float start = best, chosen = best, chosenScore = float.PositiveInfinity;
+        foreach (float depth in new[] { start, 0.75f, 0.6f, 0.45f, 0.3f })
+        {
+            if (depth > start + 1e-4f) continue;
+            fr.DepthUsed = depth;
+            planOf.Remove(way.Index);
+            PlanOf(way);
+            // the plan's score (detour effort + badness) plus 1.5 per metre the picture comes closer: a smaller picture is worth a shorter
+            // detour (a 45-deg swing round a 0.65-m picture in 0.85 s peaked at 22 m/s)
+            float sc = (planScore.TryGetValue(way.Index, out float v) ? v : 0f) + 1.5f * (start - depth);
+            if (sc < chosenScore - 1e-3f)
+            {
+                chosen = depth;
+                chosenScore = sc;
+            }
+        }
+
+        planOf.Remove(way.Index); // planned again with the depth chosen
+        best = chosen;
+
+        fr.DepthUsed = best;
+        return fr.DepthUsed;
+    }
+
+
+    FilmPose Composite(FilmShot tr, FilmShot prev, FilmPose a, FilmPose b, float film, float fromT, float k, Vector3 c, HmFilm.FlowTransition f,
+        bool aPhone, bool bPhone, bool aOver, bool bOver, bool planBulge = false)
+    {
+        Vector2 cachedPlan = planBulge ? Vector2.zero : PlanOf(tr); // before this path is built: PlanOf builds its own
+        path.Clear();
+        Quaternion ra = a.Rotation(), rb = b.Rotation();
+        Vector3 upA = a.Pov ? ra * Vector3.up : a.Up, upB = b.Pov ? rb * Vector3.up : b.Up;
+        Vector3 fwdA = Vector3.zero, fwdB = Vector3.zero;
+        bool axA = aPhone && PhoneAxis(prev, fromT, out _, out fwdA);
+        bool axB = bPhone && PhoneAxis(tr, film, out _, out fwdB);
+        float run = Mathf.Max(0f, f.AxisRunM);
+        Vector3 portalA = axA ? a.Eye - fwdA * run : a.Eye, portalB = axB ? b.Eye - fwdB * run : b.Eye;
+
+        // the ground ends of the middle (cylindrical) part
+        Vector3 g0 = portalA, g3 = portalB, l0 = a.Look, l3 = b.Look, u0 = upA, u3 = upB;
+        Quaternion q0 = ra, q3 = rb;
+        Vector3? t0 = axA ? -fwdA : null, t3 = axB ? fwdB : null;
+
+        if (aOver || bOver)
+        {
+            // a crane (RECAP_FILM.md item 1): a vertical arc about the look point between the overhead and the ground end (the phone's portal, or
+            // the 3D view itself), the elevation leaving / reaching the ground with zero slope; the azimuth turns near the ground (crane down:
+            // after the descent; crane up: before the rise). A phone end adds its dolly along the optical axis.
+            if (aOver)
+            {
+                Vector3 ge = axB ? portalB : b.Eye;
+                path.CraneBetween(a.Eye, a.Look, ra, ge, b.Look, rb, f.PlanDeltaRad);
+                if (axB) path.Line(portalB, b.Eye, rb);
+            }
+            else
+            {
+                if (axA) path.Line(a.Eye, portalA, ra);
+                Vector3 ge = axA ? portalA : a.Eye;
+                path.CraneBetween(ge, a.Look, ra, b.Eye, b.Look, rb, f.PlanDeltaRad);
+            }
+
+            if (planBulge) lastPlan = Vector2.zero;
+        }
+        else
+        {
+            if (axA) path.Line(a.Eye, portalA, ra);
+            float r0 = HmFilm.FlowMath.ToCyl(g0, c).y, r3 = HmFilm.FlowMath.ToCyl(g3, c).y;
+            float rMin = Mathf.Min(f.ClearRadiusM, r0, r3);
+            float yLo = Mathf.Min(f.HeightLo, g0.y, g3.y), yHi = Mathf.Max(float.IsInfinity(f.HeightHi) ? 2.4f : f.HeightHi, Mathf.Max(g0.y, g3.y));
+            Vector2 plan;
+            if (planBulge)
+            {
+                // the phones' frustum surfaces at the ends (+ 0.2 m margin): the cylindrical part must neither pass through them nor double back
+                // a list of its own: SurfaceDepth may plan other ways (and this one) while the rectangles are gathered
+                List<(Vector3 centre, Vector3 right, Vector3 up, Vector3 normal, float hw, float hh)> rects = new();
+                if (axA) AddSurfaceRect(rects, prev, fromT, f, false);
+                if (axB) AddSurfaceRect(rects, tr, film, f, true);
+                plan = HmFilm.FlowPath.AvoidPlan(c, g0, t0, g3, t3, f.PlanDeltaRad, rMin, yLo, yHi, rects);
+                lastPlan = plan;
+                HmFilm.FlowPath.CylGeo geo = new() { C = c, P0 = g0, P3 = g3, T0 = t0, T3 = t3, PlanDelta = f.PlanDeltaRad, RMin = rMin, YLo = yLo, YHi = yHi };
+                geo.Rects.AddRange(rects);
+                planGeos.Add(geo);
+                System.Text.StringBuilder db = new();
+                db.Append($"shot {tr.Segments[0].Id}: g0 {g0} t0 {t0} g3 {g3} t3 {t3} c {c} rMin {rMin:0.00} y [{yLo:0.00}, {yHi:0.00}] rects {rects.Count}");
+                foreach ((Vector3 centre, Vector3 right, Vector3 up, Vector3 normal, float hw, float hh) r in rects) db.Append($" [centre {r.centre} hw {r.hw:0.00} hh {r.hh:0.00} n {r.normal}]");
+                db.Append($" -> plan bulge {plan.x * Mathf.Rad2Deg:0} deg lift {plan.y:0.00} m badness {HmFilm.FlowPath.CylBadness(c, g0, t0, g3, t3, f.PlanDeltaRad, rMin, yLo, yHi, plan.x, plan.y, rects):0.0}");
+                foreach ((float bd, float lf) in new[] { (0f, 0f), (0f, 0.5f), (45f, 0f), (-45f, 0f), (90f, 0f), (-90f, 0f) })
+                    db.Append($"; ({bd},{lf}) {HmFilm.FlowPath.CylBadness(c, g0, t0, g3, t3, f.PlanDeltaRad, rMin, yLo, yHi, bd * Mathf.Deg2Rad, lf, rects):0.0}");
+                PlanDebug[tr.Index] = db.ToString();
+            }
+            else
+            {
+                plan = cachedPlan;
+            }
+
+            // mid-way the aim is pulled halfway from the couple to a phone's picture (0.6 m along its axis): the picture comes into view earlier on
+            // the way in and stays longer on the way out, the couple stays in the frame
+            Vector3 l0c = axA ? Vector3.Lerp(l0, a.Eye + fwdA * 0.6f, AimToPicture) : l0, l3c = axB ? Vector3.Lerp(l3, b.Eye + fwdB * 0.6f, AimToPicture) : l3;
+            path.Cyl(c, g0, t0, g3, t3, f.PlanDeltaRad, rMin, yLo, yHi, q0, q3, l0c, l3c, u0, u3, HmFilm.FlowPath.PartSamples, plan.x, plan.y);
+            if (axB) path.Line(portalB, b.Eye, rb);
+        }
+
+        path.Sample(k, out Vector3 eye, out Quaternion rot);
+        FilmPose p = FilmPose.FromRotation(eye, rot, Mathf.Lerp(a.Fov, b.Fov, k), Mathf.Max(1f, Vector3.Distance(eye, c + Vector3.up)));
+        p.LensShift = Vector2.Lerp(a.LensShift, b.LensShift, k);
+        return p;
+    }
+
+    /// <summary>a phone shot's frustum surface as a rectangle (centre, right, up, normal, half width / height + 0.2 m) for the bulge test</summary>
+    void AddSurfaceRect(List<(Vector3 centre, Vector3 right, Vector3 up, Vector3 normal, float hw, float hh)> rects, FilmShot s, float film, HmFilm.FlowTransition f, bool enter)
+    {
+        float dance = clock.Dance(Mathf.Clamp(film, 0f, direction.FilmDuration));
+        string cam = TourCamera(s, dance);
+        float depth = flow != null ? flow.FrustumDepthM : 0.9f;
+        if (flow != null)
+        {
+            foreach (HmFilm.FlowFrustum fr in flow.Frustums)
+            {
+                if (fr.ShotIndex == s.Index && fr.Enter == enter && fr.Camera == cam) depth = SurfaceDepth(fr);
+            }
+        }
+
+        if (cam == null || !sources.TryGetSurfaceCorners(cam, dance, depth, out _, out Vector3 tl, out Vector3 tr, out Vector3 br, out Vector3 bl)) return;
+        Vector3 centre = (tl + br) * 0.5f, right = tr - tl, up = tl - bl;
+        float hw = right.magnitude * 0.5f + 0.2f, hh = up.magnitude * 0.5f + 0.2f;
+        rects.Add((centre, right.normalized, up.normalized, Vector3.Cross(right, up).normalized, hw, hh));
+    }
+
+    /// <summary>a ground pose G for a crane at an overhead's look point lo: on the vertical plane at azimuth az, at the elevation and distance the far
+    /// ground end (eye e, look le) has about its own look point, about lo raised to that look height; aimed at it with world up</summary>
+    static void Ground(Vector3 lo, Vector3 e, Vector3 le, float az, float pitchDeg, out Vector3 eye, out Vector3 look, out float el, out float d, out Quaternion rot)
+    {
+        Vector3 v = e - le;
+        d = Mathf.Max(0.5f, v.magnitude);
+        el = Mathf.Asin(Mathf.Clamp(v.y / d, -1f, 1f));
+        look = new Vector3(lo.x, le.y, lo.z);
+        eye = look + HmFilm.FlowMath.Spherical(az, el) * d;
+        rot = HmFilm.FlowMath.Aim(look - eye, Vector3.up, Quaternion.identity) * Quaternion.Euler(pitchDeg, 0f, 0f);
+    }
+
+    /// <summary>the composition pitch (deg) FilmPose.Rotation adds for a non-POV pose (its look point at ScreenY of the frame)</summary>
+    static float Pitch(FilmPose p) => p.Pov ? 0f : Mathf.Atan((2f * p.ScreenY - 1f) * Mathf.Tan(p.Fov * 0.5f * Mathf.Deg2Rad)) * Mathf.Rad2Deg;
 
     // ------------------------------------------------------------------ blends
 

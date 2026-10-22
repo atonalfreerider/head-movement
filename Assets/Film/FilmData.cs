@@ -27,6 +27,9 @@ public class FilmDirection
     public FilmNarration Narration;
     public readonly List<string> Warnings = new();
 
+    /// <summary>v3 (top-level "flow", dancecap film_recap_flow): the transitions, frustum surfaces and hand-off timing; null = an older film</summary>
+    public HmFilm.FlowTimeline Flow;
+
     public FilmAspect Aspect(string name) =>
         Aspects.TryGetValue(FilmAspect.Normalise(name), out FilmAspect a) ? a : Aspects.Values.FirstOrDefault() ?? new FilmAspect();
 
@@ -117,6 +120,8 @@ public class FilmDirection
         d.FilmDuration = root["timeline"]?.Value<float?>("film_duration_s") ?? filmEnd;
         if (d.FilmDuration <= 0) d.FilmDuration = filmEnd;
         d.ReadAnnotations();
+        d.Flow = HmFilm.FlowTimeline.Build(root);
+        if (d.Flow != null) d.Warnings.AddRange(d.Flow.Warnings);
         d.Narration = FilmNarration.Find(d);
         if (d.Narration == null) d.Warnings.Add("no narration timeline (narration/timeline*.json with direction = " + d.Name + ")");
         return d;

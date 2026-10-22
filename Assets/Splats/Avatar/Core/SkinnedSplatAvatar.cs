@@ -421,6 +421,26 @@ namespace HmSplats
         /// <summary>the current skin matrices (tests, CLI checks)</summary>
         public Matrix4x4[] CurrentSkin => skin;
 
+        Matrix4x4[] probeSkin, probeWorld;
+
+        /// <summary>S_joint computed NOW from the bones (the matrix SkinNow uploads for this pose; the film's face sidecar reads S_15 after the
+        /// frame's pose, whichever runs first); false when the avatar's bones are gone</summary>
+        public bool TrySkinNow(int joint, out Matrix4x4 s)
+        {
+            s = Matrix4x4.identity;
+            if (bones == null || Data == null || joint < 0 || joint >= bones.Length) return false;
+            for (int j = 0; j < bones.Length; j++)
+            {
+                if (bones[j] == null) return false;
+            }
+
+            probeSkin ??= new Matrix4x4[SplatAvatarData.Joints];
+            probeWorld ??= new Matrix4x4[SplatAvatarData.Joints];
+            SplatSkinning.SkinMatrices(bones, Data.RestJoints, Data.Parents, probeSkin, probeWorld);
+            s = probeSkin[joint];
+            return true;
+        }
+
         /// <summary>read back posed Gaussians [first, first + count) from the GPU frame (tests, CLI checks; slow)</summary>
         public float4[] ReadBack(int first, int count)
         {

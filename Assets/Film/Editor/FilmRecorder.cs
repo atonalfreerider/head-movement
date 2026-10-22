@@ -99,6 +99,16 @@ public static class FilmRecorder
         public string audioFixResult, audioFixReport, rawOutput, audioFixLog;
         public bool validatedPass;
 
+        // the face sidecar (FilmFaceSidecar, <name>.faces.json): "auto" (on with the splat dancers) | "on" | "off"
+        public string facesMode = "auto";
+        public bool faces;
+        public string facesPath, facesResult;
+        public int facesFrames;
+
+        // the direction was named explicitly (--direction) rather than found for the capture; the file-name tag (_v3 for a flow direction)
+        public bool directionExplicit;
+        public string tag;
+
         public bool Active => state != null && Array.IndexOf(Terminal, state) < 0;
     }
 
@@ -282,6 +292,10 @@ public static class FilmRecorder
 
         // auto | ordered | async (Job.readbackMode) and auto | on | off (Job.audioFixMode)
         public string readback = "auto", audioFix = "auto";
+
+        // auto | on | off (Job.facesMode); an explicit direction file (null = FindDirection(capture)); a file-name tag (null = "v3" for a
+        // direction with a top-level "flow", else none; "" = none)
+        public string faces = "auto", direction, tag;
     }
 
     /// <summary>queue a recording; returns null on success or an error message</summary>
@@ -301,6 +315,8 @@ public static class FilmRecorder
         if (readback is not ("auto" or "ordered" or "async" or "observe")) return $"readback must be auto, ordered, async or observe, not '{o.readback}'";
         string audioFix = (o.audioFix ?? "auto").Trim().ToLowerInvariant();
         if (audioFix != "auto" && audioFix != "on" && audioFix != "off") return $"audiofix must be auto, on or off, not '{o.audioFix}'";
+        string faces = (o.faces ?? "auto").Trim().ToLowerInvariant();
+        if (faces != "auto" && faces != "on" && faces != "off") return $"faces must be auto, on or off, not '{o.faces}'";
         (int w, int h) = size == "4k" ? (aspect == "vertical" ? (2160, 3840) : (3840, 2160)) : (aspect == "vertical" ? (1080, 1920) : (1920, 1080));
 
         string capture = string.IsNullOrWhiteSpace(o.capture) ? DefaultCapture() : o.capture.Trim();
@@ -314,11 +330,13 @@ public static class FilmRecorder
             capture = capture, aspect = aspect, size = size, width = w, height = h, fps = o.fps,
             preset = $"{aspect}_{size}", start = Mathf.Max(0f, o.start), duration = Mathf.Max(0f, o.duration),
             unity = Application.unityVersion, recorderVersion = RecorderVersion(), gpu = SystemInfo.graphicsDeviceName,
-            readbackMode = readback, audioFixMode = audioFix
+            readbackMode = readback, audioFixMode = audioFix, facesMode = faces
         };
 
         bool director = DirectorType() != null && !o.plain;
-        string directionPath = FindDirection(capture);
+        string directionPath = string.IsNullOrWhiteSpace(o.direction) ? FindDirection(capture) : Path.GetFullPath(o.direction.Trim());
+        j.directionExplicit = !string.IsNullOrWhiteSpace(o.direction);
+        if (j.directionExplicit && !File.Exists(directionPath)) return $"no direction file {directionPath}";
         if ((director || o.mix) && directionPath == null) return $"no film direction for {capture} (looked in {string.Join("; ", FilmDirs(capture))})";
         j.mode = director ? "director" : "plain";
         j.plainMix = !director && o.mix;
@@ -344,6 +362,9 @@ public static class FilmRecorder
             j.filmDuration = Mathf.Max(tl, last);
             j.mix = Path.Combine(j.filmDir, "audio", $"{j.directionName}_mix.wav");
             j.mixLog = Path.Combine(j.filmDir, "audio", $"{j.directionName}_mix.log");
+            if (j.directionExplicit && !string.Equals(d.Value<string>("capture"), capture, StringComparison.OrdinalIgnoreCase))
+                return $"{directionPath} is the film of capture '{d.Value<string>("capture")}', not '{capture}'";
+            j.tag = o.tag ?? (d["flow"] is JObject ? "v3" : "");
         }
 
         if (director || j.plainMix)
@@ -506,6 +527,10 @@ public static class FilmRecorder
         if (!Directory.Exists(work)) yield break;
         foreach (string d in Directory.GetDirectories(work).OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
         {
+            // a take's v3 direction (dancecap film_recap_flow: the flights, frustum surfaces and pivot shots) is the take's film when it exists;
+            // its film/ direction stays reachable with hm_film record --direction / hm_film_show --direction
+            string v3 = Path.Combine(d, "v3", "direction");
+            if (Directory.Exists(v3)) yield return v3;
             string f = Path.Combine(d, "film");
             if (Directory.Exists(f)) yield return f;
         }
@@ -570,7 +595,7 @@ public static class FilmRecorder
         string part = j.mode == "director" && (j.start > 0 || j.duration > 0)
             ? $"_t{j.start.ToString("0.#", CultureInfo.InvariantCulture)}-{j.filmEnd.ToString("0.#", CultureInfo.InvariantCulture)}"
             : j.mode == "plain" ? (j.plainMix ? $"_plainmix_t{j.start.ToString("0.#", CultureInfo.InvariantCulture)}" : "_plain") : "";
-        string stem = $"{j.capture}_{j.aspect}{(j.size == "4k" ? "_4k" : "")}{(j.fps != 30 ? $"_{j.fps}fps" : "")}_{date}{part}";
+        string stem = $"{j.capture}_{j.aspect}{(j.size == "4k" ? "_4k" : "")}{(j.fps != 30 ? $"_{j.fps}fps" : "")}_{date}{part}{(string.IsNullOrEmpty(j.tag) ? "" : "_" + j.tag)}";
         string path = Path.Combine(RecordingsDir, stem + ".mp4");
         for (int k = 2; File.Exists(path) || File.Exists(Path.ChangeExtension(path, ".report.json")); k++)
             path = Path.Combine(RecordingsDir, $"{stem}_{k}.mp4");
@@ -991,6 +1016,19 @@ public static class FilmRecorder
                 StopAll(j, $"FilmDirector.Begin returned null ({DirectorString("LastError") ?? "see the Console"})", failed: true);
                 return;
             }
+
+            // the face sidecar samples every recorded frame from here (FilmLate, after the director's overlays) until StopAll
+            j.faces = j.facesMode == "on" || (j.facesMode == "auto" && j.splatDancers);
+            if (j.faces)
+            {
+                string why = FilmFaceSidecar.Begin(j.output, j.width, j.height, j.fps, j.aspect);
+                if (why != null)
+                {
+                    j.faces = false;
+                    j.facesResult = $"not written: {why}";
+                    j.warnings.Add($"face sidecar not written: {why}");
+                }
+            }
         }
         else
         {
@@ -1121,6 +1159,12 @@ public static class FilmRecorder
     static void StopAll(Job j, string why, bool failed = false, bool aborted = false)
     {
         StopRecorder(j);
+        if (j.faces && FilmFaceSidecar.Active != null)
+        {
+            j.facesPath = FilmFaceSidecar.End(out j.facesFrames, out string faceError);
+            j.facesResult = j.facesPath != null ? $"{j.facesFrames} frames" : $"FAILED: {faceError}";
+            if (j.facesPath == null) j.warnings.Add($"face sidecar not written: {faceError}");
+        }
         j.stopReason = why;
         if (FilmRecordingDriver.Instance != null) FilmRecordingDriver.Instance.FlashFrames = null;
         j.recordEndReal = EditorApplication.timeSinceStartup;
