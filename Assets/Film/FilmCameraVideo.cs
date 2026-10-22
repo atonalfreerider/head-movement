@@ -84,7 +84,11 @@ public static class FilmCameraVideo
 
     /// <summary>the phones' frustums with their live video at depth m along the optical axis (alpha 0..1 each; top = the hand-off cover share),
     /// CameraVideoRig.SetSurfaces. Called every frame while any is shown; an empty list hides them.</summary>
-    public static void SetSurfaces(string[] cameras, float[] alphas, float[] tops, float[] depths, float danceTime)
+    public static void SetSurfaces(string[] cameras, float[] alphas, float[] tops, float[] depths, float danceTime) =>
+        SetSurfaces(cameras, alphas, tops, depths, danceTime, null);
+
+    /// <summary>SetSurfaces with the frustum lines' own alphas (v4 outline curves; null = the lines follow the pictures)</summary>
+    public static void SetSurfaces(string[] cameras, float[] alphas, float[] tops, float[] depths, float danceTime, float[] outlines)
     {
         if (rig == null || !rig.Loaded) return;
         if (cameras == null || cameras.Length == 0)
@@ -93,8 +97,33 @@ public static class FilmCameraVideo
             return;
         }
 
-        rig.SetSurfaces(cameras, alphas, tops, depths, danceTime);
+        rig.SetSurfaces(cameras, alphas, tops, depths, danceTime, outlines);
     }
+
+    /// <summary>v4, 16:9: the side fill's alpha per surface of the next SetSurfaces (null = none) and whether the full-frame view's side fill
+    /// stays under the hand-off cover</summary>
+    public static void SetSurfaceFills(float[] alphas)
+    {
+        if (rig == null) return;
+        rig.SurfaceFillAlpha = alphas;
+    }
+
+    /// <summary>v4: the full-frame view's side fill keeps the video's opacity under the hand-off cover (the frustum surface carries it on)</summary>
+    public static void SetSideFillUnderCover(bool on)
+    {
+        if (rig != null) rig.SideFillUnderCover = on;
+    }
+
+    /// <summary>v4: the faint frustum outlines of these phones (alpha, e.g. 0.15; depth m), CameraVideoRig.SetGhosts. Every frame while shown;
+    /// an empty list or alpha 0 hides them.</summary>
+    public static void SetGhosts(string[] cameras, float alpha, float depth, float danceTime)
+    {
+        if (rig == null || !rig.Loaded) return;
+        rig.SetGhosts(cameras, alpha, depth, danceTime);
+    }
+
+    /// <summary>the faint frustums drawn this frame</summary>
+    public static IReadOnlyList<(string phone, float alpha)> GhostsDrawn => rig != null ? rig.GhostsDrawn : Array.Empty<(string, float)>();
 
     /// <summary>the full-frame video drawn again over every overlay (0..1; FlowTimeline.VideoCover); set before SetVideo</summary>
     public static void SetVideoCover(float cover)

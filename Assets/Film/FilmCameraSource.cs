@@ -500,8 +500,29 @@ public class FilmCameraSource
     // ------------------------------------------------------------------ v3 flow: the phones' frustum surfaces and the hand-off cover
 
     string[] surfCams = Array.Empty<string>();
-    float[] surfAlpha = Array.Empty<float>(), surfTop = Array.Empty<float>(), surfDepth = Array.Empty<float>();
-    bool surfacesShown;
+    float[] surfAlpha = Array.Empty<float>(), surfTop = Array.Empty<float>(), surfDepth = Array.Empty<float>(), surfOutline = Array.Empty<float>(),
+        surfFill = Array.Empty<float>();
+    bool surfacesShown, ghostsShown;
+    readonly List<string> ghostCams = new();
+
+    /// <summary>v4: the faint frustums of these phones at alpha (0 hides them). Feature only.</summary>
+    public void SetGhosts(IList<string> phones, float alpha, float depth, float dance)
+    {
+        if (ext == null) return;
+        if ((phones == null || phones.Count == 0 || alpha <= 1e-4f) && !ghostsShown) return;
+        try
+        {
+            FilmCameraVideo.SetGhosts(phones?.ToArray() ?? Array.Empty<string>(), alpha, depth, dance);
+            ghostsShown = phones != null && phones.Count > 0 && alpha > 1e-4f;
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"FilmCameraVideo.SetGhosts failed: {e.Message}");
+        }
+    }
+
+    /// <summary>the faint frustums drawn this frame (diagnostics)</summary>
+    public IReadOnlyList<(string phone, float alpha)> GhostsDrawn => FilmCameraVideo.GhostsDrawn;
 
     /// <summary>the frustum surfaces of this frame (FlowTimeline.Surfaces); an empty list hides them. Feature only (the fallback has no video).</summary>
     public void SetSurfaces(List<HmFilm.FlowSurface> list, float dance)
@@ -515,19 +536,26 @@ public class FilmCameraSource
             surfAlpha = new float[n];
             surfTop = new float[n];
             surfDepth = new float[n];
+            surfOutline = new float[n];
+            surfFill = new float[n];
         }
 
+        bool anyOutline = false;
         for (int i = 0; i < n; i++)
         {
             surfCams[i] = list[i].Camera;
             surfAlpha[i] = list[i].Alpha;
             surfTop[i] = list[i].Top;
             surfDepth[i] = list[i].DepthM;
+            surfOutline[i] = list[i].Outline;
+            surfFill[i] = list[i].Fill;
+            anyOutline |= list[i].Frustum != null && list[i].Frustum.HasOutline;
         }
 
         try
         {
-            FilmCameraVideo.SetSurfaces(surfCams, surfAlpha, surfTop, surfDepth, dance);
+            FilmCameraVideo.SetSurfaceFills(anyOutline ? surfFill : null);
+            FilmCameraVideo.SetSurfaces(surfCams, surfAlpha, surfTop, surfDepth, dance, anyOutline ? surfOutline : null);
             surfacesShown = n > 0;
         }
         catch (Exception e)
@@ -540,6 +568,12 @@ public class FilmCameraSource
     public void SetVideoCover(float cover)
     {
         if (ext != null) FilmCameraVideo.SetVideoCover(cover);
+    }
+
+    /// <summary>v4: the 16:9 side fill stays under the hand-off cover (applied by the next SetVideo)</summary>
+    public void SetSideFillUnderCover(bool on)
+    {
+        if (ext != null) FilmCameraVideo.SetSideFillUnderCover(on);
     }
 
     /// <summary>the surfaces drawn this frame: phone, alpha, world corners of the image (top-left, top-right, bottom-right, bottom-left)</summary>

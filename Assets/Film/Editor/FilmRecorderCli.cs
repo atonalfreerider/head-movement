@@ -38,8 +38,8 @@ public static class FilmRecorderCli
         [CliArg("readback", "auto (default: ordered with the splat dancers or on D3D12 / Vulkan) | ordered | async | observe (async + statistics) - the Recorder's frame readbacks completed one by one in film order (OrderedReadback)")] string readback = "auto",
         [CliArg("audiofix", "auto (default: with the splat dancers) | on | off - after the checks, replace the recorder's AAC track with the film mix (dancecap.film_audiofix; the raw file is kept as <name>_rawaudio.mp4)")] string audiofix = "auto",
         [CliArg("faces", "auto (default: with the splat dancers) | on | off - write <name>.faces.json (the face sidecar for dancecap.film_faceswap)")] string faces = "auto",
-        [CliArg("direction", "direction json path (default: found for the capture: StreamingAssets/<capture>/film, then work/<take>/v3/direction, then work/<take>/film)")] string direction = null,
-        [CliArg("tag", "file name tag (default: v3 for a direction with a top-level flow; empty = none)")] string tag = null)
+        [CliArg("direction", "direction json path (default: found for the capture: StreamingAssets/<capture>/film, then work/<take>/v4/direction, work/<take>/v3/direction, work/<take>/film)")] string direction = null,
+        [CliArg("tag", "file name tag (default: v4 for a flow version >= 2, v3 for a direction with a top-level flow; empty = none)")] string tag = null)
     {
         switch ((action ?? "status").Trim().ToLowerInvariant())
         {

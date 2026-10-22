@@ -115,6 +115,7 @@ public class FilmOverlay : MonoBehaviour
         SkeletonLegend.TopOverride = -1f;
         SkeletonLegend.Scale = 1f;
         SkeletonLegend.RightMargin = 14f;
+        SkeletonLegend.Alpha = 1f;
     }
 
     public void Tick(float film, float dance)
@@ -164,7 +165,18 @@ public class FilmOverlay : MonoBehaviour
         // a chapter / title card sits in the same band. The legend used to step below the card while it showed and jump back up when it faded (the audit:
         // it "jumped over the dancers' heads" at 292-297 s): it now always sits under the card's slot (a constant: the top band, the card's height and a gap),
         // so it never moves, and the physics shot frames the couple below it (camera `fit_band`)
-        if (vertical)
+        // v4 (owner 2026-10-22: "the physics meter is occluding the figures in the vertical video. it should move to the top of the frame";
+        // dancecap UNITY_CONTRACT_v4 B): in 9:16 the legend has ONE constant place at the top of the safe area (top = the 14 % band + 8 px, right
+        // edge 14 px in, 1.85x) - above the dancers' heads (the phone crops and the 3D framings put the couple below it). It never steps below
+        // a chapter card or the title: it fades under them (alpha = 1 - their opacity)
+        bool legendTop = vertical && director.FilmCam?.Flow != null && director.FilmCam.Flow.Version >= 2;
+        SkeletonLegend.Alpha = 1f;
+        if (legendTop)
+        {
+            SkeletonLegend.TopOverride = aspect.SafeTop * H + 8f * unit;
+            SkeletonLegend.Alpha = 1f - Mathf.Clamp01(Mathf.Max(cardAlpha, titleAlpha));
+        }
+        else if (vertical)
         {
             float cardSlotBottom = aspect.SafeTop * H + 14f * unit + 96f * unit + 10f * unit;
             SkeletonLegend.TopOverride = Mathf.Max(SkeletonLegend.TopOverride, cardSlotBottom);
@@ -172,7 +184,10 @@ public class FilmOverlay : MonoBehaviour
         }
 
         // 9:16 enlarges the legend: its 11 px text on a 1080-wide frame cannot be read on a phone (1.5x was still about 16 px)
-        SkeletonLegend.Scale = vertical ? Mathf.Max(1f, 1.85f * unit) : Mathf.Max(1f, aspect.LegendScale * unit);
+        // v4 (the top place): 1.65x - a little smaller than v3's 1.85x, so its bottom edge (20.8 % down) stays clear of the heads in the
+        // phone holds (the Jev overlay check of the first v4 excerpts flagged the 1.85x box 3-5 % above a raised head as touching it); the
+        // 11 px text is then 18 px on a 1080-wide frame
+        SkeletonLegend.Scale = vertical ? Mathf.Max(1f, (legendTop ? 1.65f : 1.85f) * unit) : Mathf.Max(1f, aspect.LegendScale * unit);
         SkeletonLegend.RightMargin = !vertical && aspect.SafeSide > 0f ? aspect.SafeSide * W : 14f;
         // 16:9: the move caption (lower left) and the graph inset (lower right) are boxes the call-out labels keep out of
         // (9:16: they sit under the top band, which LabelCeiling already excludes)
@@ -184,6 +199,14 @@ public class FilmOverlay : MonoBehaviour
             if (hud.InsetRect.width > 1f) obstacles.Add(hud.InsetRect);
         }
         float ceiling = (1f - (vertical ? aspect.SafeTop : Mathf.Max(0.04f, aspect.SafeTop))) * H;
+        if (legendTop && SkeletonLegend.AnyShown && SkeletonLegend.Alpha > 0.05f)
+        {
+            // the legend's rectangle is an obstacle for the call-out labels, and they stay under it (screen y from the bottom)
+            Rect lg = SkeletonLegend.Area;
+            obstacles.Add(new Rect(lg.x, H - lg.yMax, lg.width, lg.height));
+            ceiling = Mathf.Min(ceiling, H - lg.yMax - 10f * unit);
+        }
+
         if (vertical && hud.Visible && hudAlpha > 0.05f) ceiling = Mathf.Min(ceiling, H - hud.BottomFromTop - 10f * unit);
         if (titleAlpha > 0.05f) ceiling = Mathf.Min(ceiling, H - title.BottomFromTop - 10f * unit);
         if (cardAlpha > 0.05f) ceiling = Mathf.Min(ceiling, H - cards.BottomFromTop - 10f * unit);

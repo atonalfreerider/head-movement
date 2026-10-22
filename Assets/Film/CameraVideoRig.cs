@@ -426,7 +426,7 @@ public sealed class CameraVideoRig : MonoBehaviour
         videoMaterial.SetFloat("_Alpha", Mathf.Clamp01(opacity));
         videoRenderer.enabled = true;
         SetCover(p, opacity * Mathf.Clamp01(VideoCover));
-        SetSideFill(p, opacity * (1f - Mathf.Clamp01(VideoCover)), over, pos, rot, hh, hw, c);
+        SetSideFill(p, opacity * (SideFillUnderCover ? 1f : 1f - Mathf.Clamp01(VideoCover)), over, pos, rot, hh, hw, c);
         LastVideoCamera = p.Id;
         LastVideoFrameTime = strip.Time[idx];
         LastVideoFrameIndex = idx;
@@ -521,10 +521,19 @@ public sealed class CameraVideoRig : MonoBehaviour
 
     sealed class SurfaceView
     {
-        public Mesh Mesh;
-        public Material Mat, TopMat;
-        public MeshRenderer Renderer, Top;
+        public Mesh Mesh, FillMesh;
+        public Material Mat, TopMat, FillMat;
+        public MeshRenderer Renderer, Top, Fill;
     }
+
+    /// <summary>v4, 16:9 only: the side fill's alpha per surface of the next SetSurfaces (0 = none). A portrait phone's picture in its frustum
+    /// gets the blurred, dimmed side fill of the full-frame view around it, in the picture's own plane: seen from the phone it is exactly the
+    /// full-frame side fill, so the departure / arrival frame does not change, and it fades over the WHOLE way (the independent check of the
+    /// v3 films: the side fills went to black in about 4 frames at every departure)</summary>
+    public float[] SurfaceFillAlpha;
+
+    /// <summary>v4: the full-frame view's side fill stays at the video's opacity under the hand-off cover (v3 faded it with the cover)</summary>
+    public bool SideFillUnderCover;
 
     readonly Dictionary<string, SurfaceView> surfaceViews = new();
     GlowMesh frustumLines;
@@ -557,7 +566,12 @@ public sealed class CameraVideoRig : MonoBehaviour
     /// again over every overlay (the hand-off cover). Seen from the phone's own pose the rectangle projects exactly onto the full-frame video
     /// quad (SetVideo): the switch between them does not change the picture. Called every frame while any is shown.
     /// </summary>
-    public void SetSurfaces(IList<string> cameras, IList<float> alphas, IList<float> tops, IList<float> depths, float dance)
+    public void SetSurfaces(IList<string> cameras, IList<float> alphas, IList<float> tops, IList<float> depths, float dance) =>
+        SetSurfaces(cameras, alphas, tops, depths, dance, null);
+
+    /// <summary>SetSurfaces with the frustum lines' own alphas (v4: the outline curve, from the faint ghost's 0.15 up to 1 on the way into a
+    /// phone and back down on the way out; the picture keeps its own alpha). outlines null = the lines follow the picture (v3).</summary>
+    public void SetSurfaces(IList<string> cameras, IList<float> alphas, IList<float> tops, IList<float> depths, float dance, IList<float> outlines)
     {
         lastSurfaceFrame = Time.frameCount;
         SurfacesDrawn.Clear();
@@ -576,15 +590,17 @@ public sealed class CameraVideoRig : MonoBehaviour
         {
             string cam = cameras[i];
             float alpha = Mathf.Clamp01(alphas[i]);
+            float outline = outlines != null && i < outlines.Count ? Mathf.Clamp01(outlines[i]) : -1f;
             float depth = depths != null && i < depths.Count && depths[i] > 0.05f ? depths[i] : 0.9f;
-            if (alpha <= 1e-4f || !SurfaceCorners(cam, dance, depth, out Vector3 apex, out Vector3 tl, out Vector3 tr, out Vector3 br, out Vector3 bl)) continue;
+            if ((alpha <= 1e-4f && outline <= 1e-4f) || !SurfaceCorners(cam, dance, depth, out Vector3 apex, out Vector3 tl, out Vector3 tr, out Vector3 br, out Vector3 bl)) continue;
             Vector3 eyeNow = view != null ? view.transform.position : apex + (tl - apex) * 10f;
             // an eye passing close beside or in front of the picture (a way that swings round it) sees it dissolve instead of sweeping across
             // the lens as a hard wipe: alpha x smoothstep(0.25 .. 0.9 m from the rectangle). Not on the phone's side of the picture inside its
             // outline (the dolly along the axis and the hand-off, where it must stay opaque)
             alpha *= ProximityFade(eyeNow, apex, tl, tr, br, bl);
-            if (alpha <= 1e-4f) continue;
-            Color col = ColourOf(cam) * alpha;
+            float lineAlpha = outline >= 0f ? outline : alpha;
+            if (alpha <= 1e-4f && lineAlpha <= 1e-4f) continue;
+            Color col = ColourOf(cam) * lineAlpha;
             // line widths about constant on screen (thin close by: a 1.2 cm line half a metre from the lens is a bar across the picture)
             float W(Vector3 m) => Mathf.Clamp(0.0045f * Vector3.Distance(eyeNow, m), 0.002f, 0.012f);
             // the four edges meet at the phone: as the eye comes within 2 m of it (the dolly along the optical axis) they would pass next to the
@@ -612,6 +628,7 @@ public sealed class CameraVideoRig : MonoBehaviour
             frustumLines.Line(Rim(bl), Rim(tl), w * 1.3f, rim);
 
             // the picture: the same frame the full-frame video would show (same texture, same frame index)
+            if (alpha <= 1e-4f) continue;
             string why = CheckVideo(cam, dance, out Phone p, out CameraVideoStrip strip, out int idx, out _, out _, out _);
             if (why != null) continue;
             if (p.FullTexture == null) p.FullTexture = NewTexture($"phone {p.Id} frame");
@@ -646,6 +663,7 @@ public sealed class CameraVideoRig : MonoBehaviour
             sv.TopMat.mainTexture = p.FullTexture;
             sv.TopMat.SetFloat("_Alpha", top);
             sv.Top.enabled = top > 0.001f;
+            SurfaceFill(sv, p, i, alpha, tl, tr, br, bl);
             (shown ??= new HashSet<string>()).Add(cam);
             SurfacesDrawn.Add((cam, alpha, tl, tr, br, bl));
         }
@@ -657,7 +675,52 @@ public sealed class CameraVideoRig : MonoBehaviour
             if (shown != null && shown.Contains(kv.Key)) continue;
             if (kv.Value.Renderer.enabled) kv.Value.Renderer.enabled = false;
             if (kv.Value.Top.enabled) kv.Value.Top.enabled = false;
+            if (kv.Value.Fill != null && kv.Value.Fill.enabled) kv.Value.Fill.enabled = false;
         }
+    }
+
+    /// <summary>the side fill of surface i (SurfaceFillAlpha) around its picture, in the picture's plane (v4, 16:9, a portrait clip)</summary>
+    void SurfaceFill(SurfaceView sv, Phone p, int i, float pictureAlpha, Vector3 tl, Vector3 tr, Vector3 br, Vector3 bl)
+    {
+        float fillA = SurfaceFillAlpha != null && i < SurfaceFillAlpha.Length ? SurfaceFillAlpha[i] * pictureAlpha : 0f;
+        FilmDirector fd = FilmDirector.Instance;
+        float dim = fd != null && !fd.Vertical ? fd.AspectInfo.PhoneSideFill : 0f;
+        if (fillA <= 0.001f || dim <= 0.001f || p.Track.Aspect >= 1.5f)
+        {
+            if (sv.Fill != null && sv.Fill.enabled) sv.Fill.enabled = false;
+            return;
+        }
+
+        if (sv.Fill == null)
+        {
+            sv.FillMesh = NewQuadMesh($"phone {p.Id} frustum side fill");
+            sv.FillMat = NewMaterial($"phone {p.Id} frustum side fill", SurfaceQueue - 1, CompareFunction.LessEqual);
+            sv.Fill = NewQuad($"phone {p.Id} frustum side fill", transform, sv.FillMesh, sv.FillMat);
+        }
+
+        // SetSideFill's geometry at this depth: the quad covers a 16:9 view of the phone's lens (+ a margin), the picture magnified to cover it
+        Vector3 centre = (tl + br) * 0.5f, right = tr - tl, up = tl - bl;
+        float hw = right.magnitude * 0.5f, hh = up.magnitude * 0.5f;
+        if (hw < 1e-5f || hh < 1e-5f) return;
+        right /= 2f * hw;
+        up /= 2f * hh;
+        float halfH = 1.3f * hh, halfW = halfH * 16f / 9f * 1.05f;
+        quad[0] = centre - right * halfW - up * halfH;
+        quad[1] = centre + right * halfW - up * halfH;
+        quad[2] = centre + right * halfW + up * halfH;
+        quad[3] = centre - right * halfW + up * halfH;
+        float scale = halfW / hw;
+        float fv = Mathf.Clamp01(halfH / (hh * scale));
+        const float vCentre = 0.46f;
+        float v0 = Mathf.Clamp(vCentre - fv * 0.5f, 0f, 1f - fv), v1 = v0 + fv;
+        sv.FillMesh.vertices = quad;
+        sv.FillMesh.uv = new Vector2[] { new(0, v0), new(1, v0), new(1, v1), new(0, v1) };
+        sv.FillMesh.bounds = new Bounds(centre, new Vector3(1000, 1000, 1000));
+        sv.FillMat.mainTexture = p.FullTexture;
+        sv.FillMat.SetVector("_BlurUV", new Vector4(0.05f, 0.05f * p.Track.Aspect, 0f, 0f));
+        sv.FillMat.SetFloat("_Dim", Mathf.Clamp01(dim));
+        sv.FillMat.SetFloat("_Alpha", Mathf.Clamp01(fillA));
+        sv.Fill.enabled = true;
     }
 
     /// <summary>1, or less while the eye is within 0.9 m of the picture rectangle and not on the phone's side of it inside its outline</summary>
@@ -683,7 +746,94 @@ public sealed class CameraVideoRig : MonoBehaviour
         {
             if (sv.Renderer.enabled) sv.Renderer.enabled = false;
             if (sv.Top.enabled) sv.Top.enabled = false;
+            if (sv.Fill != null && sv.Fill.enabled) sv.Fill.enabled = false;
         }
+    }
+
+    // ------------------------------------------------------------------ v4 faint frustums (dancecap UNITY_CONTRACT_v4 4: flow.ghost_frustums)
+
+    /// <summary>queue of the faint frustums: in the opaque range, after the room and the floor (ZTest LEqual: the scene hides them) and BEFORE
+    /// the Gaussian splat composite (BeforeRenderingTransparents), so the splat dancers are always drawn over them - a ghost line never crosses
+    /// a dancer's face or body</summary>
+    public const int GhostQueue = 2450;
+
+    GlowMesh ghostLines;
+    Material ghostLineMaterial;
+    int lastGhostFrame = -100;
+
+    /// <summary>the ghosts drawn by the last SetGhosts (diagnostics / the face sidecar): phone, alpha</summary>
+    public readonly List<(string phone, float alpha)> GhostsDrawn = new();
+
+    /// <summary>
+    /// Every listed phone's frustum OUTLINE (apex, the four edges, the rim at depth m), faint (alpha, e.g. 0.15), in the phone's colour, no picture,
+    /// no label, so the viewer keeps track of where the camera is among the phones. About 1.5 px wide on screen; each line is cut into short
+    /// pieces that fade out between 2 m and 1 m from the eye (the orbit passes close to some phones). Called every frame while shown.
+    /// </summary>
+    public void SetGhosts(IList<string> cameras, float alpha, float depth, float dance)
+    {
+        lastGhostFrame = Time.frameCount;
+        GhostsDrawn.Clear();
+        if (cameras == null || cameras.Count == 0 || alpha <= 1e-4f)
+        {
+            HideGhosts();
+            return;
+        }
+
+        if (ghostLines == null)
+        {
+            ghostLineMaterial = GlowMesh.NewMaterial("Film ghost frustums", 1.6f);
+            ghostLineMaterial.renderQueue = GhostQueue;
+            ghostLines = GlowMesh.Create("Film ghost frustums", transform, ghostLineMaterial);
+        }
+
+        Camera view = DanceText.ViewCamera;
+        if (view == null)
+        {
+            HideGhosts();
+            return;
+        }
+
+        Vector3 eye = view.transform.position;
+        // about 1.5 px at 1080 px across the frame's height: the world width of a pixel at distance d is 2 d tan(fov / 2) / H
+        float pxPerM = view.pixelHeight / Mathf.Max(1e-3f, 2f * Mathf.Tan(view.fieldOfView * 0.5f * Mathf.Deg2Rad));
+        ghostLines.Viewer = eye;
+        ghostLines.Begin();
+        foreach (string cam in cameras)
+        {
+            if (!SurfaceCorners(cam, dance, depth, out Vector3 apex, out Vector3 tl, out Vector3 tr, out Vector3 br, out Vector3 bl)) continue;
+            Color col = ColourOf(cam) * Mathf.Clamp01(alpha);
+            void Seg(Vector3 a, Vector3 b)
+            {
+                const int n = 8;
+                for (int k = 0; k < n; k++)
+                {
+                    Vector3 p0 = Vector3.Lerp(a, b, k / (float)n), p1 = Vector3.Lerp(a, b, (k + 1) / (float)n), m = (p0 + p1) * 0.5f;
+                    float d = Vector3.Distance(eye, m);
+                    float near = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(1.0f, 2.0f, d));
+                    if (near < 0.002f) continue;
+                    ghostLines.Line(p0, p1, Mathf.Clamp(1.5f * d / pxPerM, 0.0008f, 0.01f), col * near);
+                }
+            }
+
+            Seg(apex, tl);
+            Seg(apex, tr);
+            Seg(apex, br);
+            Seg(apex, bl);
+            Seg(tl, tr);
+            Seg(tr, br);
+            Seg(br, bl);
+            Seg(bl, tl);
+            GhostsDrawn.Add((cam, alpha));
+        }
+
+        ghostLines.End();
+        ghostLines.SetVisible(true);
+    }
+
+    public void HideGhosts()
+    {
+        GhostsDrawn.Clear();
+        if (ghostLines != null && ghostLines.Visible) ghostLines.SetVisible(false);
     }
 
     // ------------------------------------------------------------------ frustum glyphs + live thumbnails
@@ -806,6 +956,7 @@ public sealed class CameraVideoRig : MonoBehaviour
         HideVideo();
         HideGlyphs();
         HideSurfaces();
+        HideGhosts();
         foreach (Phone p in phones.Values)
         {
             p.Full?.Close();
@@ -819,6 +970,7 @@ public sealed class CameraVideoRig : MonoBehaviour
         if (Time.frameCount - lastGlyphFrame > 2) HideGlyphs();
         if (Time.frameCount - lastVideoFrame > 2) HideVideo();
         if (Time.frameCount - lastSurfaceFrame > 2) HideSurfaces();
+        if (Time.frameCount - lastGhostFrame > 2) HideGhosts();
     }
 
     void OnDestroy()
@@ -832,11 +984,14 @@ public sealed class CameraVideoRig : MonoBehaviour
         if (coverMaterial != null) Destroy(coverMaterial);
         if (lineMaterial != null) Destroy(lineMaterial);
         if (frustumLineMaterial != null) Destroy(frustumLineMaterial);
+        if (ghostLineMaterial != null) Destroy(ghostLineMaterial);
         foreach (SurfaceView sv in surfaceViews.Values)
         {
             if (sv.Mesh != null) Destroy(sv.Mesh);
             if (sv.Mat != null) Destroy(sv.Mat);
             if (sv.TopMat != null) Destroy(sv.TopMat);
+            if (sv.FillMat != null) Destroy(sv.FillMat);
+            if (sv.FillMesh != null) Destroy(sv.FillMesh);
         }
 
         surfaceViews.Clear();

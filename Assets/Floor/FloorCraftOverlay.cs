@@ -469,6 +469,9 @@ public class FloorCraftOverlay : MonoBehaviour
     [Tooltip("the current T: the lead's red-orange (a deep base: the glow material and bloom lift it)")]
     public Color LeadColour = new(1f, 0.24f, 0.07f);
     public float TBrightness = 0.85f;
+
+    /// <summary>seconds over which the current T fades out after its window ends (no T follows it)</summary>
+    public float CurrentTFadeOutS = 0.4f;
     public float TWidth = 0.02f;
     /// <summary>film director: only the dial that is running keeps its degree read-out; the turn arcs and old dials of the
     /// floor record show no numbers (a call-out shot is not cluttered by the record's labels)</summary>
@@ -815,11 +818,36 @@ public class FloorCraftOverlay : MonoBehaviour
 
     public void SetVisible(bool axis, bool record)
     {
-        if (showAxis == axis && showRecord == record) return;
-        showAxis = axis;
+        if (axisWanted == axis && showRecord == record) return;
+        axisWanted = axis;
+        // the current T fades in / out over AxisFadeS of the dance clock (SetTime) instead of appearing or vanishing in one frame (the v4 film:
+        // the overhead's T popped on mid-crane); the axis stays drawn while it fades out
+        showAxis = axis || axisFade > 1e-3f;
         showRecord = record;
-        glow.SetVisible(axis || record);
+        glow.SetVisible(showAxis || record);
         dirty = true;
+    }
+
+    bool axisWanted = true;
+    float axisFade = 1f, axisFadeClock = float.NaN;
+
+    /// <summary>seconds (dance clock) the current T takes to fade in or out when its layer switches; a jump of the clock (a seek) snaps</summary>
+    public float AxisFadeS = 0.5f;
+
+    void StepAxisFade(float time)
+    {
+        float target = axisWanted ? 1f : 0f;
+        float dt = time - axisFadeClock;
+        axisFade = float.IsNaN(dt) || Mathf.Abs(dt) > 0.5f ? target : Mathf.MoveTowards(axisFade, target, Mathf.Abs(dt) / Mathf.Max(1e-3f, AxisFadeS));
+        axisFadeClock = time;
+        bool show = axisWanted || axisFade > 1e-3f;
+        if (show != showAxis)
+        {
+            showAxis = show;
+            glow.SetVisible(showAxis || showRecord);
+        }
+
+        if (axisFade > 1e-3f && axisFade < 0.999f) dirty = true;
     }
 
     bool roleHidden;
@@ -869,6 +897,7 @@ public class FloorCraftOverlay : MonoBehaviour
     public void SetTime(float time, int frame, Camera viewer)
     {
         if (glow == null || frame < 0) return;
+        StepAxisFade(time);
         frame = Mathf.Min(frame, frameTime.Length - 1);
         Vector3 eye = viewer != null ? viewer.transform.position : Vector3.zero;
         bool cameraMoved = (eye - lastEye).sqrMagnitude > 1e-6f;
@@ -960,6 +989,17 @@ public class FloorCraftOverlay : MonoBehaviour
         {
             AxisOrigin = new Vector3(float.NaN, 0f, float.NaN);
             AxisForward = Vector3.zero;
+            // the T that just ended fades out over CurrentTFadeOutS instead of vanishing in one frame (the v4 film's frame-difference check
+            // found the T popping off mid-crane); no T is current meanwhile
+            for (int k = data.TAxes.Count - 1; k >= 0; k--)
+            {
+                FloorCraftData.TAxis e = data.TAxes[k];
+                if (time <= e.T1 || time - e.T1 >= CurrentTFadeOutS) continue;
+                float fade = (1f - Smooth01((time - e.T1) / CurrentTFadeOutS)) * Smooth01(axisFade);
+                DrawT(e.Origin, e.YawDeg, 1f, TWidth, Scale(LeadColour, fade * TBrightness), 0.016f, true);
+                break;
+            }
+
             return;
         }
 
@@ -980,6 +1020,7 @@ public class FloorCraftOverlay : MonoBehaviour
             bright = g;
         }
 
+        bright *= Smooth01(axisFade);
         CurrentT = a.Id;
         CurrentTAlpha = bright;
         CurrentTYawShown = yaw;

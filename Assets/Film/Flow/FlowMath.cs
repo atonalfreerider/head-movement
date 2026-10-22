@@ -87,6 +87,78 @@ namespace HmFilm
             if (Mathf.Abs(Vector3.Dot(f.normalized, up.normalized)) > 0.9995f) return fallback;
             return Quaternion.LookRotation(f, up);
         }
+
+        // ------------------------------------------------------------------ v4 ("hm film flow v2"): C2 ramps of live end states
+
+        /// <summary>the integral of smootherstep from 0 to y: y^4 (2.5 - 3 y + y^2)</summary>
+        static float SmootherstepIntegral(float y) => y * y * y * y * (2.5f - 3f * y + y * y);
+
+        /// <summary>
+        /// The cruise law (dancecap film_recap_flow.cruise; UNITY_CONTRACT_v4 A): the rate rises by a smootherstep over the first `ease` of x,
+        /// holds at 1 / (1 - ease) x the mean, and falls by a smootherstep over the last `ease`. Value, first and second derivative are 0 / 1 / 0
+        /// at both ends (C2). ease = 0 is linear; ease is clamped to [0, 0.5].
+        /// </summary>
+        public static float Cruise(float x, float ease)
+        {
+            x = Mathf.Clamp01(x);
+            float e = Mathf.Clamp(ease, 0f, 0.5f);
+            if (e < 1e-5f) return x;
+            float s;
+            if (x <= e) s = e * SmootherstepIntegral(x / e);
+            else if (x <= 1f - e) s = e * 0.5f + (x - e);
+            else
+            {
+                float y = (x - 1f + e) / e;
+                s = e * 0.5f + (1f - 2f * e) + e * (y - SmootherstepIntegral(y));
+            }
+
+            return s / (1f - e);
+        }
+
+        /// <summary>the cruise law over the window [a, b] of u (0 before a, 1 after b)</summary>
+        public static float CruiseRamp(float u, float a, float b, float ease) => b - a <= 1e-6f ? (u >= a ? 1f : 0f) : Cruise((u - a) / (b - a), ease);
+
+        /// <summary>the FOV (deg) of the log-tan zoom: tan(fov / 2) = tan(a / 2)^(1 - z) x tan(b / 2)^z (an even zoom speed in the picture)</summary>
+        public static float LogTanFov(float a, float b, float z)
+        {
+            float ta = Mathf.Tan(Mathf.Clamp(a, 1f, 170f) * 0.5f * Mathf.Deg2Rad), tb = Mathf.Tan(Mathf.Clamp(b, 1f, 170f) * 0.5f * Mathf.Deg2Rad);
+            float t = Mathf.Exp(Mathf.Lerp(Mathf.Log(ta), Mathf.Log(tb), Mathf.Clamp01(z)));
+            return 2f * Mathf.Atan(t) * Mathf.Rad2Deg;
+        }
+
+        /// <summary>64 u^3 (1 - u)^3: a bump of height 1 at u = 0.5 whose value, first and second derivative are 0 at both ends (a C2 detour)</summary>
+        public static float C2Bump(float u)
+        {
+            u = Mathf.Clamp01(u);
+            float v = u * (1f - u);
+            return 64f * v * v * v;
+        }
+
+        /// <summary>
+        /// A v4 glide (UNITY_CONTRACT_v4 2, "Eye"): the eye between two LIVE anchors in cylindrical coordinates about the couple's centre c -
+        /// azimuth a + g x delta (delta = the anchors' difference the plan's way round, FlowMath.Branch), radius and height lerped by g, the
+        /// radius never below rMin (unless an anchor is closer), the height inside [yLo, yHi] (unless an anchor is outside). g = 0 / 1 give the
+        /// anchors exactly, so with a smootherstep g the eye leaves A and reaches B with their own velocity and acceleration (C2).
+        /// </summary>
+        public static Vector3 GlideEye(Vector3 c, Vector3 eA, Vector3 eB, float g, float planDelta, float rMin, float yLo, float yHi)
+        {
+            if (g <= 0f) return eA;
+            if (g >= 1f) return eB;
+            Vector3 a = ToCyl(eA, c), b = ToCyl(eB, c);
+            float delta = Branch(b.x - a.x, planDelta);
+            float r = Mathf.Max(Mathf.Lerp(a.y, b.y, g), Mathf.Min(rMin, a.y, b.y));
+            float y = Mathf.Clamp(Mathf.Lerp(a.z, b.z, g), Mathf.Min(yLo, a.z, b.z), Mathf.Max(yHi, a.z, b.z));
+            return FromCyl(new Vector3(a.x + delta * g, r, y), c);
+        }
+
+        /// <summary>a crane's eye about its look point (UNITY_CONTRACT_v4 2, "Crane"): azimuth, elevation and distance between the two ends by s
+        /// (the cruise law), the azimuth the short way</summary>
+        public static Vector3 CraneEye(Vector3 look, float az0, float el0, float d0, float az1, float el1, float d1, float s, out float az, out float el)
+        {
+            az = az0 + WrapPi(az1 - az0) * s;
+            el = Mathf.Lerp(el0, el1, s);
+            return look + Spherical(az, el) * Mathf.Lerp(d0, d1, s);
+        }
     }
 
     /// <summary>

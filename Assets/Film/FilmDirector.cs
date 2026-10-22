@@ -115,6 +115,12 @@ public class FilmDirector : MonoBehaviour
     /// <summary>v3: the full-frame video's cover over the 3D overlays now (FlowTimeline.VideoCover; 0 outside a phone's window)</summary>
     public float FlowVideoCover { get; private set; }
 
+    /// <summary>v4: the faint frustums' opacity now (FlowTimeline.GhostAlpha) and the phones drawn faint</summary>
+    public float FlowGhostAlpha { get; private set; }
+
+    readonly List<string> ghostCams = new();
+    public IReadOnlyList<string> GhostPhonesNow => ghostCams;
+
     /// <summary>v3: the frustum surfaces drawn now (camera, alpha, cover share)</summary>
     public IReadOnlyList<HmFilm.FlowSurface> FlowSurfacesNow => flowSurfaces;
 
@@ -573,13 +579,29 @@ public class FilmDirector : MonoBehaviour
             sources.SetSurfaces(flowSurfaces, dance);
             FlowVideoCover = flow.VideoCover(film);
             sources.SetVideoCover(FlowVideoCover);
+            sources.SetSideFillUnderCover(flow.Version >= 2);
             FlowSplatVisibility = flow.SplatVisibility(film);
+            // v4: every phone's frustum, faint (0.15), outline only, in the 3D views, the ways and the overheads - except the phone being
+            // entered / left (its surface draws its outline from the same 0.15 up to 1) and not over a phone's full-frame video
+            FlowGhostAlpha = flow.GhostAlpha(film);
+            ghostCams.Clear();
+            if (FlowGhostAlpha > 1e-4f)
+            {
+                foreach (string ph in flow.GhostPhones)
+                {
+                    if (!flowSurfaces.Exists(x => x.Camera == ph)) ghostCams.Add(ph);
+                }
+            }
+
+            sources.SetGhosts(ghostCams, FlowGhostAlpha, flow.GhostDepthM, dance);
         }
         else
         {
             flowSurfaces.Clear();
             FlowVideoCover = 0f;
             FlowSplatVisibility = null;
+            FlowGhostAlpha = 0f;
+            sources.SetSideFillUnderCover(false);
         }
 
         string pov = filmCamera.PovCamera;
@@ -1102,9 +1124,11 @@ public class FilmDirector : MonoBehaviour
                 ["transition"] = filmCamera.TransitionShot != null ? $"{filmCamera.TransitionShot.Flow.T.Type} into {filmCamera.TransitionShot.Segments[0].Id}" : null,
                 ["u"] = Math.Round(filmCamera.TransitionU, 3), ["cameraShot"] = filmCamera.CameraShot?.Segments[0].Id,
                 ["layers"] = layerEntries.Count > 0 ? layerEntries[LayerEntryAt(filmTime)].Name : null,
-                ["surfaces"] = flowSurfaces.Select(x => $"{x.Camera} {x.Role} a={x.Alpha:0.###} top={x.Top:0.###}").ToList(),
+                ["surfaces"] = flowSurfaces.Select(x => $"{x.Camera} {x.Role} a={x.Alpha:0.###} top={x.Top:0.###} outline={x.Outline:0.###}").ToList(),
                 ["videoCover"] = Math.Round(FlowVideoCover, 3), ["splatVisibility"] = FlowSplatVisibility.HasValue ? Math.Round(FlowSplatVisibility.Value, 3) : null,
-                ["limb"] = Math.Round(limbNow, 3)
+                ["limb"] = Math.Round(limbNow, 3), ["version"] = filmCamera.Flow.Version, ["revision"] = filmCamera.Flow.Revision,
+                ["ghostAlpha"] = Math.Round(FlowGhostAlpha, 3), ["ghosts"] = ghostCams.ToList(),
+                ["ghostsDrawn"] = sources != null ? sources.GhostsDrawn.Select(x => x.phone).ToList() : null
             };
         }
         if (overlay != null) s["overlay"] = overlay.State();

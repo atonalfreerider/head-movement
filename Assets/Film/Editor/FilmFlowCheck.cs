@@ -63,7 +63,7 @@ public static class FilmFlowCheck
         int n = Mathf.FloorToInt((t1 - t0) * fps) + 1;
         float aspect = fd.Vertical ? 9f / 16f : 16f / 9f;
 
-        Vector3[] eye = new Vector3[n];
+        Vector3[] eye = new Vector3[n], look = new Vector3[n];
         Quaternion[] rot = new Quaternion[n];
         float[] fov = new float[n], time = new float[n];
         string[] state = new string[n];
@@ -80,6 +80,7 @@ public static class FilmFlowCheck
             time[i] = t;
             FilmPose p = fc.Evaluate(t);
             eye[i] = p.Eye;
+            look[i] = p.Pov ? new Vector3(float.NaN, 0f, 0f) : p.Look;
             rot[i] = p.Rotation();
             fov[i] = p.Fov;
             pov[i] = p.Pov;
@@ -158,7 +159,7 @@ public static class FilmFlowCheck
         for (int i = 1; i < n; i++)
         {
             step[i] = Vector3.Distance(eye[i], eye[i - 1]);
-            turn[i] = Quaternion.Angle(rot[i], rot[i - 1]);
+            turn[i] = RotAngle(rot[i], rot[i - 1]);
             dfov[i] = Mathf.Abs(fov[i] - fov[i - 1]);
         }
 
@@ -265,6 +266,7 @@ public static class FilmFlowCheck
                          $"{Vector3.Dot(d, r * Vector3.right):0.00} m right, {Vector3.Dot(d, r * Vector3.up):0.00} m up of the phone ({s.T.DurationS:0.00} s)");
         }
 
+        object v4 = flow.Version >= 2 ? V4Measures(fd, fc, flow, eye, look, rot, fov, time, state, fps, t0, t1, aspect, phoneOwn, pov) : null;
         List<string> holds = flow.Windows.Where(w => w.Departure >= t0 && w.Arrival <= t1)
             .Select(w => $"phone {w.Phone} {F(w.Arrival)}-{F(w.Departure)}: {w.Departure - w.Arrival:0.00} s full frame").ToList();
         List<string> surfaces = readable.Where(kv => kv.Key.D >= t0 && kv.Key.A <= t1)
@@ -278,7 +280,7 @@ public static class FilmFlowCheck
             maxTurn = $"{maxTurn:0.00} deg at {maxTurnAt}", groundOut, ground, phoneFallback, handoffs, holds,
             shortestHold = flow.Windows.Where(w => w.Departure >= t0 && w.Arrival <= t1).Select(w => w.Departure - w.Arrival).DefaultIfEmpty(0f).Min(),
             surfaces, shortestReadable = readable.Where(kv => kv.Key.D >= t0 && kv.Key.A <= t1).Select(kv => kv.Value).DefaultIfEmpty(0f).Min(),
-            ways, geometry, offscreenFrames, offscreen, warnings = flow.Warnings
+            ways, geometry, offscreenFrames, offscreen, warnings = flow.Warnings, v4
         };
         string json = series != null ? JsonConvert.SerializeObject(new { film = new[] { t0, t1 }, fps, series }, Formatting.Indented)
             : JsonConvert.SerializeObject(result, Formatting.Indented);
@@ -289,6 +291,190 @@ public static class FilmFlowCheck
         }
 
         return json;
+    }
+
+    /// <summary>
+    /// v4 (dancecap UNITY_CONTRACT_v4 5-6): the caps of the live camera per way (turn about the couple, view rotation, eye speed on the ground
+    /// ways, the crane's pitch), the acceleration jump at both ends of every way (C2: the one-sided second differences over 3 frames), the
+    /// orbits' settled rate about the couple (1-s central differences; 2.5-6 deg/s, never static, never turning back), the moves and holds, the
+    /// couple's heads out of the frame in the 3D views and - 9:16 - under the physics legend's place (14.4-20.8 % down, 53-99 % across).
+    /// </summary>
+    static object V4Measures(FilmDirector fd, FilmCamera fc, FlowTimeline flow, Vector3[] eye, Vector3[] look, Quaternion[] rot, float[] fov, float[] time, string[] state,
+        float fps, float t0, float t1, float aspect, bool[] phoneOwn, bool[] pov)
+    {
+        int n = eye.Length;
+        float[] az = new float[n], azLook = new float[n], pitch = new float[n];
+        bool[] cut = new bool[n];
+        bool[] povF = new bool[n];
+        int headsOut3d = 0, legendHeads3d = 0, legendHeadsPhone = 0, frames3d = 0;
+        List<string> headsOutAt = new(), legendAt = new();
+        FilmTargets tg = fd.Targets;
+        for (int i = 0; i < n; i++)
+        {
+            float dance = fd.Clock.Dance(time[i]);
+            // the couple's centre smoothed over +-0.5 s (the live centre sways with every step: the turn about it is what a viewer reads)
+            Vector3 c = Vector3.zero;
+            int nc = 0;
+            for (int k = -5; k <= 5; k++)
+            {
+                float tk = time[i] + 0.1f * k;
+                if (k != 0 && fd.Clock.CutBetween(Mathf.Min(tk, time[i]), Mathf.Max(tk, time[i]))) continue;
+                Vector3 q = tg.CoupleCentre(fd.Clock.Dance(Mathf.Clamp(tk, 0f, fd.FilmDuration)));
+                if (float.IsNaN(q.x)) continue;
+                c += q;
+                nc++;
+            }
+
+            c = nc > 0 ? c / nc : tg.CoupleCentre(dance);
+            az[i] = Mathf.Atan2(eye[i].z - c.z, eye[i].x - c.x);
+            // the orbit's own turn: the eye about its look point (the damped couple centre the orbit is built on)
+            azLook[i] = float.IsNaN(look[i].x) ? az[i] : Mathf.Atan2(eye[i].z - look[i].z, eye[i].x - look[i].x);
+            Vector3 fwd = rot[i] * Vector3.forward;
+            pitch[i] = Mathf.Asin(Mathf.Clamp(fwd.y, -1f, 1f)) * Mathf.Rad2Deg;
+            cut[i] = i > 0 && fd.Clock.CutBetween(time[i - 1], time[i]);
+            povF[i] = phoneOwn[i] && pov[i];
+            Quaternion inv = Quaternion.Inverse(rot[i]);
+            float ty = Mathf.Tan(fov[i] * 0.5f * Mathf.Deg2Rad), tx = ty * aspect;
+            bool outF = false, underLegend = false;
+            foreach (string role in new[] { "lead", "follow" })
+            {
+                Vector3 h = tg.Joint(tg.DancerOf(role), SmplJoint.Head, dance);
+                if (float.IsNaN(h.x)) continue;
+                Vector3 v = inv * (h + Vector3.up * 0.12f - eye[i]);
+                if (v.z < 0.05f)
+                {
+                    outF = true;
+                    continue;
+                }
+
+                float x = v.x / (v.z * tx), y = v.y / (v.z * ty);
+                if (Mathf.Abs(x) > 1f || Mathf.Abs(y) > 1f) outF = true;
+                if (fd.Vertical && x > 0.058f && x < 0.974f && y > 0.584f && y < 0.712f) underLegend = true; // the v4 place at 1.65x: 52.9-98.7 % across, 14.4-20.8 % down
+            }
+
+            if (!povF[i])
+            {
+                frames3d++;
+                if (outF)
+                {
+                    headsOut3d++;
+                    if (headsOutAt.Count < 40) headsOutAt.Add($"{F(time[i])} {state[i]}");
+                }
+
+                if (underLegend)
+                {
+                    legendHeads3d++;
+                    if (legendAt.Count < 40) legendAt.Add($"{F(time[i])} {state[i]}");
+                }
+            }
+            else if (underLegend)
+            {
+                legendHeadsPhone++;
+            }
+        }
+
+        float Rate(float[] a, int i, int h)
+        {
+            int lo = Math.Max(0, i - h), hi = Math.Min(n - 1, i + h);
+            for (int k = lo + 1; k <= hi; k++)
+                if (cut[k]) return float.NaN;
+            if (hi <= lo) return float.NaN;
+            return FlowMath.WrapPi(a[hi] - a[lo]) * Mathf.Rad2Deg * fps / (hi - lo);
+        }
+
+        // ways
+        List<object> ways = new();
+        float capAz = 0f, capRot = 0f, capSpeed = 0f, capPitch = 0f;
+        foreach (FlowShot s in flow.Shots)
+        {
+            if (s.T == null || s.TransEnd < t0 || s.TransStart > t1) continue;
+            bool crane = s.T.CranePath || s.T.Crane;
+            float pkAz = 0f, pkRot = 0f, pkSpeed = 0f, pkPitch = 0f;
+            int i0 = -1, i1 = -1;
+            for (int i = 1; i < n; i++)
+            {
+                if (time[i] < s.TransStart || time[i] > s.TransEnd || cut[i]) continue;
+                if (i0 < 0) i0 = i;
+                i1 = i;
+                float a = Rate(az, i, 2);
+                if (!float.IsNaN(a) && !crane) pkAz = Mathf.Max(pkAz, Mathf.Abs(a));
+                pkRot = Mathf.Max(pkRot, RotAngle(rot[i - 1], rot[i]) * fps);
+                if (!crane) pkSpeed = Mathf.Max(pkSpeed, Vector3.Distance(eye[i - 1], eye[i]) * fps);
+                if (crane) pkPitch = Mathf.Max(pkPitch, Mathf.Abs(pitch[i] - pitch[i - 1]) * fps);
+            }
+
+            // the acceleration jump at the way's ends (one-sided second differences over 3 frames, m/s^2)
+            float AccJump(int k)
+            {
+                if (k < 2 || k + 2 >= n) return float.NaN;
+                for (int q = k - 2; q <= k + 2; q++)
+                    if (cut[q]) return float.NaN;
+                Vector3 before = (eye[k] - 2f * eye[k - 1] + eye[k - 2]) * fps * fps, after = (eye[k + 2] - 2f * eye[k + 1] + eye[k]) * fps * fps;
+                return (after - before).magnitude;
+            }
+
+            if (!s.T.Type.StartsWith("replay")) capRot = Mathf.Max(capRot, pkRot);
+            if (!crane) capAz = Mathf.Max(capAz, pkAz);
+            if (!crane) capSpeed = Mathf.Max(capSpeed, pkSpeed);
+            if (crane) capPitch = Mathf.Max(capPitch, pkPitch);
+            ways.Add(new
+            {
+                film = $"{F(s.TransStart)}-{F(s.TransEnd)}", type = s.T.Type, into = s.FirstSegmentId, duration = Math.Round(s.T.DurationS, 2), path = s.T.V4Path ?? s.T.Path,
+                peakTurnAboutCoupleDegS = Math.Round(pkAz, 2), peakRotationDegS = Math.Round(pkRot, 2), peakEyeSpeedMS = Math.Round(pkSpeed, 3),
+                peakPitchDegS = Math.Round(pkPitch, 2),
+                accJumpStartMS2 = i0 >= 0 ? Math.Round(AccJump(i0), 3) : double.NaN, accJumpEndMS2 = i1 >= 0 ? Math.Round(AccJump(i1), 3) : double.NaN
+            });
+        }
+
+        // the orbits' own poses (3D shots between the ways): their settled rate about the couple
+        List<object> orbits = new();
+        int orbitOut = 0, orbitStatic = 0, orbitBack = 0, orbitFrames = 0;
+        foreach (FlowShot s in flow.Shots)
+        {
+            if (s.Mode != "orbit" && s.Mode != "overhead_floorcraft") continue;
+            FilmShot fs = fc.Shots[s.Index];
+            float drift = fs.P("drift_deg_s", float.NaN);
+            float lo = float.PositiveInfinity, hi = 0f;
+            int frames = 0;
+            for (int i = 0; i < n; i++)
+            {
+                string own = $"{s.Mode} {s.FirstSegmentId}";
+                if (fc.Shots.Count <= s.Index || state[i] != own) continue;
+                bool pure = true;
+                for (int k = Math.Max(0, i - 15); k <= Math.Min(n - 1, i + 15) && pure; k++) pure = state[k] == own;
+                if (!pure) continue;
+                if (s.Mode == "overhead_floorcraft") continue; // the overhead turns its Up (eye straight above): not an azimuth about the couple
+                float r = Rate(azLook, i, 15);
+                if (float.IsNaN(r)) continue;
+                frames++;
+                orbitFrames++;
+                float ar = Mathf.Abs(r);
+                lo = Mathf.Min(lo, ar);
+                hi = Mathf.Max(hi, ar);
+                if (ar < 2.5f - 0.25f || ar > 6f + 0.25f) orbitOut++;
+                if (ar < 0.2f) orbitStatic++;
+                if (!float.IsNaN(drift) && Mathf.Abs(drift) > 0.1f && Mathf.Sign(r) != Mathf.Sign(drift) && ar > 1f) orbitBack++;
+            }
+
+            if (frames > 0)
+                orbits.Add(new { shot = s.FirstSegmentId, film = $"{F(s.F0)}-{F(s.F1)}", planDriftDegS = drift, frames, rateMin = Math.Round(lo, 2), rateMax = Math.Round(hi, 2) });
+        }
+
+        List<float> holdLens = flow.Windows.Select(w => w.Departure - w.Arrival).ToList();
+        return new
+        {
+            moves = flow.Shots.Count(s => s.T != null),
+            moveTypes = flow.Shots.Where(s => s.T != null).GroupBy(s => s.T.Type).ToDictionary(g => g.Key, g => g.Count()),
+            phoneHolds = holdLens.Select(x => Math.Round(x, 2)).ToList(),
+            holdMean = holdLens.Count > 0 ? Math.Round(holdLens.Average(), 2) : 0, holdMin = holdLens.Count > 0 ? Math.Round(holdLens.Min(), 2) : 0,
+            caps = new
+            {
+                turnAboutCoupleDegS = Math.Round(capAz, 2), rotationDegS = Math.Round(capRot, 2), eyeSpeedMS = Math.Round(capSpeed, 3), cranePitchDegS = Math.Round(capPitch, 2),
+                limits = "turn 12, rotation 12, speed 1.2 (ground ways), crane pitch 20"
+            },
+            ways, orbits, orbitFrames, orbitFramesOutside2p5to6 = orbitOut, orbitStaticFrames = orbitStatic, orbitTurningBackFrames = orbitBack,
+            frames3d, headsOutOfFrame3d = headsOut3d, headsOutAt, legendOverHeads3d = legendHeads3d, legendOverHeadsPhone = legendHeadsPhone, legendAt
+        };
     }
 
     /// <summary>the share of the frame a frustum surface covers seen from a pose (a 24 x 40 grid of the frame inside its projected quad);
@@ -330,6 +516,15 @@ public static class FilmFlowCheck
     }
 
     static string F(float v) => v.ToString("0.000", CultureInfo.InvariantCulture);
+
+    /// <summary>the angle (deg) between two rotations, exact for small angles (Quaternion.Angle returns 0 below about 0.16 deg: a slow orbit's
+    /// 0.1 deg per frame read as no turn at all)</summary>
+    static float RotAngle(Quaternion a, Quaternion b)
+    {
+        Quaternion r = Quaternion.Inverse(a) * b;
+        float v = Mathf.Sqrt(r.x * r.x + r.y * r.y + r.z * r.z);
+        return 2f * Mathf.Atan2(v, Mathf.Abs(r.w)) * Mathf.Rad2Deg;
+    }
 
     /// <summary>the couple's centre (1 m up) and the two heads in normalised screen coordinates (-1..1, y up; null behind the eye)</summary>
     static object CoupleOnScreen(FilmDirector fd, FilmPose p, float dance, float aspect)

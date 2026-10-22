@@ -364,7 +364,7 @@ public static class FilmRecorder
             j.mixLog = Path.Combine(j.filmDir, "audio", $"{j.directionName}_mix.log");
             if (j.directionExplicit && !string.Equals(d.Value<string>("capture"), capture, StringComparison.OrdinalIgnoreCase))
                 return $"{directionPath} is the film of capture '{d.Value<string>("capture")}', not '{capture}'";
-            j.tag = o.tag ?? (d["flow"] is JObject ? "v3" : "");
+            j.tag = o.tag ?? (d["flow"] is JObject fl ? ((fl["version"]?.Type == JTokenType.Integer && fl.Value<int>("version") >= 2) ? "v4" : "v3") : "");
         }
 
         if (director || j.plainMix)
@@ -527,8 +527,11 @@ public static class FilmRecorder
         if (!Directory.Exists(work)) yield break;
         foreach (string d in Directory.GetDirectories(work).OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
         {
-            // a take's v3 direction (dancecap film_recap_flow: the flights, frustum surfaces and pivot shots) is the take's film when it exists;
-            // its film/ direction stays reachable with hm_film record --direction / hm_film_show --direction
+            // a take's v4 direction (dancecap film_recap_flow --version v4: the slow orbits, long phone holds, C2 ways, faint frustums) and then
+            // its v3 direction (the flights, frustum surfaces and pivot shots) are the take's film when they exist; the older ones (v3/, film/)
+            // stay reachable with hm_film record --direction / hm_film_show --direction
+            string v4 = Path.Combine(d, "v4", "direction");
+            if (Directory.Exists(v4)) yield return v4;
             string v3 = Path.Combine(d, "v3", "direction");
             if (Directory.Exists(v3)) yield return v3;
             string f = Path.Combine(d, "film");

@@ -637,9 +637,31 @@ public class SkeletonLegend : MonoBehaviour
     /// <summary>legend rectangle (playtests: no overlap with the tour label)</summary>
     public static Rect Area => new(Screen.width - RightMargin - 300 * Scale, TopOffset(), 300 * Scale, 74 * Scale);
 
+    /// <summary>opacity of the legend (the film director fades it under a chapter card or the title in 9:16); 1 = the viewer's own</summary>
+    public static float Alpha = 1f;
+
+    static readonly System.Collections.Generic.List<SkeletonLegend> live = new();
+
+    /// <summary>a legend is switched on now (Show, enabled) - the film overlay keeps the call-out labels out of its rectangle then</summary>
+    public static bool AnyShown
+    {
+        get
+        {
+            foreach (SkeletonLegend l in live)
+            {
+                if (l != null && l.Show && l.isActiveAndEnabled) return true;
+            }
+
+            return false;
+        }
+    }
+
+    void OnEnable() => live.Add(this);
+    void OnDisable() => live.Remove(this);
+
     void OnGUI()
     {
-        if (!Show) return;
+        if (!Show || Alpha <= 0.002f) return;
         if (bar == null)
         {
             bar = new Texture2D(64, 1, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp };
@@ -662,6 +684,8 @@ public class SkeletonLegend : MonoBehaviour
             GUI.matrix = Matrix4x4.TRS(pivot, Quaternion.identity, new Vector3(Scale, Scale, 1f)) * Matrix4x4.TRS(-pivot, Quaternion.identity, Vector3.one);
         }
 
+        Color oldColour = GUI.color;
+        if (Alpha < 0.999f) GUI.color = new Color(oldColour.r, oldColour.g, oldColour.b, oldColour.a * Mathf.Clamp01(Alpha));
         GUI.Box(r, GUIContent.none);
         GUI.Label(new Rect(r.x + 8, r.y + 4, w - 16, 20), "Skeleton load - ESTIMATED from motion");
         GUI.DrawTexture(new Rect(r.x + 8, r.y + 26, w - 16, 12), bar);
@@ -670,5 +694,6 @@ public class SkeletonLegend : MonoBehaviour
         GUI.Label(new Rect(r.x + w - 98, r.y + 40, 90, 20), "compression");
         GUI.Label(new Rect(r.x + 8, r.y + 55, w - 16, 20), "legs: stance weight share  arms: partner hold");
         GUI.matrix = oldMatrix;
+        GUI.color = oldColour;
     }
 }
