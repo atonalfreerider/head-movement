@@ -118,6 +118,20 @@ namespace HmFilm
         /// <summary>the cruise law over the window [a, b] of u (0 before a, 1 after b)</summary>
         public static float CruiseRamp(float u, float a, float b, float ease) => b - a <= 1e-6f ? (u >= a ? 1f : 0f) : Cruise((u - a) / (b - a), ease);
 
+        /// <summary>
+        /// v4.2 (dancecap UNITY_CONTRACT_v4 I): the factor on a closer slow orbit's eye offset about its look point at film time t. scale = the block's
+        /// closeness (0.8: its offset is 0.8 x v4.1's); the weight w = Ramp(t, easeIn) x (1 - Ramp(t, easeOut)) (smootherstep; a missing window counts
+        /// as 1) runs from 0 at a phone way (the factor 1 / scale: v4.1's distance, so the way is v4.1's) to 1 inside the orbit (the factor 1). C2 in t.
+        /// </summary>
+        public static float CloserFactor(float scale, float t, Vector2? easeIn, Vector2? easeOut)
+        {
+            if (scale >= 0.9999f || scale <= 0.05f) return 1f;
+            float w = 1f;
+            if (easeIn.HasValue) w *= Ramp(t, easeIn.Value.x, easeIn.Value.y);
+            if (easeOut.HasValue) w *= 1f - Ramp(t, easeOut.Value.x, easeOut.Value.y);
+            return 1f + (1f / scale - 1f) * (1f - w);
+        }
+
         /// <summary>the FOV (deg) of the log-tan zoom: tan(fov / 2) = tan(a / 2)^(1 - z) x tan(b / 2)^z (an even zoom speed in the picture)</summary>
         public static float LogTanFov(float a, float b, float z)
         {

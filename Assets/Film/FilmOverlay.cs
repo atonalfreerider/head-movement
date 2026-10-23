@@ -169,9 +169,20 @@ public class FilmOverlay : MonoBehaviour
         // dancecap UNITY_CONTRACT_v4 B): in 9:16 the legend has ONE constant place at the top of the safe area (top = the 14 % band + 8 px, right
         // edge 14 px in, 1.85x) - above the dancers' heads (the phone crops and the 3D framings put the couple below it). It never steps below
         // a chapter card or the title: it fades under them (alpha = 1 - their opacity)
-        bool legendTop = vertical && director.FilmCam?.Flow != null && director.FilmCam.Flow.Version >= 2;
+        HmFilm.FlowTimeline flowTl = director.FilmCam?.Flow;
+        bool legendTop = vertical && flowTl != null && flowTl.Version >= 2;
+        // v4.2 (owner 2026-10-22: "just show the physics meter at the very top of the frame for a few seconds every time we switch physics mode on
+        // and then fade it out"; dancecap UNITY_CONTRACT_v4 H): with flow.meter the legend shows only inside the meter's windows (about 4 s after each
+        // switch-on of the physics view, faded in and out), in BOTH aspects at one constant place at the very top of the safe area, top right; under a
+        // chapter card or the title it still fades (the windows already start after a card)
+        bool meter = flowTl != null && flowTl.HasMeter;
         SkeletonLegend.Alpha = 1f;
-        if (legendTop)
+        if (meter)
+        {
+            SkeletonLegend.TopOverride = aspect.SafeTop * H + 8f * unit;
+            SkeletonLegend.Alpha = flowTl.MeterAlpha(film) * (1f - Mathf.Clamp01(Mathf.Max(cardAlpha, titleAlpha)));
+        }
+        else if (legendTop)
         {
             SkeletonLegend.TopOverride = aspect.SafeTop * H + 8f * unit;
             SkeletonLegend.Alpha = 1f - Mathf.Clamp01(Mathf.Max(cardAlpha, titleAlpha));
@@ -187,7 +198,10 @@ public class FilmOverlay : MonoBehaviour
         // v4 (the top place): 1.65x - a little smaller than v3's 1.85x, so its bottom edge (20.8 % down) stays clear of the heads in the
         // phone holds (the Jev overlay check of the first v4 excerpts flagged the 1.85x box 3-5 % above a raised head as touching it); the
         // 11 px text is then 18 px on a 1080-wide frame
-        SkeletonLegend.Scale = vertical ? Mathf.Max(1f, (legendTop ? 1.65f : 1.85f) * unit) : Mathf.Max(1f, aspect.LegendScale * unit);
+        // v4.2: the scale the direction's meter place names (9:16 1.65, 16:9 1.5), else the director's own
+        float vScale = meter && !float.IsNaN(flowTl.MeterScaleVertical) ? flowTl.MeterScaleVertical : legendTop ? 1.65f : 1.85f;
+        float hScale = meter && !float.IsNaN(flowTl.MeterScaleHorizontal) ? flowTl.MeterScaleHorizontal : aspect.LegendScale;
+        SkeletonLegend.Scale = vertical ? Mathf.Max(1f, vScale * unit) : Mathf.Max(1f, hScale * unit);
         SkeletonLegend.RightMargin = !vertical && aspect.SafeSide > 0f ? aspect.SafeSide * W : 14f;
         // 16:9: the move caption (lower left) and the graph inset (lower right) are boxes the call-out labels keep out of
         // (9:16: they sit under the top band, which LabelCeiling already excludes)
@@ -199,12 +213,13 @@ public class FilmOverlay : MonoBehaviour
             if (hud.InsetRect.width > 1f) obstacles.Add(hud.InsetRect);
         }
         float ceiling = (1f - (vertical ? aspect.SafeTop : Mathf.Max(0.04f, aspect.SafeTop))) * H;
-        if (legendTop && SkeletonLegend.AnyShown && SkeletonLegend.Alpha > 0.05f)
+        if ((legendTop || meter) && SkeletonLegend.AnyShown && SkeletonLegend.Alpha > 0.05f)
         {
-            // the legend's rectangle is an obstacle for the call-out labels, and they stay under it (screen y from the bottom)
+            // the legend's rectangle is an obstacle for the call-out labels, and in 9:16 they stay under it (screen y from the bottom); in 16:9 the
+            // readout stack runs down the top-left corner and the meter sits top right, so the ceiling stays (the stack would jump at every window)
             Rect lg = SkeletonLegend.Area;
             obstacles.Add(new Rect(lg.x, H - lg.yMax, lg.width, lg.height));
-            ceiling = Mathf.Min(ceiling, H - lg.yMax - 10f * unit);
+            if (vertical) ceiling = Mathf.Min(ceiling, H - lg.yMax - 10f * unit);
         }
 
         if (vertical && hud.Visible && hudAlpha > 0.05f) ceiling = Mathf.Min(ceiling, H - hud.BottomFromTop - 10f * unit);

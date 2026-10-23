@@ -306,6 +306,101 @@ namespace HmFilm.Tests
             Assert.AreEqual(1f, tl.VideoCover(10f), Eps);
         }
 
+        // ------------------------------------------------------------------ v4.2: the physics meter's windows (flow.meter)
+
+        static JObject SyntheticV42()
+        {
+            JObject d = SyntheticV4();
+            d["flow"]["revision"] = "4.2";
+            d["flow"]["meter"] = new JObject
+            {
+                ["schema"] = "hm film meter v1", ["fade_in_s"] = 0.3, ["hold_s"] = 4.0, ["fade_out_s"] = 1.0,
+                ["place"] = new JObject { ["vertical"] = new JObject { ["scale"] = 1.65 }, ["horizontal"] = new JObject { ["scale"] = 1.5 } },
+                ["windows"] = new JArray(
+                    new JObject { ["on_s"] = 12.0, ["start_s"] = 12.0, ["full_s"] = 12.3, ["fade_s"] = 16.0, ["end_s"] = 17.0 },
+                    new JObject { ["on_s"] = 36.0, ["start_s"] = 38.0, ["full_s"] = 38.3, ["fade_s"] = 39.5, ["end_s"] = 40.5 })
+            };
+            return d;
+        }
+
+        [Test]
+        public void MeterFadesInHoldsAndFadesOut()
+        {
+            FlowTimeline tl = FlowTimeline.Build(SyntheticV42());
+            Assert.AreEqual(0, tl.Warnings.Count, string.Join("; ", tl.Warnings));
+            Assert.IsTrue(tl.HasMeter);
+            Assert.AreEqual(2, tl.MeterWindows.Count);
+            Assert.AreEqual(1.65f, tl.MeterScaleVertical, Eps);
+            Assert.AreEqual(1.5f, tl.MeterScaleHorizontal, Eps);
+            // hidden before its switch-on, up over 0.3 s (smootherstep: half at the middle), shown to 4 s after its start, gone 1 s later
+            Assert.AreEqual(0f, tl.MeterAlpha(11.99f), Eps);
+            Assert.AreEqual(0f, tl.MeterAlpha(12f), Eps);
+            Assert.AreEqual(0.5f, tl.MeterAlpha(12.15f), 1e-3f);
+            Assert.AreEqual(1f, tl.MeterAlpha(12.3f), Eps);
+            Assert.AreEqual(1f, tl.MeterAlpha(14f), Eps);
+            Assert.AreEqual(1f, tl.MeterAlpha(16f), Eps);
+            Assert.AreEqual(0.5f, tl.MeterAlpha(16.5f), 1e-3f);
+            Assert.AreEqual(0f, tl.MeterAlpha(17f), Eps);
+            Assert.AreEqual(0f, tl.MeterAlpha(25f), Eps, "between the windows (the physics colours may still be on) the meter is gone");
+            // smooth: no step anywhere (the steepest smootherstep step over the 0.3-s fade in), within 0..1, and flat at the fades' ends (C2 edges)
+            float prev = 0f, maxStep = 0f;
+            for (float t = 11.9f; t < 17.1f; t += 1f / 300f)
+            {
+                float a = tl.MeterAlpha(t);
+                Assert.GreaterOrEqual(a, -Eps);
+                Assert.LessOrEqual(a, 1f + Eps);
+                maxStep = Mathf.Max(maxStep, Mathf.Abs(a - prev));
+                prev = a;
+            }
+
+            Assert.LessOrEqual(maxStep, 1.875f / (0.3f * 300f) + 1e-3f);
+            Assert.Less(tl.MeterAlpha(12.01f), 1e-3f);
+            Assert.Greater(tl.MeterAlpha(16.99f), 0f);
+            Assert.Less(tl.MeterAlpha(16.99f), 1e-3f);
+            // a window cut short (its physics view ended early) still fades out, from fade_s to end_s
+            Assert.AreEqual(0.5f, tl.MeterAlpha(40f), 1e-3f);
+            // without flow.meter (v4.1 and older) the legend follows the physics layer alone: alpha 1
+            FlowTimeline old = FlowTimeline.Build(SyntheticV4());
+            Assert.IsFalse(old.HasMeter);
+            Assert.AreEqual(1f, old.MeterAlpha(25f), Eps);
+            // a broken window is reported, not played
+            JObject bad = SyntheticV42();
+            ((JArray)bad["flow"]["meter"]["windows"]).Add(new JObject { ["start_s"] = 50.0, ["end_s"] = 49.0 });
+            FlowTimeline tb = FlowTimeline.Build(bad);
+            Assert.AreEqual(2, tb.MeterWindows.Count);
+            Assert.AreEqual(1, tb.Warnings.Count);
+        }
+
+        [Test]
+        public void CloserOrbitEasesFromTheV41DistanceAtAPhoneWay()
+        {
+            // an orbit between a phone way out (ends 34.75 s) and a phone way in (starts 99.5 s), 0.8 x closer with 6-s eases
+            Vector2 ein = new(34.75f, 40.75f), eout = new(93.5f, 99.5f);
+            float F(float t) => FlowMath.CloserFactor(0.8f, t, ein, eout);
+            Assert.AreEqual(1.25f, F(30f), Eps, "inside the way out: v4.1's distance (the way is v4.1's)");
+            Assert.AreEqual(1.25f, F(34.75f), Eps);
+            Assert.AreEqual(1.125f, F(37.75f), 1e-4f, "half way through the ease");
+            Assert.AreEqual(1f, F(40.75f), Eps);
+            Assert.AreEqual(1f, F(60f), Eps, "the settled orbit: 0.8 x v4.1's offset");
+            Assert.AreEqual(1f, F(93.5f), Eps);
+            Assert.AreEqual(1.25f, F(99.5f), Eps, "at the way in: v4.1's distance again");
+            // C2 at the ease's edges: no slope, no curvature where it leaves the way's distance and where it reaches the closeness
+            Assert.Less(Mathf.Abs(D1(F, 34.8f, 1e-3f)), 1e-3f);
+            Assert.Less(Mathf.Abs(D2(F, 34.85f, 5e-3f)), 2e-2f);
+            Assert.Less(Mathf.Abs(D1(F, 40.7f, 1e-3f)), 1e-3f);
+            // the dolly is slow: a 0.89-m change of the eye's distance (9:16: 4.46 -> 3.57 m) over 6 s peaks at 1.875 x 0.89 / 6 = 0.28 m/s
+            float peak = 0f;
+            for (float t = 34.75f; t <= 40.75f; t += 0.01f) peak = Mathf.Max(peak, Mathf.Abs(D1(F, t, 1e-3f)));
+            Assert.AreEqual(1.875f * 0.25f / 6f, peak, 2e-3f);
+            Assert.Less(peak * 3.571f, 0.3f);
+            // not a closer block / no eases
+            Assert.AreEqual(1f, FlowMath.CloserFactor(1f, 30f, ein, eout), Eps);
+            Assert.AreEqual(1f, FlowMath.CloserFactor(0.8f, 30f, null, null), Eps);
+            // the opening orbit (0 - 5.17 s, then the way into the first phone): closer at the start, v4.1's distance at its way
+            Assert.AreEqual(1f, FlowMath.CloserFactor(0.8f, 0f, null, new Vector2(0f, 5.17f)), Eps);
+            Assert.AreEqual(1.25f, FlowMath.CloserFactor(0.8f, 5.17f, null, new Vector2(0f, 5.17f)), Eps);
+        }
+
         // ------------------------------------------------------------------ the real v4 direction (skipped without the workspace's file)
 
         static string V4Direction
@@ -370,6 +465,79 @@ namespace HmFilm.Tests
                 if (w.Shot == tl.Shots.Count - 1) continue;
                 tl.Surfaces(w.Departure, s1);
                 Assert.IsTrue(s1.Any(x => x.Camera == w.Phone && x.Alpha > 0.999f && x.Top > 0.999f), $"phone {w.Phone}: no opaque surface at the departure {w.Departure}");
+            }
+
+            if (tl.Revision != "4.2") return;
+            // v4.2: the physics meter - one window per switch-on of the physics view in the layer timeline (none dropped here), each starting at or
+            // after its switch-on, 0.3 s up, shown to 4 s after its start, 1 s down; never over a chapter card; gone between the windows
+            Assert.IsTrue(tl.HasMeter);
+            List<(float start, bool on)> layer = new();
+            for (int i = 0; i < segs.Count; i++)
+            {
+                JObject L = segs[i]["layers"] as JObject;
+                bool on = L?.Value<string>("skeleton_mode") == "physics" || (L?.Value<bool?>("physics") ?? false);
+                layer.Add((tl.LayerStart(i), on));
+            }
+
+            layer = layer.OrderBy(x => x.start).ToList();
+            List<float> switchOns = new();
+            for (int i = 0; i < layer.Count; i++)
+                if (layer[i].on && (i == 0 || !layer[i - 1].on)) switchOns.Add(layer[i].start);
+            Assert.AreEqual(switchOns.Count, tl.MeterWindows.Count, $"switch-ons {string.Join(", ", switchOns)}");
+            List<(float a, float b)> cards = new();
+            foreach (JObject s in segs.Cast<JObject>())
+            {
+                if (s["chapter_card"] is not JObject cc) continue;
+                float f0 = s["film"][0].Value<float>(), f1 = s["film"][1].Value<float>();
+                cards.Add((f0 + (cc.Value<float?>("film_in") ?? 0.3f), Mathf.Min(f1, f0 + (cc.Value<float?>("film_out") ?? 2.9f))));
+            }
+
+            for (int k = 0; k < tl.MeterWindows.Count; k++)
+            {
+                FlowMeterWindow m = tl.MeterWindows[k];
+                Assert.AreEqual(switchOns[k], m.On, 0.01f);
+                Assert.GreaterOrEqual(m.Start, m.On - 1e-3f);
+                Assert.AreEqual(0.3f, m.Full - m.Start, 2e-3f);
+                Assert.AreEqual(4f, m.Fade - m.Start, 2e-3f);
+                Assert.AreEqual(1f, m.End - m.Fade, 2e-3f);
+                Assert.IsFalse(cards.Any(c => m.Start < c.b && m.End > c.a), $"meter window {m.Start}-{m.End} over a chapter card");
+                Assert.AreEqual(0f, tl.MeterAlpha(m.End + 0.5f), Eps);
+            }
+
+            // the slow orbits 0.8 x v4.1's distance about the couple (both aspects), the lens chosen for the v4.1 distance
+            foreach (JObject s in segs.Cast<JObject>())
+            {
+                JObject cam = (JObject)s["camera"];
+                if (cam["v4"]?.Value<string>("role") != "slow_orbit") continue;
+                JObject v41 = cam["v4"]?["closer"]?["v41"] as JObject;
+                Assert.NotNull(v41, $"{s["id"]}: no v4.1 record");
+                Assert.AreEqual(0.8f * v41.Value<float>("radius_m"), cam.Value<float>("radius_m"), 2e-3f);
+                Assert.AreEqual(0.8f * v41.Value<float>("radius_vertical_m"), cam.Value<float>("radius_vertical_m"), 2e-3f);
+                Assert.AreEqual(1.25f, cam.Value<float>("lens_distance_scale"), 1e-3f);
+                Assert.GreaterOrEqual(cam.Value<float>("radius_m"), 1.4f);
+            }
+
+            // ... and at every phone way the orbit is back at v4.1's distance (the ease ends where the way starts / starts where the way ends)
+            Vector2? Win(JToken t) => t is JArray a && a.Count == 2 ? new Vector2(a[0].Value<float>(), a[1].Value<float>()) : null;
+            foreach (FlowShot sh in tl.Shots)
+            {
+                JObject cam = (JObject)segs[sh.FirstSegment]["camera"];
+                if (cam["v4"]?.Value<string>("role") != "slow_orbit") continue;
+                Vector2? ein = Win(cam["closer_in_s"]), eout = Win(cam["closer_out_s"]);
+                if (sh.T != null && sh.T.Type == "phone_out")
+                {
+                    Assert.IsTrue(ein.HasValue, $"{sh.FirstSegmentId}: no ease after the phone way out");
+                    Assert.AreEqual(sh.TransEnd, ein.Value.x, 0.01f);
+                    Assert.AreEqual(1.25f, FlowMath.CloserFactor(0.8f, sh.TransEnd, ein, eout), 1e-3f);
+                }
+
+                FlowShot next = sh.Index + 1 < tl.Shots.Count ? tl.Shots[sh.Index + 1] : null;
+                if (next?.T != null && next.T.Type == "phone_in")
+                {
+                    Assert.IsTrue(eout.HasValue, $"{sh.FirstSegmentId}: no ease before the phone way in");
+                    Assert.AreEqual(next.TransStart, eout.Value.y, 0.01f);
+                    Assert.AreEqual(1.25f, FlowMath.CloserFactor(0.8f, next.TransStart, ein, eout), 1e-3f);
+                }
             }
         }
     }

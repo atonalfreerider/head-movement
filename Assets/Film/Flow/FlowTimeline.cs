@@ -218,6 +218,21 @@ namespace HmFilm
         public float Arrival, Departure, SplatsHidden, OverlaysIn, OverlaysOff, SplatsBackIn;
     }
 
+    /// <summary>v4.2 flow.meter.windows[]: one showing of the physics meter (the skeleton-load legend) after a switch-on of the physics view - up by
+    /// a smootherstep over [Start, Full], 1 until Fade, down by a smootherstep to 0 at End (film seconds)</summary>
+    public struct FlowMeterWindow
+    {
+        public float On, Start, Full, Fade, End;
+
+        public float At(float film)
+        {
+            if (film < Start || film > End) return 0f;
+            float up = film < Full ? FlowMath.Ramp(film, Start, Full) : 1f;
+            float down = film > Fade ? 1f - FlowMath.Ramp(film, Fade, End) : 1f;
+            return Mathf.Min(up, down);
+        }
+    }
+
     /// <summary>
     /// The timing of a v3 direction (top-level "flow"): shots and their transitions, the phones' full-frame windows, the frustum surfaces with
     /// their envelopes tied to the camera's own arrival / departure times (so the surface and the full-frame video hand over in the same frame),
@@ -246,6 +261,14 @@ namespace HmFilm
         public bool GhostOverFullFrame;
         public readonly List<string> GhostPhones = new();
 
+        /// <summary>v4.2 flow.meter: the physics meter shows only inside these windows (a few seconds at each switch-on of the physics view); without
+        /// the block (HasMeter false) it shows whenever the physics layer is on, as before</summary>
+        public readonly List<FlowMeterWindow> MeterWindows = new();
+        public bool HasMeter;
+
+        /// <summary>v4.2 flow.meter.place: the meter's size factor per aspect (the 300 x 74 px box; 9:16 1.65, 16:9 1.5); NaN = the director's own</summary>
+        public float MeterScaleVertical = float.NaN, MeterScaleHorizontal = float.NaN;
+
         /// <summary>the hand-off covers are complete this long before an arrival and stay complete this long after a departure (a little over a
         /// frame at 30 fps): the frames on both sides of a switch show the phone's video alone, exactly</summary>
         public const float CoverHoldS = 0.04f;
@@ -270,6 +293,33 @@ namespace HmFilm
                 {
                     foreach (JToken t in gp) tl.GhostPhones.Add(t.ToString());
                 }
+            }
+
+            if (flow["meter"] is JObject meter)
+            {
+                tl.HasMeter = true;
+                if (meter["windows"] is JArray mw)
+                {
+                    foreach (JToken t in mw)
+                    {
+                        if (t is not JObject w) continue;
+                        FlowMeterWindow m = new() { On = F(w["on_s"]), Start = F(w["start_s"]), Full = F(w["full_s"]), Fade = F(w["fade_s"]), End = F(w["end_s"]) };
+                        if (float.IsNaN(m.Start) || float.IsNaN(m.End) || m.End <= m.Start)
+                        {
+                            tl.Warnings.Add($"flow.meter: a window without start_s < end_s ({w})");
+                            continue;
+                        }
+
+                        if (float.IsNaN(m.Full)) m.Full = m.Start;
+                        if (float.IsNaN(m.Fade)) m.Fade = m.End;
+                        m.Full = Mathf.Clamp(m.Full, m.Start, m.End);
+                        m.Fade = Mathf.Clamp(m.Fade, m.Full, m.End);
+                        tl.MeterWindows.Add(m);
+                    }
+                }
+
+                tl.MeterScaleVertical = F(meter["place"]?["vertical"]?["scale"]);
+                tl.MeterScaleHorizontal = F(meter["place"]?["horizontal"]?["scale"]);
             }
 
             if (flow["defaults"] is JObject def)
@@ -523,6 +573,16 @@ namespace HmFilm
             if (!GhostEnabled || GhostPhones.Count == 0) return 0f;
             if (!GhostOverFullFrame && WindowAt(film) >= 0) return 0f;
             return GhostOpacity;
+        }
+
+        /// <summary>v4.2: the physics meter's opacity at film (the largest of its windows'; 0 outside them); 1 without flow.meter (the meter then
+        /// follows the physics layer alone, as before v4.2)</summary>
+        public float MeterAlpha(float film)
+        {
+            if (!HasMeter) return 1f;
+            float a = 0f;
+            foreach (FlowMeterWindow w in MeterWindows) a = Mathf.Max(a, w.At(film));
+            return a;
         }
 
         /// <summary>film time from which segment i's layers apply (its F0, or for the first segment of a shot with a transition F0 + layers_switch_s)</summary>

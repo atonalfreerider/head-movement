@@ -298,6 +298,8 @@ public static class FilmFlowCheck
     /// ways, the crane's pitch), the acceleration jump at both ends of every way (C2: the one-sided second differences over 3 frames), the
     /// orbits' settled rate about the couple (1-s central differences; 2.5-6 deg/s, never static, never turning back), the moves and holds, the
     /// couple's heads out of the frame in the 3D views and - 9:16 - under the physics legend's place (14.4-20.8 % down, 53-99 % across).
+    /// v4.2: the heads under the meter only while it shows (flow.meter windows, both aspects), and per orbit the eye's distance to the couple, its
+    /// radius, the nearest dancer, the lens and the higher head's screen height (the closer orbits).
     /// </summary>
     static object V4Measures(FilmDirector fd, FilmCamera fc, FlowTimeline flow, Vector3[] eye, Vector3[] look, Quaternion[] rot, float[] fov, float[] time, string[] state,
         float fps, float t0, float t1, float aspect, bool[] phoneOwn, bool[] pov)
@@ -306,8 +308,11 @@ public static class FilmFlowCheck
         float[] az = new float[n], azLook = new float[n], pitch = new float[n];
         bool[] cut = new bool[n];
         bool[] povF = new bool[n];
-        int headsOut3d = 0, legendHeads3d = 0, legendHeadsPhone = 0, frames3d = 0;
+        int headsOut3d = 0, legendHeads3d = 0, legendHeadsPhone = 0, frames3d = 0, meterFrames = 0;
         List<string> headsOutAt = new(), legendAt = new();
+        // v4.2: the eye's distance to the couple (its smoothed centre 1 m up), its horizontal radius, the nearest dancer (pelvis, horizontal), the higher
+        // head's screen height (-1 bottom .. 1 top) - per frame, for the orbits' numbers below
+        float[] eyeDist = new float[n], eyeRad = new float[n], nearDancer = new float[n], headTop = new float[n];
         FilmTargets tg = fd.Targets;
         for (int i = 0; i < n; i++)
         {
@@ -336,8 +341,18 @@ public static class FilmFlowCheck
             Quaternion inv = Quaternion.Inverse(rot[i]);
             float ty = Mathf.Tan(fov[i] * 0.5f * Mathf.Deg2Rad), tx = ty * aspect;
             bool outF = false, underLegend = false;
+            eyeDist[i] = Vector3.Distance(eye[i], c + Vector3.up);
+            eyeRad[i] = new Vector2(eye[i].x - c.x, eye[i].z - c.z).magnitude;
+            nearDancer[i] = float.PositiveInfinity;
+            headTop[i] = float.NaN;
+            // v4.2 (flow.meter): the meter shows only inside its windows, in both aspects (9:16 at 1.65x: 52.9-98.7 % across, 14.4-20.8 % down; 16:9 at
+            // 1.5x: 71.6-95.0 % across, 5.7-16.0 % down); before v4.2 the 9:16 legend was there whenever the physics colours were
+            bool meterOn = flow.HasMeter ? flow.MeterAlpha(time[i]) >= 0.05f : fd.Vertical;
+            if (flow.HasMeter && meterOn) meterFrames++;
             foreach (string role in new[] { "lead", "follow" })
             {
+                Vector3 pel = tg.Joint(tg.DancerOf(role), SmplJoint.Pelvis, dance);
+                if (!float.IsNaN(pel.x)) nearDancer[i] = Mathf.Min(nearDancer[i], new Vector2(eye[i].x - pel.x, eye[i].z - pel.z).magnitude);
                 Vector3 h = tg.Joint(tg.DancerOf(role), SmplJoint.Head, dance);
                 if (float.IsNaN(h.x)) continue;
                 Vector3 v = inv * (h + Vector3.up * 0.12f - eye[i]);
@@ -348,8 +363,11 @@ public static class FilmFlowCheck
                 }
 
                 float x = v.x / (v.z * tx), y = v.y / (v.z * ty);
+                headTop[i] = float.IsNaN(headTop[i]) ? y : Mathf.Max(headTop[i], y);
                 if (Mathf.Abs(x) > 1f || Mathf.Abs(y) > 1f) outF = true;
-                if (fd.Vertical && x > 0.058f && x < 0.974f && y > 0.584f && y < 0.712f) underLegend = true; // the v4 place at 1.65x: 52.9-98.7 % across, 14.4-20.8 % down
+                if (!meterOn) continue;
+                if (fd.Vertical && x > 0.058f && x < 0.974f && y > 0.584f && y < 0.712f) underLegend = true;
+                if (!fd.Vertical && flow.HasMeter && x > 0.431f && x < 0.9f && y > 0.680f && y < 0.885f) underLegend = true;
             }
 
             if (!povF[i])
@@ -436,9 +454,19 @@ public static class FilmFlowCheck
             float drift = fs.P("drift_deg_s", float.NaN);
             float lo = float.PositiveInfinity, hi = 0f;
             int frames = 0;
+            List<float> dists = new(), rads = new(), fovs = new(), tops = new();
+            float nearMin = float.PositiveInfinity;
             for (int i = 0; i < n; i++)
             {
                 string own = $"{s.Mode} {s.FirstSegmentId}";
+                if (s.Mode == "orbit" && state[i] == own)
+                {
+                    dists.Add(eyeDist[i]);
+                    rads.Add(eyeRad[i]);
+                    fovs.Add(fov[i]);
+                    if (!float.IsNaN(headTop[i])) tops.Add(headTop[i]);
+                    nearMin = Mathf.Min(nearMin, nearDancer[i]);
+                }
                 if (fc.Shots.Count <= s.Index || state[i] != own) continue;
                 bool pure = true;
                 for (int k = Math.Max(0, i - 15); k <= Math.Min(n - 1, i + 15) && pure; k++) pure = state[k] == own;
@@ -457,7 +485,36 @@ public static class FilmFlowCheck
             }
 
             if (frames > 0)
-                orbits.Add(new { shot = s.FirstSegmentId, film = $"{F(s.F0)}-{F(s.F1)}", planDriftDegS = drift, frames, rateMin = Math.Round(lo, 2), rateMax = Math.Round(hi, 2) });
+                orbits.Add(new
+                {
+                    shot = s.FirstSegmentId, film = $"{F(s.F0)}-{F(s.F1)}", planDriftDegS = drift, frames, rateMin = Math.Round(lo, 2), rateMax = Math.Round(hi, 2),
+                    planRadiusM = Math.Round(fs.P(fd.Vertical ? "radius_vertical_m" : "radius_m", float.NaN), 3), eyeDistanceMedianM = Math.Round(Median(dists), 3),
+                    eyeDistanceMinM = dists.Count > 0 ? Math.Round(dists.Min(), 3) : double.NaN, radiusMedianM = Math.Round(Median(rads), 3),
+                    nearestDancerMinM = Math.Round(nearMin, 3), fovMedianDeg = Math.Round(Median(fovs), 2), headTopMedian = Math.Round(Median(tops), 3)
+                });
+        }
+
+        // every orbit frame together (v4.2: 0.8 x v4.1's distance)
+        List<float> allDist = new(), allRad = new(), allFov = new(), allTop = new();
+        float allNear = float.PositiveInfinity;
+        for (int i = 0; i < n; i++)
+        {
+            if (!state[i].StartsWith("orbit ")) continue;
+            allDist.Add(eyeDist[i]);
+            allRad.Add(eyeRad[i]);
+            allFov.Add(fov[i]);
+            if (!float.IsNaN(headTop[i])) allTop.Add(headTop[i]);
+            allNear = Mathf.Min(allNear, nearDancer[i]);
+        }
+
+        // the closest the eye comes to a dancer in any ground-level 3D frame (orbits and their ways, not the cranes / overheads / phone video)
+        float groundNear = float.PositiveInfinity, groundRad = float.PositiveInfinity;
+        for (int i = 0; i < n; i++)
+        {
+            if (povF[i] || state[i].StartsWith("overhead_floorcraft") || state[i].StartsWith("crane")) continue;
+            if (eye[i].y > 2.6f) continue;
+            groundNear = Mathf.Min(groundNear, nearDancer[i]);
+            groundRad = Mathf.Min(groundRad, eyeRad[i]);
         }
 
         List<float> holdLens = flow.Windows.Select(w => w.Departure - w.Arrival).ToList();
@@ -473,8 +530,23 @@ public static class FilmFlowCheck
                 limits = "turn 12, rotation 12, speed 1.2 (ground ways), crane pitch 20"
             },
             ways, orbits, orbitFrames, orbitFramesOutside2p5to6 = orbitOut, orbitStaticFrames = orbitStatic, orbitTurningBackFrames = orbitBack,
-            frames3d, headsOutOfFrame3d = headsOut3d, headsOutAt, legendOverHeads3d = legendHeads3d, legendOverHeadsPhone = legendHeadsPhone, legendAt
+            orbitAll = new
+            {
+                frames = allDist.Count, eyeDistanceMedianM = Math.Round(Median(allDist), 3), eyeDistanceMinM = allDist.Count > 0 ? Math.Round(allDist.Min(), 3) : double.NaN,
+                radiusMedianM = Math.Round(Median(allRad), 3), radiusMinM = allRad.Count > 0 ? Math.Round(allRad.Min(), 3) : double.NaN, nearestDancerMinM = Math.Round(allNear, 3),
+                fovMedianDeg = Math.Round(Median(allFov), 2), headTopMedian = Math.Round(Median(allTop), 3)
+            },
+            groundLevel3d = new { nearestDancerMinM = Math.Round(groundNear, 3), radiusMinM = Math.Round(groundRad, 3) },
+            frames3d, headsOutOfFrame3d = headsOut3d, headsOutAt, legendOverHeads3d = legendHeads3d, legendOverHeadsPhone = legendHeadsPhone, legendAt,
+            meter = new { windows = flow.MeterWindows.Count, framesShown = meterFrames, hasMeter = flow.HasMeter }
         };
+    }
+
+    static float Median(List<float> xs)
+    {
+        if (xs.Count == 0) return float.NaN;
+        List<float> s = xs.Where(x => !float.IsNaN(x) && !float.IsInfinity(x)).OrderBy(x => x).ToList();
+        return s.Count == 0 ? float.NaN : s[s.Count / 2];
     }
 
     /// <summary>the share of the frame a frustum surface covers seen from a pose (a 24 x 40 grid of the frame inside its projected quad);

@@ -448,11 +448,27 @@ public class FilmCamera
         return Mathf.Abs(Mathf.DeltaAngle(a * Mathf.Rad2Deg, pa * Mathf.Rad2Deg)) <= Mathf.Abs(Mathf.DeltaAngle(b * Mathf.Rad2Deg, pa * Mathf.Rad2Deg)) ? a : b;
     }
 
+    /// <summary>v4.2: the factor on a closer slow orbit's eye offset at film (1 = the block's, 0.8 x v4.1's; 1 / scale = v4.1's): camera.v4.closer.scale
+    /// with the weight w = Ramp(closer_in_s) x (1 - Ramp(closer_out_s)) (smootherstep; a missing window counts as 1); 1 for any other block</summary>
+    static float CloserFactor(FilmShot s, float film)
+    {
+        float k = FilmDirection.F(s.Camera["v4"]?["closer"]?["scale"], 1f);
+        Vector2? win = s.Camera["closer_in_s"] is JArray a && a.Count == 2 ? new Vector2(a[0].Value<float>(), a[1].Value<float>()) : null;
+        Vector2? wout = s.Camera["closer_out_s"] is JArray b && b.Count == 2 ? new Vector2(b[0].Value<float>(), b[1].Value<float>()) : null;
+        return HmFilm.FlowMath.CloserFactor(k, film, win, wout);
+    }
+
     FilmPose Orbit(FilmShot s, float film, float dance, float radius, float height, float lookH, float period)
     {
         Vector3 c = CoupleFollow(s, film);
         // 9:16 stands further back (the narrow frame) unless the shot names its own radius_vertical_m (the heat films' closer portrait framing)
         if (Vertical) radius = s.Camera["radius_vertical_m"] != null ? s.P("radius_vertical_m", radius) : radius * 1.25f;
+        // v4.2 (dancecap UNITY_CONTRACT_v4 I): the closer slow orbit - the block's offset is 0.8 x v4.1's; next to a phone way it eases (closer_in_s /
+        // closer_out_s, smootherstep) back to v4.1's distance at the way, so the way's live end state - and the way - are v4.1's. A pure function of film
+        // time: the eye's offset about the look point scales (radius, the height above the look point, the inline lift's cap), never the look point
+        float closer = CloserFactor(s, film);
+        radius *= closer;
+        height = lookH + (height - lookH) * closer;
         // opt-in camera keys of the class recap's talking shots (a direction without them gets exactly the orbit it always got):
         // focus = lead | follow with focus_weight 0..1 - the orbit centre leans toward that dancer (a talk shot follows the speaker);
         // fit_span = true - the lens widens (then the eye backs off) until both dancers stay inside the frame however far apart they stand
@@ -478,7 +494,7 @@ public class FilmCamera
             : SideAzimuth(s, 1) + RunAngle(s, film, r => OrbitRate(r));
         if (s.B("avoid_inline"))
         {
-            float cap = s.Camera["inline_lift_max_m"] != null ? s.P("inline_lift_max_m", 0.4f) : float.PositiveInfinity;
+            float cap = (s.Camera["inline_lift_max_m"] != null ? s.P("inline_lift_max_m", 0.4f) : float.PositiveInfinity) * closer;
             float lift;
             if (flow != null && flow.Version >= 2 && s.Camera["world_azimuth_deg"] != null)
             {
@@ -511,7 +527,11 @@ public class FilmCamera
         }
         Vector3 eye = c + new Vector3(Mathf.Cos(phi) * radius, height, Mathf.Sin(phi) * radius);
         Vector3 look = c + Vector3.up * lookH;
-        FilmPose p = new() { Eye = eye, Look = look, Up = Vector3.up, Fov = CoupleFov(Vector3.Distance(eye, look)), ScreenY = ScreenYFor() };
+        // v4.2 opt-in `lens_distance_scale` (the class recap's closer slow orbits, dancecap UNITY_CONTRACT_v4 I): the lens is chosen for the eye distance x
+        // this - the v4.1 distance of an orbit moved 0.8 x closer - so the dancers fill more of the frame instead of CoupleFov widening the closeness away;
+        // divided by the closer factor, so the lens stays the v4.1 lens through the ease (a dolly in / out with a fixed lens)
+        float lensScale = Mathf.Clamp(s.P("lens_distance_scale", 1f) / Mathf.Max(0.1f, closer), 0.5f, 2f);
+        FilmPose p = new() { Eye = eye, Look = look, Up = Vector3.up, Fov = CoupleFov(Vector3.Distance(eye, look) * lensScale), ScreenY = ScreenYFor() };
         // opt-in `fov_scale` (the 16:9 recap's `horizontal` block): the lens narrowed by this factor, so the couple fills more of a wide frame (fit_span
         // below still widens it whenever the dancers stand apart)
         float fovScale = s.P("fov_scale", 1f);
@@ -524,6 +544,14 @@ public class FilmCamera
         {
             FitBand(ref p, new Vector3(c.x, 0f, c.z), FilmDirection.F(vb["top_m"], 1.95f), FilmDirection.F(vb["band_lo"], 0.31f), FilmDirection.F(vb["band_hi"], 0.77f),
                 Mathf.Max(24f, p.Fov), 66f);
+        }
+
+        // v4.2 (UNITY_CONTRACT_v4 I): the same in 16:9 - the closer orbit's couple between the caption block and the top of the frame (the lens only
+        // widens when the couple would not fit; the composition moves up so the feet stay above the captions)
+        if (!Vertical && s.Camera["horizontal_band"] is JObject hb && (hb.Value<bool?>("fit_band") ?? false))
+        {
+            FitBand(ref p, new Vector3(c.x, 0f, c.z), FilmDirection.F(hb["top_m"], 1.9f), FilmDirection.F(hb["band_lo"], 0.17f), FilmDirection.F(hb["band_hi"], 0.95f),
+                Mathf.Max(24f, p.Fov), 55f);
         }
 
         return p;

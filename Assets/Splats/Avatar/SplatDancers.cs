@@ -661,6 +661,21 @@ public sealed class SplatDancers : MonoBehaviour
         return null;
     }
 
+    /// <summary>the film's face sidecar (v4.2: the face swap applies to the splat dancers only): how much of a role's body is drawn as splats now,
+    /// 0..1 - the composite opacity while that dancer's splats are drawn (its splat avatar loaded and its avatar slot visible, as OpaqueBodiesNow),
+    /// else 0 (splats off, not loaded, or the dancer hidden)</summary>
+    public static float ShownFor(Role role)
+    {
+        SplatDancers s = Instance;
+        if (!splatsOn || s == null) return 0f;
+        foreach (Entry e in s.entries)
+        {
+            if (e.Role == role && e.Splat != null && e.Avatar != null && e.Avatar.Visible) return Mathf.Clamp01(s.CompositeOpacity());
+        }
+
+        return 0f;
+    }
+
     public static float FilmVideoFade()
     {
         FilmDirector fd = FilmDirector.Instance;

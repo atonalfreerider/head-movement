@@ -17,8 +17,9 @@ using UnityEngine.UI;
 /// face_points_canonical.json) and projected by the recording camera into the recorder's output size, their depths, the face's yaw / pitch /
 /// roll relative to the line of sight, the inter-ocular distance, the head size, the visibility of 9 samples (capsules of the partner's body and
 /// the dancer's own forearms / hands), the screen rectangles of the overlays (captions, cards, readouts, call-out pills, the legend), the
-/// phone video's opacity and every v3 frustum surface drawn this frame (its polygon and corner depths). dancecap.film_faceswap reads it to swap
-/// only the dancers' faces and never a face on a phone's video.
+/// phone video's opacity and every v3 frustum surface drawn this frame (its polygon and corner depths), and (v4.2) per dancer the layer its face
+/// is drawn on ("layer": splat / avatar / skeleton / none, "la": that layer's opacity). dancecap.film_faceswap reads it to swap only the splat
+/// dancers' faces and never a face on a phone's video, a frustum picture or any other layer.
 ///
 /// The recorder (FilmRecorder, hm_film record --faces on|off|auto) calls Begin after the director's Begin, the director's late pass (FilmLate)
 /// calls Tick after the frame's overlays are laid out, and the recorder calls End when it stops the Movie Recorder (the frame it stops on is
@@ -239,9 +240,13 @@ public sealed class FilmFaceSidecar
         b.Append("{\"k\": ").Append(Q(d.Key));
         if (!HeadMatrix(d.Role, out Matrix4x4 s))
         {
-            b.Append(", \"in\": 0}");
+            b.Append(", \"in\": 0, \"layer\": \"none\", \"la\": 0}");
             return;
         }
+
+        // v4.2 (the face swap applies to the splat dancers only): the layer this dancer's face is drawn on now and its opacity
+        string layer = FaceLayer(d.Role, out float layerAlpha);
+        b.Append(", \"layer\": ").Append(Q(layer)).Append(", \"la\": ").Append(N(layerAlpha, 3));
 
         float near = cam.nearClipPlane;
         Vector2[] lm = new Vector2[5];
@@ -273,6 +278,25 @@ public sealed class FilmFaceSidecar
         b.Append("], \"z\": [").Append(string.Join(", ", z.Select(v => N(v, 4)))).Append(']');
         b.Append(", \"yaw\": ").Append(N(yaw, 2)).Append(", \"pitch\": ").Append(N(pitch, 2)).Append(", \"roll\": ").Append(N(roll, 2));
         b.Append(", \"iod\": ").Append(N(iod, 2)).Append(", \"size\": ").Append(N(size, 2)).Append(", \"vis\": ").Append(N(vis, 3)).Append(", \"by\": ").Append(Q(by)).Append('}');
+    }
+
+    /// <summary>v4.2: which layer a dancer's face is drawn on this frame - "splat" (its splats are drawn: SplatDancers.ShownFor, alpha = their composite
+    /// opacity), "avatar" (the mesh avatar instead, alpha = its opacity), "skeleton" (neither: only lines / overlays, or the body hidden under a phone's
+    /// video). dancecap.film_faceswap swaps a face only on "splat"</summary>
+    static string FaceLayer(Role role, out float alpha)
+    {
+        alpha = SplatDancers.ShownFor(role);
+        if (alpha > 0.001f) return "splat";
+        alpha = 0f;
+        HeadMovement hm = HeadMovement.Instance;
+        if (SplatDancers.SplatOf(role) == null && hm != null && hm.Avatars != null && hm.Avatars.TryGetValue(role, out SmplxAvatar av) && av != null && av.Visible)
+        {
+            alpha = Mathf.Clamp01(av.Opacity);
+            if (alpha > 0.001f) return "avatar";
+        }
+
+        alpha = 0f;
+        return "skeleton";
     }
 
     /// <summary>the share of the 9 samples a ray from the camera reaches without hitting the partner's body (head 0.11 m, torso 0.15, upper arm /
@@ -388,7 +412,8 @@ public sealed class FilmFaceSidecar
         if (legends == null || legends.Any(x => x == null)) legends = UnityEngine.Object.FindObjectsByType<SkeletonLegend>(FindObjectsInactive.Include);
         foreach (SkeletonLegend l in legends)
         {
-            if (l == null || !l.Show || !l.isActiveAndEnabled) continue;
+            // v4.2: the meter fades in and out (SkeletonLegend.Alpha): listed only while it shows
+            if (l == null || !l.Show || !l.isActiveAndEnabled || SkeletonLegend.Alpha < 0.05f) continue;
             Rect r = SkeletonLegend.Area;
             rects.Add(new Rect(r.x * sx, r.y * sy, r.width * sx, r.height * sy));
         }
