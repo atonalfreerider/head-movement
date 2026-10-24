@@ -289,10 +289,17 @@ public class HeadMovement : MonoBehaviour
             {
                 ["lead"] = Lead != null ? Lead.RoleAlpha : 1f, ["follow"] = Follow != null ? Follow.RoleAlpha : 1f
             },
+            // the dancer's body is shown (not role-hidden): its mesh avatar, or for a dancer with splat data the splats posed from it
             ["avatarDrawn"] = new Dictionary<string, bool>
             {
                 ["lead"] = avatars.TryGetValue(Role.Lead, out SmplxAvatar la) && la != null && la.Visible,
                 ["follow"] = avatars.TryGetValue(Role.Follow, out SmplxAvatar fa) && fa != null && fa.Visible
+            },
+            // the mesh avatar itself is rendered (SmplxAvatar.Drawn): always false for a dancer with splat data (owner rule 2026-10-23)
+            ["meshDrawn"] = new Dictionary<string, bool>
+            {
+                ["lead"] = avatars.TryGetValue(Role.Lead, out SmplxAvatar lm) && lm != null && lm.Drawn,
+                ["follow"] = avatars.TryGetValue(Role.Follow, out SmplxAvatar fm) && fm != null && fm.Drawn
             },
             ["avatarOpacity"] = new Dictionary<string, float>
             {
@@ -683,8 +690,13 @@ public class HeadMovement : MonoBehaviour
 
             try
             {
-                SmplxAvatar avatar = SmplxAvatar.Create(skin, motion, role, null, manifest.RolePath(manifest.smplx_albedo, role));
-                if (manifest.smplx_albedo != null && !avatar.Textured) Warn($"{role}: albedo declared but not applied");
+                // owner rule 2026-10-23: a dancer with a splat avatar (splats/<role>.json) is never drawn as its mesh avatar - the avatar is
+                // built as an invisible rig (the splats, the hair simulation and physics ride on its bones), without its albedo (archived for
+                // such a capture: dancecap export_unity archive-avatars), its renderers off from the start (SplatDancers keeps them off)
+                bool rigOnly = manifest.HasSplatAvatar(role);
+                SmplxAvatar avatar = SmplxAvatar.Create(skin, motion, role, null, rigOnly ? null : manifest.RolePath(manifest.smplx_albedo, role));
+                if (rigOnly) RigOnly(avatar);
+                else if (manifest.smplx_albedo != null && !avatar.Textured) Warn($"{role}: albedo declared but not applied");
                 DanceOrigin.Place(avatar.transform);
                 if (avatar.FrameCount < FrameCount) Warn($"{role} avatar has {avatar.FrameCount} frames < {FrameCount}");
                 avatar.Opacity = EffectiveAvatarOpacity * roleAlpha[(int)role & 1];
@@ -707,6 +719,7 @@ public class HeadMovement : MonoBehaviour
         }
 
         LoadHair();
+        if (avatars.TryGetValue(Role.Follow, out SmplxAvatar hairOn) && hairOn != null && manifest.HasSplatAvatar(Role.Follow)) RigOnly(hairOn); // the hair cards too
         Stage(0.62f, "hair");
         if (async) yield return null;
         try
@@ -755,6 +768,13 @@ public class HeadMovement : MonoBehaviour
                 Warn($"physics.json unreadable ({e.Message}) - physics layer disabled");
             }
         }
+    }
+
+    /// <summary>every renderer under a rig-only avatar off (a dancer with a splat avatar: never drawn as its mesh avatar; SplatDancers keeps
+    /// them off, also those attachments add later)</summary>
+    static void RigOnly(SmplxAvatar avatar)
+    {
+        foreach (Renderer r in avatar.GetComponentsInChildren<Renderer>(true)) r.forceRenderingOff = true;
     }
 
     /// <summary>the follow's groomed, simulated hair (Assets/Hair) when the capture has hair_groom.json; it lives on the

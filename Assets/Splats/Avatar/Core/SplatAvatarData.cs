@@ -87,6 +87,24 @@ namespace HmSplats
             return JsonPath(captureFolder, role);
         }
 
+        /// <summary>the json of a role in ANY named set of the capture (splats/&lt;set&gt;/&lt;role&gt;.json, the first set in ordinal order), or null.
+        /// A data folder that carries only a distilled set (no full splats/&lt;role&gt;.json) still has a splat dancer for the role: it is
+        /// drawn from that set, never as its mesh avatar (CaptureManifest.HasSplatAvatar counts the same files)</summary>
+        public static string AnySetJsonPath(string captureFolder, string role)
+        {
+            string splats = Path.Combine(captureFolder, "splats");
+            if (!Directory.Exists(splats)) return null;
+            string[] sets = Directory.GetDirectories(splats);
+            Array.Sort(sets, StringComparer.Ordinal);
+            foreach (string set in sets)
+            {
+                string s = Path.Combine(set, role.ToLowerInvariant() + ".json");
+                if (File.Exists(s)) return s;
+            }
+
+            return null;
+        }
+
         /// <summary>read and validate a json + splatav pair (thread-safe: no Unity API calls)</summary>
         public static SplatAvatarData Load(string jsonPath)
         {

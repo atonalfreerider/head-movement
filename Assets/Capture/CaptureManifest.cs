@@ -92,6 +92,25 @@ public class CaptureManifest
 
     public string PathOf(string relative) => string.IsNullOrEmpty(relative) ? null : Path.Combine(Folder, relative);
 
+    /// <summary>the capture has a splat avatar for this role (splats/&lt;role&gt;.json, dancecap SPLAT_AVATAR_FORMAT.md). Owner rule 2026-10-23: such a
+    /// dancer is always drawn as splats and never as its mesh avatar (SplatDancers; docs/SPLAT_DANCERS.md "Splats always") - the mesh avatar
+    /// is built as an invisible rig only (the splats, the hair simulation and physics ride on its bones). A named set alone
+    /// (splats/&lt;set&gt;/&lt;role&gt;.json, e.g. the Quest's distilled set) counts too: such a dancer is drawn from that set.</summary>
+    public bool HasSplatAvatar(Role role)
+    {
+        if (Folder == null) return false;
+        string name = role.ToString().ToLowerInvariant() + ".json";
+        string splats = Path.Combine(Folder, "splats");
+        if (File.Exists(Path.Combine(splats, name))) return true;
+        if (!Directory.Exists(splats)) return false;
+        foreach (string set in Directory.GetDirectories(splats))
+        {
+            if (File.Exists(Path.Combine(set, name))) return true;
+        }
+
+        return false;
+    }
+
     public string JointsPath(Role role) =>
         PathOf(dancers.First(d => string.Equals(d.role, role.ToString(), StringComparison.OrdinalIgnoreCase)).joints);
 

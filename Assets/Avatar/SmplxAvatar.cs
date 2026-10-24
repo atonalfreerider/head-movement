@@ -145,6 +145,10 @@ public class SmplxAvatar : MonoBehaviour
     public int CurrentFrame => frame;
     /// <summary>drawn now: the avatars layer is on and Opacity > 0.005</summary>
     public bool Visible => skinned != null && skinned.enabled;
+
+    /// <summary>the mesh body is actually drawn: Visible and not switched off as a rig (a dancer with a splat avatar is never drawn as its
+    /// mesh avatar: SplatDancers keeps every renderer under it forceRenderingOff; Visible still drives the splats)</summary>
+    public bool Drawn => Visible && !skinned.forceRenderingOff;
     /// <summary>the avatars layer flag (hm_layer avatars), independent of opacity</summary>
     public bool LayerVisible => layerVisible;
 

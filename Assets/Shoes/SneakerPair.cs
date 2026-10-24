@@ -99,13 +99,16 @@ public class SneakerPair : MonoBehaviour
         HeadMovement.AvatarsLoaded += OnAvatarsLoaded;
     }
 
-    /// <summary>shoes for every avatar of a freshly loaded capture (shoes.json optional: neutral sneakers without it)</summary>
+    /// <summary>shoes for every avatar of a freshly loaded capture (shoes.json optional: neutral sneakers without it) - except a dancer with a
+    /// splat avatar (splats/&lt;role&gt;.json): never drawn as its mesh avatar (owner rule 2026-10-23), so it gets no sneakers (its splats
+    /// wear the filmed shoes; the capture's shoes.json is archived when both dancers have splats)</summary>
     static void OnAvatarsLoaded(HeadMovement hm)
     {
         string json = hm.Manifest?.OptionalPath("shoes.json");
         foreach (KeyValuePair<Role, SmplxAvatar> kv in hm.Avatars)
         {
             if (kv.Value == null) continue;
+            if (hm.Manifest != null && hm.Manifest.HasSplatAvatar(kv.Key)) continue;
             try
             {
                 Create(kv.Value, kv.Value.SkinPath, json, hm.Timeline != null ? hm.Timeline.AudioTimeOf : null);

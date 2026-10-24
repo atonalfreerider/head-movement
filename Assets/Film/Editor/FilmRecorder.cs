@@ -944,6 +944,8 @@ public static class FilmRecorder
         }
 
         j.splatDancers = SplatDancers.Enabled;
+        // a capture with splat dancers this device cannot draw shows its skeleton lines (never the mesh avatars): say so in the report
+        if (!string.IsNullOrEmpty(SplatDancers.CannotDrawNote)) j.warnings.Add(SplatDancers.CannotDrawNote);
         j.graphicsApi = SystemInfo.graphicsDeviceType.ToString();
         bool modernApi = SystemInfo.graphicsDeviceType is UnityEngine.Rendering.GraphicsDeviceType.Direct3D12 or UnityEngine.Rendering.GraphicsDeviceType.Vulkan;
         j.orderedReadback = j.readbackMode == "ordered" || (j.readbackMode == "auto" && (j.splatDancers || modernApi));

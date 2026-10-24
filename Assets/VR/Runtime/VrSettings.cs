@@ -30,7 +30,7 @@ namespace HmVr
     ///     "eye_scale": 0.0,            // 0 = by device (1.0 on Quest 3, 0.9 on Quest 2)
     ///     "refresh_hz": 72,            // asked from the runtime when it offers it
     ///     "perf_log": true,            // frame statistics to logcat every 5 s (tag Unity, prefix HM-PERF)
-    ///     "splats": true,              // the splat dancers (photoreal Gaussians) for a lesson whose capture has splats/ (the recap); false = the mesh avatars
+    ///     "splats": true,              // ignored for a capture with splats/: its dancers are always drawn as splats, never as the mesh avatars (docs/SPLAT_DANCERS.md "Splats always"); logged only
     ///     "splat_max": 0,              // at most this many Gaussians per dancer (0 = the Quest default, SplatDancers.QuestDefaultMax; -1 = all)
     ///     "splat_max_sigma": 0.0,      // clamp every Gaussian's standard deviation to this many metres (0 = the Quest default; -1 = none)
     ///     "splat_path": "",            // "composite" | "direct" (empty = the Quest default)
@@ -74,7 +74,7 @@ namespace HmVr
         public float SplatScale, SplatAlphaCutoff;
         /// <summary>"splat_sort_every" / -hmsplatsort (0 = the Quest default)</summary>
         public int SplatSortEvery;
-        /// <summary>"splats" was named by the settings file or the -hmsplats switch (a Windows player keeps its own default otherwise: on in VR, off on the desktop)</summary>
+        /// <summary>"splats" was named by the settings file or the -hmsplats switch (logged in the HM-SPLATS tier line only: a capture with splat data is drawn as splats whatever it says)</summary>
         public bool SplatsGiven;
         /// <summary>Load() made this (the file and the command line were read)</summary>
         public bool Loaded;

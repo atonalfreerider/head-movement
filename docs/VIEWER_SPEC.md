@@ -54,7 +54,7 @@ optional layer exists.
 | Photoreal avatar textures | optional | texture bake |
 | Hair groom + simulation parameters | optional | hair |
 | Source camera videos + per-frame camera tracks | optional (desktop camera tour only) | ingest + cameras |
-| Gaussian splats of the **dancers only** (4D sequence) | optional, future; layer **off by default** (on by default for a capture whose capture.json asks for it, §3.2a) | — |
+| Gaussian splats of the **dancers only** (skinned splat avatars) | optional; a dancer with splat data is **always** drawn as splats, never as its mesh avatar (owner 2026-10-23, §3.2a) | — |
 | Room reconstruction (mesh / splats) | not displayed (kept only as alignment reference) | room |
 
 ### 2.2 Dance metadata, silos and categories
@@ -179,17 +179,29 @@ optional layer exists.
   (hand-hand and hand-body connections between the dancers are refined so contacting hands meet).
 
 ### 3.2a Gaussian splats — dancers only
-- Splats show **only the dancers** — literally nothing else: no floor, no room, no spectators. The splat
-  layer is **off by default**; when switched on it replaces or overlays the avatars (4D dancer splats are
-  future work). The room reconstruction is not displayed in any mode.
-- **Default per capture** (owner 2026-10-23: make the splat dancers the default for one capture): a capture whose
-  `capture.json` has `"splat_dancers": "on"` (dancecap `takes/<take>.toml [export] splat_dancers`) shows its splat dancers
-  by default — in the Editor when the device can draw them (D3D12 / Vulkan / Metal with compute; otherwise the avatars
-  and one log line naming `-force-d3d12`) and nobody set the toggle by hand this editor session (`hm_splatdancers --action
-  on | off` still wins; `--action auto` gives the default back), and in a Windows player on the desktop as in VR. The
-  Quest is unchanged (every capture with `splats/` is on there). Captures without the key keep the default above. A
-  dancer parked under the floor while absent from the cameras (capture.json `absent`) draws no splats. A capture loaded
-  while the splats are off reads no splat files (they load when switched on). `docs/SPLAT_DANCERS.md` "Default per capture".
+- Splats show **only the dancers** — literally nothing else: no floor, no room, no spectators. The room
+  reconstruction is not displayed in any mode.
+- **Splats always** (owner 2026-10-23: "I don't ever want to see the basic avatars if gauss splat avatars are available
+  for a dance. fully archive them when they are replaced with gauss splats."): a dancer whose capture has splat data for
+  its role (`splats/<role>.json`, or only a named set's `splats/<set>/<role>.json`, which it is then drawn from) is ALWAYS drawn as splats — Editor (every view and layer, Play mode, the film director
+  and recorder), Windows player (desktop and VR), Quest — and its mesh avatar (body, shoes, head props, hair cards, tip
+  glows) is never drawn; it stays as an invisible rig (the splats, the hair simulation and physics ride on its bones).
+  Nothing brings the mesh avatars back for such a capture: `hm_splatdancers --action off` is refused, a player's
+  `"splats": false` / `-hmsplats off` is ignored, an earlier hand toggle of the editor session no longer counts, the
+  capture.json `splat_dancers` flag decides nothing. A dancer without splat data keeps its mesh avatar (§3.2).
+- **Fallback**: a device that cannot draw splats (D3D11 — start the editor / exe with `-force-d3d12` —, GLES, no compute
+  shaders; a player's 3-s rendering watchdog; a splat file that cannot be read) shows those dancers' **skeleton lines**,
+  never the mesh avatar, with one log line and an on-screen note ("splat dancers need D3D12: ..."; bottom centre on an opaque panel,
+  above the timing ticker, clear of the HUD text).
+- **Archive**: the capture files only a mesh avatar reads (`<role>_albedo.png`, `smplx_<role>_face.bin`; `shoes.json` when
+  both dancers have splats) leave a capture with splat data: dancecap `export_unity archive-avatars` moves them into the
+  take's git-ignored archive (`archive.json`, restore with `--restore`), and the exporters never put them back (their
+  validators count an archived file as present). The motion, the rig's skin (rest skeleton), the hair groom and every layer's
+  data stay. The film library's poster of such a dance is a still of its splat dancers (the mesh still archived too:
+  `export_unity archive-poster`), and `Tools/deploy_data.ps1` mirrors each capture folder, so a deploy carries none of the
+  archived files.
+- A dancer parked under the floor while absent from the cameras (capture.json `absent`) draws no splats.
+  `docs/SPLAT_DANCERS.md` "Splats always".
 
 ### 3.2b Head-worn props (the performance headset)
 - Some dancers wear a head-worn performance microphone in the source videos (a class taught with a headset). The avatar can wear it as a
@@ -637,7 +649,8 @@ floor and walks a full circle around her, pivoting her in place.
 - CLI: `hm_hide` reports the spans, the alpha now and what is drawn; `hm_hide --role lead --until 4 --fade 1` (from the first frame),
   `--from a --to b [--fade s --fadeout s]`, `--spans "a:b:fadeIn:fadeOut;c:d"`, `--clear true` edit them for a session (capture seconds).
   hm_state `roleHidden` carries `spans`, `spansAudio`, `alphaNow`, `hiddenNow`, `captureTime`, `skeletonLinesDrawn`, `skeletonAlpha`,
-  `avatarDrawn`, `avatarOpacity`, `contactLightsAlpha`; the overlay blocks carry `roleHidden`.
+  `avatarDrawn` (the dancer's body is shown: its mesh avatar, or the splats posed from it), `meshDrawn` (the mesh avatar itself is
+  rendered: always false for a dancer with splat data, §3.2a), `avatarOpacity`, `contactLightsAlpha`; the overlay blocks carry `roleHidden`.
 - Exporter: `takes/<take>.toml` `[export] role_hidden = { lead = [ { from = 0.0, to = 4.0, fade_in = 1.0 } ] }`
   (`export_unity.resolve_role_hidden`, checked by `demo_export.validate`), so a re-export keeps it. Playtest: `Tools/playtest_role_hidden.ps1`.
 
@@ -1002,8 +1015,8 @@ translucent avatars. A Quest standalone quality tier is specified in docs/QUEST.
   rendered as one ribbon mesh.
 - No video decoding (no source videos in VR).
 - Dance graph: nodes GPU-instanced per icon shape, labels pooled; ≤ 300 nodes at full rate.
-- No room reconstruction (the real room is visible in passthrough); dancer splats, when they exist, are off
-  by default.
+- No room reconstruction (the real room is visible in passthrough); dancer splats, when they exist, are the dancers
+  (never their mesh avatars, §3.2a).
 - Transparency: limit overdraw (depth pre-pass avatars, no full-screen transparent layers).
 
 ---
@@ -1175,7 +1188,7 @@ pipeline (MOVES.md).
   outside cuts.
 - Avatars: each body 65 % ± 4 % transparent as displayed by default, every part alike (hm_opacity --probe: p10..p90
   within 6 points), skeletons visible inside; per-state opacity = default × state factor; from either side the nearer dancer's translucent queues come after the farther dancer's (back to front);
-  the room and splat layers start off.
+  the room layer starts off; a dancer with splat data shows its splats and 0 mesh-avatar renderers drawn (§3.2a).
 - Film library (Tools/playtest_library.ps1, section 7.1): the start screen has one card per film of library.json and nothing else (the
   pickers' capture list is the library's); a film without its capture, direction or soundtrack is Processing with a disabled Play and
   a click on it starts nothing; the Play button's click starts the film with the bar (a scrubber spanning the screen, one tick per
@@ -1211,8 +1224,8 @@ Decided by the user (2026-10-06):
   **Sarrada**; Little Turn is the **Viradinha**.
 - Directed playback shows the move caption with a confidence score and the graph inset (§3.12).
 - Each dance is a reaction "Leader + Follower × Song" producing its fingerprint (§3.13).
-- Splats show the dancers only (no floor or room), off by default (on for a capture whose capture.json asks for it, §3.2a); the room
-  reconstruction is not shown.
+- Splats show the dancers only (no floor or room); a dancer with splat data is always drawn as splats, never as its mesh avatar
+  (skeleton lines where the device cannot draw them, §3.2a); the room reconstruction is not shown.
 - Hair matches the follower's shape and colour and keeps the tip bloom; faces from portraits; expressions and hand
   contact refined (§3.2).
 - Graph chase camera zoomed far out, may be slightly inside the graph (§5.5).

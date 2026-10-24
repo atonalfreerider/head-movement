@@ -16,7 +16,9 @@ The Quest tier file (pushed as hm_data/quest_settings.json) is picked per headse
 
 What it copies, for every film of StreamingAssets/library/library.json that is ready:
   <capture>/                  the capture folder without .meta files: avatars (smplx bins, albedo), hair groom, shoes / head props, room mesh, audio,
-                              physics / timing data - and without the phones' *.hmj frame strips and *.mp4 clips unless -PhoneVideo
+                              physics / timing data, splats/ - and without the phones' *.hmj frame strips and *.mp4 clips unless -PhoneVideo.
+                              Mirrored: a file the capture no longer has is removed from -Out (and its -Bake .hmtex), e.g. the mesh-avatar
+                              files of a capture with splat dancers (archived: docs/SPLAT_DANCERS.md "Splats always")
   library/films/<id>/         the film: direction.json, narration/timeline*.json, audio/<name>_mix.wav (the soundtrack), emoji, chapters
   library/thumbs/             the posters
   library/library.json        rewritten so every path is relative to the library folder
@@ -58,10 +60,37 @@ function Resolve-Data([string]$p) {
     return $null
 }
 
-function Copy-Tree([string]$from, [string]$to, [string[]]$exclude = @()) {
+function Copy-Tree([string]$from, [string]$to, [string[]]$exclude = @(), [switch]$Purge) {
     New-Item -ItemType Directory -Force $to | Out-Null
     & robocopy $from $to /E /NFL /NDL /NJH /NJS /NP /XF *.meta @exclude | Out-Null
     if ($LASTEXITCODE -ge 8) { throw "robocopy $from failed ($LASTEXITCODE)" }
+    if ($Purge) { Remove-Stale $from $to }
+}
+
+# A capture folder in -Out mirrors its StreamingAssets folder: a file the source no longer has is removed (e.g. the mesh-avatar files a
+# capture with splat dancers no longer carries: their albedo, shoes.json - docs/SPLAT_DANCERS.md "Splats always"), and with it the
+# headset texture bake of a PNG that is gone (<png>.hmtex, <png>.hmtex.json, written by -Bake). A bake of a PNG still in the source stays,
+# and so do the phone strips / clips an earlier -PhoneVideo copied (the source still has them). Without this, robocopy /E never removes
+# anything and the next -Push would carry stale files to the headset again.
+function Remove-Stale([string]$from, [string]$to) {
+    $root = (Resolve-Path $to).Path.TrimEnd("\", "/")
+    $gone = 0
+    foreach ($f in @(Get-ChildItem $root -Recurse -File)) {
+        $rel = $f.FullName.Substring($root.Length).TrimStart("\", "/")
+        if (Test-Path -LiteralPath (Join-Path $from $rel)) { continue }
+        $png = $rel -replace "\.hmtex(\.json)?$", ""
+        if ($png -ne $rel -and (Test-Path -LiteralPath (Join-Path $from $png))) { continue }
+        Remove-Item -LiteralPath $f.FullName -Force
+        Write-Host "  removed stale $rel (no longer in the capture)"
+        $gone++
+    }
+    foreach ($d in @(Get-ChildItem $root -Recurse -Directory | Sort-Object { $_.FullName.Length } -Descending)) {
+        $rel = $d.FullName.Substring($root.Length).TrimStart("\", "/")
+        if (-not (Test-Path -LiteralPath (Join-Path $from $rel)) -and -not (Get-ChildItem -LiteralPath $d.FullName -Force)) {
+            Remove-Item -LiteralPath $d.FullName -Force
+        }
+    }
+    return
 }
 
 $lib = Get-Content $libFile -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -74,7 +103,7 @@ foreach ($f in $lib.films) {
     if (-not (Test-Path $capDir) -or -not $dir -or -not (Test-Path $dir)) { Write-Host "skip $($f.id): capture or film not ready"; continue }
     Write-Host "== $($f.id)  ($($f.capture))"
     $exclude = if ($PhoneVideo) { @() } else { @("*.hmj", "*.mp4") }
-    Copy-Tree $capDir (Join-Path $out $f.capture) $exclude
+    Copy-Tree $capDir (Join-Path $out $f.capture) $exclude -Purge
 
     $film = Split-Path $dir -Parent
     $name = (Get-Content $dir -Raw -Encoding UTF8 | ConvertFrom-Json).name

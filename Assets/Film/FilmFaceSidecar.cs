@@ -289,7 +289,8 @@ public sealed class FilmFaceSidecar
         if (alpha > 0.001f) return "splat";
         alpha = 0f;
         HeadMovement hm = HeadMovement.Instance;
-        if (SplatDancers.SplatOf(role) == null && hm != null && hm.Avatars != null && hm.Avatars.TryGetValue(role, out SmplxAvatar av) && av != null && av.Visible)
+        // av.Drawn: a dancer with splat data is never drawn as its mesh avatar (owner rule 2026-10-23): no splats shown = "skeleton"
+        if (SplatDancers.SplatOf(role) == null && hm != null && hm.Avatars != null && hm.Avatars.TryGetValue(role, out SmplxAvatar av) && av != null && av.Drawn)
         {
             alpha = Mathf.Clamp01(av.Opacity);
             if (alpha > 0.001f) return "avatar";

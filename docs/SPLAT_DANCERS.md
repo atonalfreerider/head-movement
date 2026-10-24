@@ -1,15 +1,16 @@
 # Splat dancers: skinned Gaussian-splat dancers in the viewer (PC and Quest)
 
-Written 2026-10-20. VIEWER_SPEC 3.2a (the splat layer shows the dancers only and is off by default on the desktop, on by default
-for a capture whose capture.json asks for it: "Default per capture" below). The data contract is the
+Written 2026-10-20. VIEWER_SPEC 3.2a (the splat layer shows the dancers only; since 2026-10-23 a dancer with splat data is ALWAYS
+drawn as splats and never as its mesh avatar: "Splats always" below). The data contract is the
 workspace's `dancecap/docs/SPLAT_AVATAR_FORMAT.md` (`splats/<role>.splatav` + `<role>.json` in a capture folder; LHM++ skinned
 Gaussians, canonical pose = the shaped SMPL-X zero pose, Unity coordinates). The capture data is likeness data and lives only in the
 git-ignored `Assets/StreamingAssets/<capture>/splats/`.
 
 ## Use it
 
-    unity command hm_splatdancers --action on | off | state      # the "splat dancers" toggle by hand (wins for the editor session)
-    unity command hm_splatdancers --action auto                  # forget the hand choice: each capture's default again
+    unity command hm_splatdancers --action state                 # enabled, why, cannotDrawNote, per dancer look + meshRenderersDrawn
+    unity command hm_splatdancers --action on | auto             # apply the rule to the loaded capture again (no reload when built)
+    unity command hm_splatdancers --action off                   # REFUSED for a capture with splat data (no way back to the meshes)
     unity command hm_splatdancers --action hair --mode skinned | hidden | only
     unity command hm_splatdancers --action hairmotion --mode strands | rigid   # bound hair on the simulated strands (default) / LHM++ LBS
     unity command hm_splatdancers --action haircheck [--from <dance s> --to <dance s>]   # hair pass vs CPU reference, swing, intrusion, stray hair
@@ -20,33 +21,83 @@ git-ignored `Assets/StreamingAssets/<capture>/splats/`.
     unity command hm_splatdancers --action check                 # GPU skinning vs the CPU reference + splat joints vs avatar bones
     unity command hm_splatdancers --action perf_start | perf_report
 
-While on, each dancer whose capture has a splat avatar is drawn as Gaussians instead of the mesh avatar: every Renderer under the avatar
+Each dancer whose capture has a splat avatar is drawn as Gaussians and never as its mesh avatar: every Renderer under the avatar
 (body, shoes, head props, hair cards, tip glows) gets `forceRenderingOff`, and a `SkinnedSplatAvatar` is posed every frame from the
-avatar's own bones, so playback, seeks, slow motion, the film director's sub-frame poses and the film recorder all drive it. The toggle
-set by hand survives Play-mode restarts for the rest of the editor session (SessionState, so `hm_film record` records splats when it
-was on); a new editor session starts with it unset: each capture's default (below). Splats hide with the avatars layer, inside
-role-hidden spans, when the avatar opacity is 0 and while the dancer is parked (below).
+avatar's own bones, so playback, seeks, slow motion, the film director's sub-frame poses and the film recorder all drive it. Splats
+hide with the avatars layer, inside role-hidden spans, when the avatar opacity is 0 and while the dancer is parked (below).
 
-## Default per capture (2026-10-23)
+## Splats always (owner rule 2026-10-23)
 
-A capture shows its splat dancers by default when its `capture.json` asks for it: `"splat_dancers": "on"` (`CaptureManifest.splat_dancers`;
-written by dancecap `export_unity` from `takes/<take>.toml [export] splat_dancers = "on"`; absent / `"off"` = the viewer default). The
-decision is one pure function, `SplatDancersDefault.Decide` (`Core/SplatDancersDefault.cs`, EditMode tests
+> "I don't ever want to see the basic avatars if gauss splat avatars are available for a dance. fully archive them when they are
+> replaced with gauss splats."
+
+**The rule.** A dancer whose capture has splat data for its role (`splats/<role>.json`, or only a named set's
+`splats/<set>/<role>.json`: `CaptureManifest.HasSplatAvatar`; such a dancer is drawn from that set, `SplatAvatarData.AnySetJsonPath`)
+is ALWAYS drawn as splats - in the Editor
+(every view and layer, Play mode, the film director and `hm_film record`), in a Windows player (desktop and VR) and on the Quest - and
+its mesh avatar is never drawn. The avatar is still built, as an invisible RIG: the splats, the hair simulation (`HairStrands`, which
+moves the bound splat hair) and the physics / contact layers ride on its bones. `HeadMovement.LoadV3Routine` builds such an avatar
+without its albedo and switches its renderers off at creation (`RigOnly`; also the hair cards after `LoadHair`); `SplatDancers` hides
+every renderer under it from the capture load on (`Rebuild` -> `ApplyVisibility`, then a scan every frame, so an attachment added
+later is off on its first frame) and never gives them back; the sneakers are not built for it (`SneakerPair`), the dance graph's
+miniature couple shows its skeleton only (`MiniatureCouple`), the film's face sidecar never calls it "avatar" (`SmplxAvatar.Drawn`).
+While the splats load (1-5 s) the dancer shows its skeleton lines. A dancer without splat data keeps its mesh avatar exactly as before.
+
+The decision is one pure function, `SplatDancersDefault` (`Core/SplatDancersDefault.cs`, EditMode tests
 `Tests/Editor/SplatDancersDefaultTests.cs`), applied by `SplatDancers` at every capture load (`HeadMovement.AvatarsLoaded`):
 
-| where | the splat dancers at a capture load |
-|---|---|
-| Editor | set by hand this editor session (`hm_splatdancers --action on` / `off`): that, for every capture, as before. Otherwise ON for a flagged capture that has `splats/<role>.json` when the device can draw them (D3D12 / Vulkan / Metal with compute shaders), else OFF |
-| Editor, flagged capture on D3D11 / OpenGL / no compute | OFF (the mesh avatars) and one warning per capture: `splat dancers: capture default refused: ... D3D11: the renderer needs D3D12 - start the editor with -force-d3d12; avatars` |
-| Windows player | `"splats"` / `-hmsplats` when given; otherwise ON in VR (as before) and, for a flagged capture with `splats/`, ON on the desktop too; never without a drawing path (the `HM-SPLATS tier` line says why) |
-| Quest | unchanged: on unless `"splats": false` / `-hmsplats off` (every capture with `splats/`) |
+| the dancer | the device draws splats (D3D12 / Vulkan / Metal with compute) | the device cannot (D3D11, GLES, no compute; the players' 3-s watchdog; a splat file that fails to read or build) |
+|---|---|---|
+| has `splats/<role>.json` (or a set's) | its splats (`look` Splats) | its SKELETON LINES (`look` Skeleton) - never the mesh avatar - plus one log line and an on-screen note (`SplatDancers.CannotDrawNote`, e.g. "splat dancers need D3D12: start the editor with -force-d3d12 - skeleton lines shown ..."; bottom centre on an opaque panel, above the timing ticker, clear of the HUD text); a film recorded there gets the note as a report warning |
+| has none | its mesh avatar (`look` MeshAvatar), as before | its mesh avatar, as before |
 
-Loading an unflagged capture after a flagged one turns the splats off again (the avatars come back, the Gaussians feature leaves the URP
-renderer). A capture loaded while the splats are off reads none of its splat files (`state`: `count` 0, `loadSeconds` 0); switching
-them on later loads them then (before 2026-10-23 every capture load after the first flagged one read both files, 1.5-4.3 s, with the
-splats off). `hm_splatdancers --action state` reports `why` (e.g. `capture default (capture.json splat_dancers on)` or `viewer default (off
-on the desktop)`), `handSet` and `captureFlag`; `--action auto` forgets the hand choice and applies the loaded capture's default. A film
-recorded from a flagged capture records splats without any `hm_splatdancers` call (`FilmRecorder` reads `SplatDancers.Enabled`).
+Nothing switches a capture with splat data back to its mesh avatars:
+- `hm_splatdancers --action off` is REFUSED with the reason (the CLI fails; use `hm_layer --layer avatars --visible false` to hide the
+  dancers). There is no debug override. `on` / `auto` apply the rule again (`SplatDancers.Reapply`: nothing is reloaded when the splats
+  of the loaded capture are built). On a capture without splat data `off` answers "nothing to switch off".
+- The SessionState of the old hand toggle (`HM.SplatDancers.On` / `.Explicit`) is erased at every Play-mode start and never read: an
+  "off" an editor session still held does not matter.
+- A player's `"splats": false` / `-hmsplats off` is ignored for such a capture (the `HM-SPLATS tier` line says so); the Quest
+  knobs (`splat_set`, `splat_max`, ...) still apply.
+- capture.json `"splat_dancers"` (`CaptureManifest.splat_dancers`, the per-capture default of the morning of 2026-10-23, from
+  `takes/<take>.toml [export] splat_dancers`) is still read and decides nothing: every capture with splat data is drawn with it.
+
+On a device without a splat path no `GaussiansGroup` is created (the instance only keeps the meshes hidden) and no splat file is read.
+`hm_splatdancers --action state` reports `enabled`, `why` (e.g. "the capture has splat dancers: always drawn as splats (owner rule
+2026-10-23)"), `cannotDrawNote`, `noPath`, `captureFlag` and per dancer `look` and `meshRenderersDrawn` (renderers under the avatar
+that are enabled and not `forceRenderingOff`: 0 for a dancer with splats); `hm_state` `roleHidden.meshDrawn` says the same per
+dancer (`SmplxAvatar.Drawn`; `avatarDrawn` stays "the dancer's body is shown", splats or mesh). A film recorded from such a capture records splats without
+any `hm_splatdancers` call (`FilmRecorder` reads `SplatDancers.Enabled`; its face sidecar marks every shown face "splat").
+
+**Archived mesh avatars.** The capture files only the mesh avatar reads are moved out of a capture with splat data (dancecap
+`python -m dancecap.export_unity archive-avatars --capture <capture> [--restore]`; the workspace's `dancecap/docs/SPLAT_AVATAR_FORMAT.md`
+section 11): `<role>_albedo.png` and `smplx_<role>_face.bin` of each dancer with splats, and `shoes.json` when both dancers have
+splats, from `StreamingAssets/<capture>/` (their `.meta` files too) and from the take's export mirror into the take's git-ignored
+`work/<take>/archive/mesh_avatars_2026-10-23/<capture>/` with `archive.json` (original path, sha256, size, why, the restore command).
+Kept: `smplx_<role>.bin` (the motion), `smplx_<role>_skin.bin` (the rig's rest joints and parents, the hair simulation's scalp and
+colliders), `hair_groom.json` (the hair simulation that moves the bound splat hair), the skeleton joints and every layer's data.
+capture.json keeps its `smplx_albedo` entries; the viewer neither loads nor warns about the albedo of a dancer with splats. dancecap's
+`export_unity.export` (and the `face_export` / `shoes` installers) write these kinds into the archive, never back into such a capture,
+and the capture validators (`demo_export.validate`, behind the recap / heat exporters' `--validate-only`) count an archived file as
+present ("archived (splat dancers)", checked by sha256) instead of failing on it. A restore does not bring the meshes back on screen
+while `splats/` exists: restore when the splats are taken away.
+
+**Posters.** The film library's card of a dance with splat dancers shows a still of its splat dancers (re-made 2026-10-23 at the
+old cards' framing, 1080x1920): `python -m dancecap.export_unity archive-poster --capture <capture> --film <id> --new <still>` moves
+the mesh still - the library's `thumbs/<id>.jpg` (its `.meta` stays: same asset) and the `takes/library/films.toml` source that
+`film_library build` copies over it - into the same archive (`archive.json` "posters", with the new still's sha256 and how it was
+made); `--restore` puts them back too. **Deploy.** `Tools/deploy_data.ps1` mirrors each capture folder into `-Out`: a file the
+capture no longer has (and its `-Bake` `.hmtex`) is removed, so a layout or a `-Push` carries none of the archived files.
+
+Checked 2026-10-23 (Editor Play mode, D3D12) on the three captures with splats: 0 mesh renderers drawn in the normal view, the physics
+view and through playback, seeks, view switches and the capture load itself (a per-camera sampler: 600-900 game-camera renders each,
+maximum 0 drawn, splats in every render); hair live where the file binds it; the physics view's lines, beads, axes and centre-of-mass
+spheres over the splats (11-12 renderers); no console errors or missing-file warnings; a capture without splats still shows its
+translucent mesh avatars. `hm_film record --aspect vertical --start 58 --duration 3` of the class recap: PASS, "Splat dancers | on
+(Direct3D12)" with no `hm_splatdancers` call. Re-checked after the fix round the same evening: 24,222 game-camera renders (the three
+captures, both views, seeks, the film director previews of the new posters, a simulated cannot-draw state), at most 0 mesh-avatar
+renderers drawn; a capture without splats still drew its 6; the simulated cannot-draw note clear of the HUD at 1920x1080 and
+1080x1920; the library cards show the splat posters. Not run yet: a D3D11 editor, a player build (Windows / Quest) with this code.
 
 **Parked dancers.** dancecap `export_unity` parks a dancer that is not yet in any camera's view (capture.json `absent`) 30 m under its
 partner's pelvis. The opaque splats of a parked dancer showed through the empty floor in overhead views (checked 2026-10-23 on the first
@@ -70,12 +121,12 @@ built-in D3D12 device filter rejects 4 CPUs or fewer; the log says "D3D12 API de
 | composite with a fade | `Assets/Splats/Avatar/Core/Shaders/HM_SplatComposite.shader` (the package composite + `_HmSplatOpacity`) |
 | URP feature at run time | `Assets/Splats/Avatar/Core/SplatUrpFeature.cs` (adds `GaussiansURPFeature` to the URP renderer in memory only; `Editor/SplatFeatureGuard.cs` takes it out on Play-mode exit, script reload and before any asset save: `Assets/Bloom_Renderer.asset` is never changed on disk) |
 | skeleton over the splats | `Assets/Splats/Avatar/Core/SplatOverlayFeature.cs` (run-time URP feature next to the Gaussians one: draws `SplatUrpFeature.OverSplats` right after the splat composite and depth, with a depth texture of its own cleared to far, so the camera depth is neither tested nor written) |
-| viewer toggle | `Assets/Splats/Avatar/SplatDancers.cs` (hooks `HeadMovement.AvatarsLoaded`; both dancers in one `GaussiansGroup` = one global sort) |
+| the rule (splats always, skeleton fallback) | `Assets/Splats/Avatar/Core/SplatDancersDefault.cs` (pure decision), `Assets/Splats/Avatar/SplatDancers.cs` (hooks `HeadMovement.AvatarsLoaded`; both dancers in one `GaussiansGroup` = one global sort) |
 | hair binding (posing maths, CPU reference) | `Assets/Splats/Avatar/Core/SplatHairBinding.cs` (`ISplatHairSource`, segment frames, lever / attach / face box) |
 | hair pass on the GPU | kernels `HairSegments` + `SkinHair` of `HM_SkinSplats.compute` (after `Skin`: per-segment frames from the uploaded simulated points, then the bound Gaussians) |
 | hair source | `Assets/Splats/Avatar/HairStrandsSplatSource.cs` (a new partial-class file of `HairStrands`: read-only rest / points / face box; `HairStrands.cs` is unchanged) |
 | CLI | `Assets/Splats/Avatar/Editor/SplatDancersCli.cs` (`hm_splatdancers`) |
-| tests | `Assets/Splats/Avatar/Tests/Editor/SplatAvatarTests.cs` (EditMode: reader, canonical round trip, single-joint pose, quaternion, GPU vs CPU), `SplatHairTests.cs` (binding round trip, rest = head-rigid, rigid swing, attach, face box, GPU hair pass vs CPU) |
+| tests | `Assets/Splats/Avatar/Tests/Editor/SplatAvatarTests.cs` (EditMode: reader, canonical round trip, single-joint pose, quaternion, GPU vs CPU), `SplatDancersDefaultTests.cs` (the rule: splats on every host, no way back to the meshes, skeleton without a path, meshes without splat data; the installed captures carry no mesh-only file), `SplatHairTests.cs` (binding round trip, rest = head-rigid, rigid swing, attach, face box, GPU hair pass vs CPU) |
 
 Assembly `HmSplats` (`Core/`) is built for the Editor, Windows 64-bit and Android, and `SplatDancers.cs` /
 `HairStrandsSplatSource.cs` compile there (2026-10-21; before, the Quest build had no splat code). A player finds the shaders through
@@ -231,8 +282,9 @@ The owner chose **splats on by default** on the headset (2026-10-20, over "avata
 player build for Android (`SplatDancers.QuestPlayer`) the toggle starts ON; every lesson whose capture has `splats/` shows the
 splat dancers (`HasSplatData`): the class recap, and also the Jack & Jill lesson because its `splats/` folder was pushed too (the
 owner decides whether it stays); every other lesson shows its mesh avatars exactly as before (no Gaussians feature is added to the
-URP renderer for them). The PC default is unchanged (off; `hm_splatdancers --action on`), except a capture whose capture.json asks for
-its splat dancers ("Default per capture" above). The Quest needs no flag: deploy a capture's distilled `quest_*` sets together with its
+URP renderer for them). Since 2026-10-23 the same holds everywhere ("Splats always" above): a lesson with `splats/` is drawn with
+its splat dancers on the PC too, and never with the mesh avatars on the headset (its mesh-only files are archived, and
+`deploy_data.ps1` mirrors the capture folders, so a deploy no longer carries them). The Quest needs no flag: deploy a capture's distilled `quest_*` sets together with its
 `splats/` (the shipped `quest_settings.json` asks for `quest_15k`; a capture without the set falls back to the full files). A
 follow whose `follow.json` carries a hair look (`hair.look`, "Stray hair" above) must be distilled with dancecap's `quest_distill`
 of 2026-10-23 or later: it keeps the look on the students over bound hair (needle-shaped, opacity <= the stack cap, while fitting and
@@ -247,7 +299,7 @@ Gaussians (the round dark discs on a swinging strand) - do not deploy them.
 
   | key | switch | default | meaning |
   |---|---|---|---|
-  | `splats` | `-hmsplats on\|off` | true | the splat dancers (false: the mesh avatars) |
+  | `splats` | `-hmsplats on\|off` | true | ignored since 2026-10-23 for a capture with splat data (always its splat dancers; logged in the tier line); before: false = the mesh avatars |
   | `splat_max` | `-hmsplatmax N` | 0 = `QuestDefaultMax` (all) | at most N Gaussians per dancer, the most opaque kept (`SplatAvatarData.Reduce`, load time); -1 = all |
   | `splat_max_sigma` | `-hmsplatsigma M` | 0 = `QuestDefaultSigma` (none) | clamp every standard deviation to M metres (fill cost); -1 = none |
   | `splat_path` | `-hmsplatpath composite\|direct` | composite | composite = as on the PC (accumulate, composite, splat depth before the transparents); direct = drawn in the transparent queue (no intermediate texture; the splat depth goes after the transparents) |
@@ -260,10 +312,12 @@ Gaussians (the round dark discs on a swinging strand) - do not deploy them.
   `Reduce` keeps the N Gaussians with the largest opacity x (sigma_mid x sigma_max)^0.25 (faint ones go first, size breaks ties), keeps
   record order, joints, weights and the hair binding (`SplatHairBinding` is rebuilt on the kept records), and logs how much of the summed
   opacity it kept (EditMode test `Reduce_KeepsTheMostOpaqueAndTheHairBinding`).
-- **GLES3 / no compute**: the renderer has no OpenGL path; on a GLES3 device the toggle goes off and the avatars stay.
+- **GLES3 / no compute**: the renderer has no OpenGL path; on a GLES3 device a capture with splat data shows its dancers' skeleton
+  lines (never the mesh avatars, 2026-10-23; before: the avatars) and logs `HM-SPLATS splat dancers cannot be drawn on this device ...`.
 - **Safety net**: when the renderer reports for 3 s that it cannot draw a shown dancer (`GaussiansGroup.RenderingError` or a
-  `MemberRenderingStatus` warning: an unsupported shader or kernel, resources that never become ready), the mesh avatars come back for
-  that capture (`HM-SPLATS FALLBACK ...` in logcat). It does not catch a picture that is drawn but wrong.
+  `MemberRenderingStatus` warning: an unsupported shader or kernel, resources that never become ready), the splats are hidden for that
+  capture and the dancers' skeleton lines show - never the mesh avatars (2026-10-23; before: the avatars came back) - with
+  `HM-SPLATS FALLBACK ...` in logcat and the on-screen note. It does not catch a picture that is drawn but wrong.
 - **Overlays in the headset**: no over-the-splats pass in XR (`SplatOverlayFeature` is not verified for single-pass stereo). The VR
   skeleton draws over the bodies by itself (its second material, ZTest Always, queue 3100), so in the physics view the lines show
   over the splats; in the other views the lines of a dancer whose splats show are switched off, as in the PC films (`skeleton
@@ -364,17 +418,16 @@ QUEST.md section 2a.
   `Builds/vr/Start Head Movement (Link).cmd`: `-force-d3d12` (the renderer needs D3D12; this 4-thread PC picks D3D11 by itself),
   `-hmvr on`, `-hmvr-display immersive` (passthrough is a Quest-standalone feature), `-hmsplats on`, HM_DATA, `-logFile
   Builds/vr/logs/pcvr_<time>.log`, and a summary of the `HM-SPLATS` / `HM-PERF` / `VrMode` lines when the app closes.
-- **Default**: a Windows player (`SplatDancers.PcPlayer`) applies the player tier at each capture load like the Quest: without a
-  `"splats"` key in `<data>/quest_settings.json` and without `-hmsplats`, the splat dancers are ON while the viewer is in VR
-  (`VrMode.Active`: a headset through OpenXR, or `-hmvr sim`) and OFF on the desktop (the PC default is unchanged), except ON for a
-capture whose capture.json asks for it (2026-10-23, "Default per capture"; not yet run in a player build). Lessons with
-  `splats/`: the class recap and John & Lula; the others keep their avatars. Every `-hmsplat*` switch applies; D3D11 keeps the avatars
-  and says why (`HM-SPLATS tier: ... (D3D11: ... -force-d3d12; avatars)`). The Player log gets the same `HM-SPLATS` lines as logcat.
+- **Default**: a Windows player (`SplatDancers.PcPlayer`) applies the player tier at each capture load like the Quest. Since
+  2026-10-23 ("Splats always") a lesson with `splats/` is drawn with its splat dancers on the desktop and in VR whatever `"splats"` /
+  `-hmsplats` say (ignored for it, logged); the lessons without `splats/` keep their avatars. Every other `-hmsplat*` switch applies;
+  D3D11 shows the skeleton lines and says why (`HM-SPLATS tier: ... (D3D11: the renderer needs D3D12 - start the exe with
+  -force-d3d12)` and the note on screen). Not yet run in a player build. The Player log gets the same `HM-SPLATS` lines as logcat.
 - **Smoke test without a headset** (the Quest 3 was in use standalone): `-force-d3d12 -hmvr sim -hmvr-display immersive -hmplay recap
   -hmseek 23 -hmview start -hmshots 3` with `HM_DATA=Builds/data`: D3D12 12.2, `HM-SPLATS tier: pc vr: splats on (pc default: on in VR,
   off on the desktop) ...`, 320,000 participating, hair live, no fallback; the stills show the photoreal couple at the floor edge
   (`%USERPROFILE%/AppData/LocalLow/DefaultCompany/Head Movement/hmshots/`). **Not run**: a real OpenXR session over Link (single-pass
-  instanced stereo through the package on D3D12 is untested; the 3-s fallback to the avatars is the safety net) and a lesson loaded
+  instanced stereo through the package on D3D12 is untested; the 3-s fallback - to the skeleton lines since 2026-10-23 - is the safety net) and a lesson loaded
   on the desktop (the off path is code-reviewed only).
 - **Link's default eye buffer on this PC** (Meta Horizon Link service logs `%LOCALAPPDATA%/Oculus/Service_2026-10-1*.txt`, Quest 3 =
   `CapiReportedHmdType 23`): `display fixed fov res: 1824x1952` per eye, `VsyncToNextVsync 0.013889` (72 Hz), encode 4096 x 2240.
@@ -423,3 +476,8 @@ the PC tier's eye buffer at 1x MSAA or a 1x splat layer like `SplatLowResFeature
 
 - A run over Link with the headset: frame rate, the look in both eyes, the hair (PC VR over Link above; QUEST.md 2a).
 - The Quest frame rate, the look in both eyes and the hair on the headset (above).
+- "Splats always" (2026-10-23) in a player build (Windows / Quest) and on a D3D11 editor (the skeleton fallback and its note are
+  EditMode-tested and code-reviewed only). Data laid out before 2026-10-23 (`Builds/data`, the headset, a Windows build's own
+  StreamingAssets) still holds the archived files and the old posters until the next `deploy_data.ps1` run (it now removes them) and
+  the next player build: harmless with this code (never loaded or drawn), but the players built before 2026-10-23 still draw the
+  mesh avatars (desktop / `-hmsplats off`) until they are rebuilt.

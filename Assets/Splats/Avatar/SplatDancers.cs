@@ -10,14 +10,18 @@ using UnityEngine;
 using UnityEngine.XR;
 
 /// <summary>
-/// Viewer toggle "splat dancers" (default OFF on the desktop: the viewer shows the current mesh avatars until the splat recordings
-/// are approved; ON by default for a capture whose capture.json asks for it, <c>"splat_dancers": "on"</c>, when the device can draw
-/// them and nobody set the toggle by hand this editor session: SplatDancersDefault, docs/SPLAT_DANCERS.md "Default per capture").
-/// While on, and when the loaded capture has <c>splats/&lt;role&gt;.json</c> + <c>.splatav</c> (dancecap
-/// SPLAT_AVATAR_FORMAT.md; LHM++ skinned Gaussians), each dancer's mesh avatar (body, shoes, head props, hair cards and
-/// tip glows: every Renderer under the avatar) is hidden with Renderer.forceRenderingOff and a SkinnedSplatAvatar draws
-/// that dancer instead, posed every frame from the avatar's own bones (so playback, seeks, slow motion and the film
-/// director's sub-frame poses all drive it). Both dancers sit in one GaussiansGroup: one global sort.
+/// The splat dancers. Owner rule (2026-10-23): "I don't ever want to see the basic avatars if gauss splat avatars are available for a
+/// dance. fully archive them when they are replaced with gauss splats." A dancer whose capture has <c>splats/&lt;role&gt;.json</c> +
+/// <c>.splatav</c> (dancecap SPLAT_AVATAR_FORMAT.md; LHM++ skinned Gaussians) is ALWAYS drawn as splats - the Editor (every view, Play
+/// mode, the film recorder and director), a Windows player (desktop and VR) and the Quest - and its mesh avatar (body, shoes, head
+/// props, hair cards and tip glows: every Renderer under the avatar) is never drawn (Renderer.forceRenderingOff from the capture load
+/// on, also while the splats load). The avatar stays as an invisible rig: a SkinnedSplatAvatar is posed every frame from the avatar's
+/// own bones (so playback, seeks, slow motion and the film director's sub-frame poses all drive it), the hair simulation and physics
+/// ride on them too. A device that cannot draw splats (D3D11, GLES, no compute, the players' 3-s rendering watchdog) shows the
+/// dancers' skeleton lines instead - never the mesh avatar - and one log line + an on-screen note (SplatDancersDefault.Note). A dancer
+/// without splat data keeps its mesh avatar. Nothing switches a splat capture back to its mesh avatars (hm_splatdancers --action off
+/// is refused; a player's "splats": false is ignored): SplatDancersDefault, docs/SPLAT_DANCERS.md "Splats always". Both dancers sit in
+/// one GaussiansGroup: one global sort.
 ///
 /// Display (VIEWER_SPEC 3.2): OPAQUE. The splats show at full opacity whatever the avatars' opacity says (only 0 =
 /// hidden is honoured), they are hidden with the avatars layer, inside role-hidden spans and when the avatar is not
@@ -26,18 +30,14 @@ using UnityEngine.XR;
 /// composited luminance like DisplayTransparency's AlphaLut); OpacityMode.ScaleSplats is a crude review stand-in
 /// (scales every Gaussian's alpha, so the inside and the back of the body show through).
 ///
-/// The renderer's URP feature is added to the URP renderer at run time only while splat dancers are on
+/// The renderer's URP feature is added to the URP renderer at run time only while splat dancers are drawn
 /// (SplatUrpFeature); nothing in the project's render or XR settings changes. Editor, Windows and Android (the Quest).
-/// On the Quest (a player build for Android) the toggle is ON by default (the owner's choice, 2026-10-20): a lesson whose
-/// capture has splats/ (the class recap) shows the splat dancers, every other lesson its mesh avatars; the tier is data
-/// (quest_settings.json "splats", "splat_max", "splat_max_sigma", "splat_path", "splat_depth"; -hmsplats on|off and the
-/// other switches, VrSettings), and the Gaussians are thinned at load to the Quest default (QuestDefaultMax /
-/// QuestDefaultSigma: SplatAvatarData.Reduce) so the lesson holds 72 Hz. GLES (no compute path in the renderer) keeps the
-/// avatars. The PC default stays OFF on the desktop, except for a capture whose capture.json asks for its splat dancers (the Editor:
-/// when the API can draw them and the toggle was not set by hand this session; one log line when the API refuses). A Windows player
-/// (PC VR over Meta Quest Link, PcPlayer) applies the same tier at each capture load: without a "splats" key / -hmsplats switch the
-/// splat dancers are ON in VR and OFF on the desktop (ON on the desktop too for a flagged capture);
-/// D3D11 keeps the avatars (start the exe with -force-d3d12). Hair: when the splat file carries a hair binding
+/// A player (the Quest, a Windows player for PC VR over Meta Quest Link: TierPlayer) applies its tier at each capture load (data:
+/// quest_settings.json "splat_max", "splat_max_sigma", "splat_path", "splat_depth", "splat_set" ...; the -hmsplat* switches,
+/// VrSettings); on the Quest the Gaussians come from the distilled set / are thinned at load (QuestDefaultSet, QuestDefaultMax /
+/// QuestDefaultSigma: SplatAvatarData.Reduce). Its "splats" key / -hmsplats switch no longer turns a capture with splat dancers back
+/// to its mesh avatars (ignored, logged). GLES (no compute path in the renderer) and D3D11 (start the exe / editor with -force-d3d12)
+/// show the skeleton lines. Hair: when the splat file carries a hair binding
 /// (dancecap mono4d/recap_splat_hair.py: the free hair Gaussians bound to the HairStrands guides) the dancer's simulated
 /// HairStrands (the same simulation that moves the hair cards, which are hidden with the rest of the avatar) drive the
 /// bound Gaussians every frame (HairStrandsSplatSource, SkinnedSplatAvatar's SkinHair pass); scalp-level hair and an
@@ -122,17 +122,22 @@ public sealed class SplatDancers : MonoBehaviour
 
     public static SplatDancers Instance { get; private set; }
 
-    /// <summary>the "splat dancers" toggle (default off; on for a capture whose capture.json asks for it: SplatDancersDefault)</summary>
+    /// <summary>the splat dancers are drawn for the loaded capture: it has splat data and the device can draw it
+    /// (SplatDancersDefault.Decide; false for a capture without splats/ and on a device without a splat path)</summary>
     public static bool Enabled => splatsOn;
 
-    /// <summary>Editor: the toggle was set by hand this editor session (hm_splatdancers --action on | off): it then wins over every
-    /// capture's default until UseCaptureDefault (hm_splatdancers --action auto) or a new editor session</summary>
-    public static bool HandSet => handSet;
-
-    /// <summary>why the toggle is as it is at the last capture load (SplatDancersDefault.Decision.Why; the CLI state)</summary>
+    /// <summary>why the splat dancers are on / off at the last capture load (SplatDancersDefault.Decision.Why; the CLI state)</summary>
     public static string DefaultWhy { get; private set; } = "";
 
-    static bool handSet;
+    /// <summary>"" while the loaded capture's dancers are drawn as they should be; else the note shown on screen and logged once:
+    /// the capture has splat dancers this device cannot draw (SplatDancersDefault.Note: "splat dancers need D3D12: start the editor with
+    /// -force-d3d12 - skeleton lines shown ..."), or the players' watchdog gave up, or a splat avatar failed to build</summary>
+    public static string CannotDrawNote { get; private set; } = "";
+
+    /// <summary>the reason the device cannot draw splats at the last capture load (SplatDancersDefault.NoPath; "" = it can)</summary>
+    static string noPathNow = "";
+
+    // SessionState keys of the hand toggle of before 2026-10-23 (hm_splatdancers --action on | off): erased at Play-mode start, never read
     const string HandKey = "HM.SplatDancers.Explicit";
     static string refusedLogged;
 
@@ -157,8 +162,6 @@ public sealed class SplatDancers : MonoBehaviour
         public SkinnedSplatAvatar Splat;
         public string Error;
         public readonly List<Renderer> Hidden = new();
-        public int ScannedHierarchy = -1;
-        public float NextScan;
         public float NextHairScan;
         public double LoadSeconds;
         public volatile string Reduction;
@@ -172,9 +175,8 @@ public sealed class SplatDancers : MonoBehaviour
     ComputeShader compute;
     readonly System.Diagnostics.Stopwatch loadWatch = new();
 
-    /// <summary>Editor: the toggle set by hand survives Play-mode restarts (the film recorder re-enters Play mode) for the rest of the
-    /// editor session (SessionState, never saved to the project); a new editor session starts with it unset (each capture's default:
-    /// off, or on for a capture whose capture.json asks for it).</summary>
+    /// <summary>the SessionState key of the hand toggle of before 2026-10-23 (erased at Play-mode start, never read: an "off" an editor
+    /// session still held must not bring the mesh avatars back)</summary>
     const string SessionKey = "HM.SplatDancers.On";
 
     /// <summary>a player build for the Quest (Android): splats on by default, thinned to the Quest budget</summary>
@@ -186,10 +188,9 @@ public sealed class SplatDancers : MonoBehaviour
 #endif
 
     /// <summary>a Windows player (HeadMovement.exe: PC VR over Meta Quest Link / Air Link, or the desktop viewer). Its splat tier is
-    /// data like the Quest's (quest_settings.json in HmData.Root, the -hmsplats* switches), applied at each capture load; without a
-    /// "splats" key or -hmsplats switch the splat dancers are ON while the viewer is in VR (a headset through OpenXR) and OFF on the
-    /// desktop (the PC desktop default is unchanged). D3D11 (the automatic choice on a 4-thread PC: start the exe with -force-d3d12)
-    /// and GLES have no path in the renderer: the avatars stay.</summary>
+    /// data like the Quest's (quest_settings.json in HmData.Root, the -hmsplat* switches), applied at each capture load; a capture with
+    /// splat data is drawn with its splat dancers on the desktop and in VR. D3D11 (the automatic choice on a 4-thread PC: start the exe
+    /// with -force-d3d12) and GLES have no path in the renderer: the skeleton lines are shown.</summary>
     public static readonly bool PcPlayer =
 #if UNITY_STANDALONE_WIN && !UNITY_EDITOR
         true;
@@ -227,14 +228,14 @@ public sealed class SplatDancers : MonoBehaviour
     static void ResetStatics()
     {
 #if UNITY_EDITOR
-        // set by hand this editor session (an "on" stored before the hand flag existed counts as set by hand: only SetEnabled wrote it)
-        handSet = UnityEditor.SessionState.GetBool(HandKey, false) || UnityEditor.SessionState.GetBool(SessionKey, false);
-        splatsOn = handSet && UnityEditor.SessionState.GetBool(SessionKey, false);
-#else
-        handSet = false;
-        splatsOn = QuestPlayer; // the Quest: on by default (VrSettings "splats" / -hmsplats off turn it off at the capture load)
+        // the hand toggle of before 2026-10-23: whatever this editor session still holds ("off" included) must not matter any more
+        UnityEditor.SessionState.EraseBool(HandKey);
+        UnityEditor.SessionState.EraseBool(SessionKey);
 #endif
-        DefaultWhy = handSet ? $"set by hand this editor session ({(splatsOn ? "on" : "off")})" : "";
+        splatsOn = false; // decided at every capture load (SplatDancersDefault.Decide: the capture's splat data + the device)
+        DefaultWhy = "";
+        CannotDrawNote = "";
+        noPathNow = "";
         refusedLogged = null;
         reduceMax = 0;
         reduceSigma = 0f;
@@ -266,8 +267,10 @@ public sealed class SplatDancers : MonoBehaviour
         bool wasOn = splatsOn;
         if (TierPlayer) ApplyPlayerTier(viewer);
         else ApplyEditorDefault(viewer);
+        // a capture with splat data needs the instance even when the device cannot draw the splats: it keeps the mesh avatars hidden
+        // (the skeleton lines show instead)
+        if (CaptureHasSplats(viewer.Manifest)) Ensure();
         if (Instance != null) Instance.Rebuild(viewer);
-        else if (splatsOn) Ensure().Rebuild(viewer);
         if (!TierPlayer)
         {
             if (splatsOn) SplatUrpFeature.Ensure();
@@ -277,37 +280,34 @@ public sealed class SplatDancers : MonoBehaviour
         // (in a player the Gaussians feature is added when the first splat dancer is built: Build)
     }
 
-    /// <summary>the capture has a splat avatar (splats/&lt;role&gt;.json) for at least one dancer</summary>
-    static bool CaptureHasSplats(CaptureManifest m, string set = "")
-    {
-        string folder = m?.Folder;
-        if (folder == null) return false;
-        return SplatAvatarData.JsonPath(folder, "lead", set, out _) != null || SplatAvatarData.JsonPath(folder, "follow", set, out _) != null;
-    }
+    /// <summary>the capture has a splat avatar for at least one dancer: splats/&lt;role&gt;.json, or any named set's
+    /// splats/&lt;set&gt;/&lt;role&gt;.json (CaptureManifest.HasSplatAvatar: the same test the avatar loading uses)</summary>
+    static bool CaptureHasSplats(CaptureManifest m) => m != null && (m.HasSplatAvatar(Role.Lead) || m.HasSplatAvatar(Role.Follow));
 
-    /// <summary>the Editor at each capture load: the toggle set by hand this session, else the capture's default
-    /// (SplatDancersDefault: on for a capture whose capture.json asks for it, when the API can draw it; one log line when it cannot)</summary>
+    /// <summary>the Editor at each capture load (SplatDancersDefault.Decide): the splat dancers are drawn for every capture with splat
+    /// data when the API can draw them; a capture with splat data on D3D11 / GLES / no compute shows the skeleton lines, with one log
+    /// line and the on-screen note</summary>
     static void ApplyEditorDefault(HeadMovement viewer)
     {
         CaptureManifest m = viewer.Manifest;
+        noPathNow = SplatDancersDefault.NoPath(SystemInfo.graphicsDeviceType, SystemInfo.supportsComputeShaders, SplatDancersDefault.Host.Editor);
         SplatDancersDefault.Decision d = SplatDancersDefault.Decide(new SplatDancersDefault.Inputs
         {
             Host = SplatDancersDefault.Host.Editor,
-            HandSet = handSet,
-            HandOn = splatsOn,
             CaptureFlag = m != null && m.SplatDancersDefaultOn,
             HasSplatData = CaptureHasSplats(m),
-            NoPath = SplatDancersDefault.NoPath(SystemInfo.graphicsDeviceType, SystemInfo.supportsComputeShaders, SplatDancersDefault.Host.Editor)
+            NoPath = noPathNow
         });
         splatsOn = d.On;
         DefaultWhy = d.Why;
+        CannotDrawNote = d.Refused ? SplatDancersDefault.Note(noPathNow, SplatDancersDefault.Host.Editor) : "";
         string name = Path.GetFileName(m?.Folder ?? "?");
         if (d.Refused)
         {
-            if (refusedLogged != m?.Folder) Debug.LogWarning($"splat dancers: {d.Why} (capture {name})");
+            if (refusedLogged != m?.Folder) Debug.LogWarning($"splat dancers: {CannotDrawNote} (capture {name}; {d.Why})");
             refusedLogged = m?.Folder;
         }
-        else if (d.On && !handSet) Debug.Log($"splat dancers: on by default for this capture ({d.Why}; {SystemInfo.graphicsDeviceType}; capture {name})");
+        else if (d.On) Debug.Log($"splat dancers: on ({d.Why}; {SystemInfo.graphicsDeviceType}; capture {name})");
     }
 
     /// <summary>thinning for the next capture load / rebuild (SplatAvatarData.Reduce): at most max Gaussians per dancer (0 = all), every
@@ -400,9 +400,10 @@ public sealed class SplatDancers : MonoBehaviour
     public static float AlphaCutoff => alphaCutoff;
     public static int SortEvery => sortEvery;
 
-    /// <summary>the player tier at each capture load (VrSettings: quest_settings.json + the command line): on / off, thinning,
-    /// render path, splat depth; logged as HM-SPLATS (logcat on the Quest, Player.log on Windows). The Quest: on unless "splats":
-    /// false / -hmsplats off. A Windows player: "splats" / -hmsplats when given, else on in VR (PC VR over Link) and off on the desktop.</summary>
+    /// <summary>the player tier at each capture load (VrSettings: quest_settings.json + the command line): thinning, file set, render
+    /// path, splat depth; logged as HM-SPLATS (logcat on the Quest, Player.log on Windows). The splat dancers are on for every capture
+    /// with splat data the device can draw ("splats": false / -hmsplats off no longer brings the mesh avatars back: ignored, logged);
+    /// without a drawing path (GLES, D3D11) the skeleton lines are shown.</summary>
     static void ApplyPlayerTier(HeadMovement viewer)
     {
         HmVr.VrSettings st = HmVr.VrSettings.Current.Loaded ? HmVr.VrSettings.Current : HmVr.VrSettings.Load();
@@ -410,9 +411,8 @@ public sealed class SplatDancers : MonoBehaviour
         UnityEngine.Rendering.GraphicsDeviceType api = SystemInfo.graphicsDeviceType;
         SplatDancersDefault.Host host = QuestPlayer ? SplatDancersDefault.Host.Quest : SplatDancersDefault.Host.WindowsPlayer;
         string reason = SplatDancersDefault.NoPath(api, SystemInfo.supportsComputeShaders, host);
+        noPathNow = reason;
         string noPath = reason.Length > 0 ? $" ({reason})" : "";
-        // the Quest: "splats" (on unless given off); a Windows player: given, else on in VR and (a flagged capture) on the desktop;
-        // never without a drawing path (the renderer has no OpenGL / D3D11 path: the avatars stay)
         SplatDancersDefault.Decision d = SplatDancersDefault.Decide(new SplatDancersDefault.Inputs
         {
             Host = host,
@@ -426,6 +426,13 @@ public sealed class SplatDancers : MonoBehaviour
         bool on = d.On;
         splatsOn = on;
         DefaultWhy = d.Why;
+        CannotDrawNote = d.Refused ? SplatDancersDefault.Note(reason, host) : "";
+        if (d.Refused && refusedLogged != viewer.Manifest?.Folder)
+        {
+            Debug.LogWarning($"HM-SPLATS {CannotDrawNote} (capture {Path.GetFileName(viewer.Manifest?.Folder ?? "?")})");
+            refusedLogged = viewer.Manifest?.Folder;
+        }
+
         reduceMax = st.SplatMax > 0 ? st.SplatMax : st.SplatMax < 0 ? 0 : QuestDefaultMax;
         reduceSigma = st.SplatMaxSigma > 0f ? st.SplatMaxSigma : st.SplatMaxSigma < 0f ? 0f : QuestDefaultSigma;
         renderPath = st.SplatPath == "direct" ? Paths.Direct : st.SplatPath == "composite" ? Paths.Composite : QuestDefaultPath;
@@ -441,7 +448,7 @@ public sealed class SplatDancers : MonoBehaviour
         alphaCutoff = st.SplatAlphaCutoff > 0f ? st.SplatAlphaCutoff : QuestPlayer ? QuestDefaultAlphaCutoff : 0f;
         sortEvery = Math.Max(1, st.SplatSortEvery > 0 ? st.SplatSortEvery : QuestPlayer ? QuestDefaultSortEvery : 1);
         string who = QuestPlayer ? "quest" : vr ? "pc vr" : "pc desktop";
-        string why = QuestPlayer ? "" : $" ({d.Why})";
+        string why = $" ({d.Why})";
         QuestTier = $"{who}: splats {(on ? "on" : "off")}{why}{noPath}, max {(reduceMax > 0 ? reduceMax.ToString() : "all")} per dancer, " +
                     $"sigma clamp {(reduceSigma > 0f ? $"{reduceSigma * 100f:0.##} cm" : "none")}, path {renderPath}, depth {(questDepth ? "on" : "off")}, " +
                     $"set '{(splatSet.Length > 0 ? splatSet : "full")}', layer scale {SplatUrpFeature.LowResScale:0.##}{(SplatUrpFeature.LowResScale < 0.999f ? $" (low-res layer, {(questDepth ? "low-res splat depth" : "no splat depth")})" : "")}, " +
@@ -457,52 +464,32 @@ public sealed class SplatDancers : MonoBehaviour
         return Instance;
     }
 
-    /// <summary>turn the splat dancers on or off by hand (on: loads the capture's splat avatars if it has any). In the Editor the hand
-    /// choice wins over every capture's default for the rest of the editor session (UseCaptureDefault gives it back).</summary>
-    public static void SetEnabled(bool on)
+    /// <summary>apply the rule to the loaded capture again (hm_splatdancers --action on | auto: e.g. after its splats/ appeared): its
+    /// splat dancers when it has splat data the device can draw, else the skeleton lines (splat data) or its mesh avatars (none).
+    /// Nothing is reloaded when the splat dancers of this capture are already built.</summary>
+    public static void Reapply()
     {
-        handSet = true;
-        DefaultWhy = $"set by hand this editor session ({(on ? "on" : "off")})";
-#if UNITY_EDITOR
-        UnityEditor.SessionState.SetBool(HandKey, true);
-        UnityEditor.SessionState.SetBool(SessionKey, on);
-#endif
-        ApplyState(on);
-    }
-
-    /// <summary>Editor: forget the hand choice (hm_splatdancers --action auto): the loaded capture's default applies now and at every
-    /// later capture load (SplatDancersDefault: on for a capture whose capture.json asks for it, else off)</summary>
-    public static void UseCaptureDefault()
-    {
-        handSet = false;
-#if UNITY_EDITOR
-        UnityEditor.SessionState.SetBool(HandKey, false);
-        UnityEditor.SessionState.SetBool(SessionKey, false);
-#endif
         HeadMovement viewer = HeadMovement.Instance;
-        if (viewer == null || viewer.Manifest == null)
-        {
-            DefaultWhy = "viewer default (off on the desktop)";
-            ApplyState(false);
-            return;
-        }
-
-        if (TierPlayer) ApplyPlayerTier(viewer);
-        else ApplyEditorDefault(viewer);
-        ApplyState(splatsOn);
+        if (viewer == null || viewer.Manifest == null) return;
+        SplatDancers s = Instance;
+        if (splatsOn && s != null && s.hm == viewer && s.capture == viewer.Manifest.Folder && s.entries.Count > 0 && !s.NeedsLoad &&
+            CaptureHasSplats(viewer.Manifest)) return;
+        OnAvatarsLoaded(viewer);
     }
 
-    /// <summary>the on / off paths without touching the hand choice (SetEnabled, UseCaptureDefault)</summary>
-    static void ApplyState(bool on)
+    /// <summary>hm_splatdancers --action off: refused for a capture with splat data (its dancers are always drawn as splats, never as
+    /// the mesh avatars: the owner's rule of 2026-10-23) - throws with the reason; a capture without splat data has nothing to switch
+    /// off (its mesh avatars are drawn) - returns that note. There is no override: hide the dancers with hm_layer avatars off.</summary>
+    public static string RefuseOff()
     {
-        splatsOn = on;
-        if (on)
-        {
-            SplatDancers s = Ensure();
-            if (HeadMovement.Instance != null && (s.entries.Count == 0 || s.hm != HeadMovement.Instance || s.NeedsLoad)) s.Rebuild(HeadMovement.Instance);
-            SplatUrpFeature.Ensure();
-        }
-        else TurnedOff();
+        HeadMovement viewer = HeadMovement.Instance;
+        CaptureManifest m = viewer != null ? viewer.Manifest : null;
+        if (CaptureHasSplats(m))
+            throw new InvalidOperationException(
+                $"refused: {Path.GetFileName(m.Folder)} has splat dancers, and a dancer with splat data is always drawn as splats - its mesh avatar " +
+                "is never drawn (owner rule 2026-10-23: \"I don't ever want to see the basic avatars if gauss splat avatars are available for a dance\"; " +
+                "docs/SPLAT_DANCERS.md \"Splats always\"). There is no switch back to the mesh avatars; hide the dancers with hm_layer --layer avatars --visible false.");
+        return m == null ? "no capture loaded" : "this capture has no splat dancers: its mesh avatars are drawn (nothing to switch off)";
     }
 
     /// <summary>the avatars back, the over-the-splats lists empty, the URP feature out (the toggle is off)</summary>
@@ -523,6 +510,15 @@ public sealed class SplatDancers : MonoBehaviour
         compute = shaders != null ? shaders.skin : null;
         if (shaders == null || !shaders.Complete) Debug.LogError($"splat dancers: shader set incomplete (missing {(shaders != null ? shaders.Missing() : "the asset")}): {SplatShaderSet.AssetPath}");
         root = gameObject;
+        // a device without a splat path (D3D11, GLES, no compute) gets no renderer at all: this instance only keeps the mesh avatars of a
+        // capture with splat data hidden (the skeleton lines show) - nothing of the package's GPU code is started there
+        if (SplatDancersDefault.NoPath(SystemInfo.graphicsDeviceType, SystemInfo.supportsComputeShaders,
+                TierPlayer ? (QuestPlayer ? SplatDancersDefault.Host.Quest : SplatDancersDefault.Host.WindowsPlayer) : SplatDancersDefault.Host.Editor).Length > 0)
+        {
+            group = null;
+            return;
+        }
+
         group = gameObject.AddComponent<GaussiansGroup>();
         if (shaders != null)
         {
@@ -554,13 +550,20 @@ public sealed class SplatDancers : MonoBehaviour
         foreach (KeyValuePair<Role, SmplxAvatar> kv in viewer.Avatars)
         {
             if (kv.Value == null) continue;
-            // the Quest's distilled set (splats/<set>/<role>.json) when the capture has it, else the full file
-            string json = SplatAvatarData.JsonPath(capture, kv.Key == Role.Lead ? "lead" : "follow", splatSet, out bool fromSet);
-            Entry e = new() { Role = kv.Key, Avatar = kv.Value, JsonPath = json };
-            if (json != null && splatSet.Length > 0 && !fromSet && !string.Equals(splatSet, "full", StringComparison.OrdinalIgnoreCase))
+            // the Quest's distilled set (splats/<set>/<role>.json) when the capture has it, else the full file, else (a data folder that
+            // carries only a named set) that set: a dancer with splat data of any kind is drawn as splats (CaptureManifest.HasSplatAvatar)
+            string roleName = kv.Key == Role.Lead ? "lead" : "follow";
+            string json = SplatAvatarData.JsonPath(capture, roleName, splatSet, out bool fromSet);
+            string onlySet = json == null ? SplatAvatarData.AnySetJsonPath(capture, roleName) : null;
+            Entry e = new() { Role = kv.Key, Avatar = kv.Value, JsonPath = json ?? onlySet };
+            if (onlySet != null)
+                Debug.LogWarning($"{(TierPlayer ? "HM-SPLATS " : "")}splat dancers: {kv.Key}: no splats/{roleName}.json" +
+                                 $"{(splatSet.Length > 0 ? $" and no set '{splatSet}'" : "")} in {capture}: set '{Path.GetFileName(Path.GetDirectoryName(onlySet))}' is used");
+            else if (json != null && splatSet.Length > 0 && !fromSet && !string.Equals(splatSet, "full", StringComparison.OrdinalIgnoreCase))
                 Debug.LogWarning($"{(TierPlayer ? "HM-SPLATS " : "")}splat dancers: {kv.Key}: no set '{splatSet}' in {capture}/splats: the full file is used");
-            // the data is read only while the splats are on (a capture visited later with them off does not read its splat files;
-            // turning them on rebuilds: ApplyState / NeedsLoad)
+            json = e.JsonPath;
+            // the data is read only when the device can draw it (splatsOn; a device without a splat path reads no splat file: its
+            // dancers show as skeleton lines)
             if (json != null && splatsOn)
             {
                 string path = json;
@@ -578,6 +581,10 @@ public sealed class SplatDancers : MonoBehaviour
 
             entries.Add(e);
         }
+
+        // the mesh avatars of the dancers with splat data are hidden now, at the capture load (not one frame later): they are never
+        // drawn, also while their splats load (the skeleton lines show until the splats are built)
+        ApplyVisibility();
     }
 
     /// <summary>a dancer of this capture has splat data that was not read (the capture was built while the splats were off)</summary>
@@ -602,7 +609,9 @@ public sealed class SplatDancers : MonoBehaviour
         beadDraws.Clear();
         foreach (Entry e in entries)
         {
-            Unhide(e);
+            // a dancer with splat data keeps its mesh avatar hidden (a rebuild of the same capture hides it again at once; another
+            // capture destroys these avatars)
+            if (e.JsonPath == null) Unhide(e);
             if (e.Splat != null)
             {
                 e.Splat.Dispose();
@@ -627,7 +636,7 @@ public sealed class SplatDancers : MonoBehaviour
             {
                 Task<SplatAvatarData> t = e.Loading;
                 e.Loading = null;
-                if (t.IsFaulted) e.Error = t.Exception?.GetBaseException().Message;
+                if (t.IsFaulted) Failed(e, t.Exception?.GetBaseException().Message ?? "unreadable", "could not be read");
                 else Build(e, t.Result);
             }
 
@@ -668,24 +677,37 @@ public sealed class SplatDancers : MonoBehaviour
         }
         catch (Exception ex)
         {
-            e.Error = ex.Message;
             Debug.LogError($"splat dancers: {e.Role}: {ex}");
+            Failed(e, ex.Message, "failed to build");
         }
+    }
+
+    /// <summary>a splat avatar that cannot be read or built: that dancer shows its skeleton lines (never its mesh avatar) and the
+    /// on-screen note says why</summary>
+    static void Failed(Entry e, string message, string what)
+    {
+        e.Error = message;
+        CannotDrawNote = $"the {e.Role.ToString().ToLowerInvariant()} splat avatar {what} ({message}) - skeleton lines shown (the mesh avatars are never drawn for a capture with splat dancers)";
+        Debug.LogError($"{(TierPlayer ? "HM-SPLATS " : "")}splat dancers: {CannotDrawNote}");
     }
 
     void LateUpdate()
     {
-        GaussianSplat3DRenderer.RenderPath path = renderPath == Paths.Direct ? GaussianSplat3DRenderer.RenderPath.DirectTransparent : GaussianSplat3DRenderer.RenderPath.CompositeTexture;
-        if (group.m_RenderPath != path) group.m_RenderPath = path;
-        // the Quest knobs (defaults = the package's: cutoff 1/255, sort every frame, compaction above 100,000 rejected)
-        float cutoff = alphaCutoff > 0f ? alphaCutoff : GaussianSplat3DRenderer.DefaultAlphaCutoff;
-        if (!Mathf.Approximately(group.m_AlphaCutoff, cutoff)) group.m_AlphaCutoff = cutoff;
-        if (group.m_SortNthFrame != sortEvery) group.m_SortNthFrame = sortEvery;
-        // sort amortisation: the frame keeps its position revision (else the renderer re-sorts after every skinned frame) and the
-        // visible-splat compaction is off (it re-sorts whenever the view data changes, i.e. every frame)
-        SkinnedSplatAvatar.HoldPositionRevision = sortEvery > 1;
-        int compaction = sortEvery > 1 ? -1 : 100000;
-        if (group.m_CompactionThreshold != compaction) group.m_CompactionThreshold = compaction;
+        if (group != null)
+        {
+            GaussianSplat3DRenderer.RenderPath path = renderPath == Paths.Direct ? GaussianSplat3DRenderer.RenderPath.DirectTransparent : GaussianSplat3DRenderer.RenderPath.CompositeTexture;
+            if (group.m_RenderPath != path) group.m_RenderPath = path;
+            // the Quest knobs (defaults = the package's: cutoff 1/255, sort every frame, compaction above 100,000 rejected)
+            float cutoff = alphaCutoff > 0f ? alphaCutoff : GaussianSplat3DRenderer.DefaultAlphaCutoff;
+            if (!Mathf.Approximately(group.m_AlphaCutoff, cutoff)) group.m_AlphaCutoff = cutoff;
+            if (group.m_SortNthFrame != sortEvery) group.m_SortNthFrame = sortEvery;
+            // sort amortisation: the frame keeps its position revision (else the renderer re-sorts after every skinned frame) and the
+            // visible-splat compaction is off (it re-sorts whenever the view data changes, i.e. every frame)
+            SkinnedSplatAvatar.HoldPositionRevision = sortEvery > 1;
+            int compaction = sortEvery > 1 ? -1 : 100000;
+            if (group.m_CompactionThreshold != compaction) group.m_CompactionThreshold = compaction;
+        }
+
         float fade = CompositeOpacity();
         DisplayOpacity = fade;
         Shader.SetGlobalFloat(OpacityId, fade);
@@ -701,9 +723,10 @@ public sealed class SplatDancers : MonoBehaviour
     bool fellBack;
     float badSince = -1f;
 
-    /// <summary>the Quest's safety net (an untested GPU path must not leave the lesson without dancers): when the renderer reports
+    /// <summary>the players' safety net (an untested GPU path must not leave the lesson without dancers): when the renderer reports
     /// that it cannot draw a shown splat dancer (an unsupported shader or kernel, resources that never become ready) for 3 s, the
-    /// mesh avatars come back for the rest of this capture and logcat says why (HM-SPLATS FALLBACK)</summary>
+    /// splats are hidden for the rest of this capture and the dancers' skeleton lines show - never the mesh avatars (owner rule
+    /// 2026-10-23) - and logcat / Player.log says why (HM-SPLATS FALLBACK), as does the on-screen note</summary>
     void Watchdog()
     {
         if (fellBack || group == null) return;
@@ -731,7 +754,9 @@ public sealed class SplatDancers : MonoBehaviour
         if (badSince < 0f) badSince = Time.unscaledTime;
         if (Time.unscaledTime - badSince < 3f) return;
         fellBack = true;
-        Debug.LogError($"HM-SPLATS FALLBACK: the splat dancers cannot be drawn on this device ({reason}); the mesh avatars are shown instead");
+        CannotDrawNote = SplatDancersDefault.Note(reason, QuestPlayer ? SplatDancersDefault.Host.Quest : SplatDancersDefault.Host.WindowsPlayer);
+        Debug.LogError($"HM-SPLATS FALLBACK: the splat dancers cannot be drawn on this device ({reason}); the dancers' skeleton lines are shown " +
+                       "(never the mesh avatars of a capture with splat dancers)");
     }
 
     float nextStatusLog;
@@ -752,7 +777,7 @@ public sealed class SplatDancers : MonoBehaviour
                           $"renderers hidden {e.Hidden.Count}, skinned frames {e.Splat.SkinnedFrames}, hair {(e.Splat.HairBinding != null ? (e.Splat.HairLive ? $"live ({e.Splat.HairFrames} frames)" : e.Splat.HairStatus) : "-")}");
         }
 
-        Debug.Log($"HM-SPLATS status: {(fellBack ? "FELL BACK to the avatars, " : "")}feature {(SplatUrpFeature.Injected ? "in" : "NOT in")} the URP renderer, " +
+        Debug.Log($"HM-SPLATS status: {(fellBack ? "FELL BACK to the skeleton lines, " : "")}feature {(SplatUrpFeature.Injected ? "in" : "NOT in")} the URP renderer, " +
                   $"{(SplatUrpFeature.LowResActive ? $"low-res layer '{SplatLowResFeature.Status}'" : $"depth patch '{SplatUrpFeature.DepthPatch}'")}, path {renderPath}, " +
                   $"set '{(splatSet.Length > 0 ? splatSet : "full")}', cutoff {group?.m_AlphaCutoff:0.###}, sort every {group?.m_SortNthFrame}, " +
                   $"group '{group?.Status}', participating {group?.ParticipatingSplats ?? 0}, {Math.Round((group?.AllocatedBytes ?? 0) / 1048576.0, 1)} MB, over-splats '{overSplatsStatus}'{sb}");
@@ -1112,7 +1137,9 @@ public sealed class SplatDancers : MonoBehaviour
         SplatUrpFeature.OverSplatsOnly.Clear();
     }
 
-    /// <summary>splats on where the avatar would be drawn; the avatar's renderers off while its splats show</summary>
+    /// <summary>splats on where the avatar would be drawn (its layer, role-hidden spans, opacity > 0: SmplxAvatar.Visible); the mesh
+    /// avatar of a dancer with splat data is never drawn - every renderer under it stays off whether its splats show, load, cannot be
+    /// drawn (the skeleton lines show) or are hidden (owner rule 2026-10-23: SplatDancersDefault.DancerLook)</summary>
     void ApplyVisibility()
     {
         foreach (Entry e in entries)
@@ -1123,7 +1150,7 @@ public sealed class SplatDancers : MonoBehaviour
                 continue;
             }
 
-            bool show = splatsOn && !fellBack && e.Splat != null && e.Avatar.Visible;
+            bool show = splatsOn && !fellBack && e.Splat != null && e.Avatar.Visible && group != null;
             if (e.Splat != null)
             {
                 if (e.Splat.gameObject.activeSelf != show) e.Splat.gameObject.SetActive(show);
@@ -1134,9 +1161,31 @@ public sealed class SplatDancers : MonoBehaviour
                 e.Splat.OpacityScale = Parked(e) ? 0f : opacityMode == OpacityModes.ScaleSplats ? Mathf.Clamp01(e.Avatar.Opacity) : 1f;
             }
 
-            if (show) Hide(e);
-            else Unhide(e);
+            if (e.JsonPath != null) Hide(e); // splat data for this role: the mesh avatar is never drawn
+            else Unhide(e);                  // no splat data: its mesh avatar, as before
         }
+    }
+
+    /// <summary>how a dancer is drawn now (SplatDancersDefault.Look; the CLI state)</summary>
+    SplatDancersDefault.Look LookOf(Entry e) =>
+        SplatDancersDefault.DancerLook(e.JsonPath != null, splatsOn && group != null && e.Error == null, fellBack);
+
+    static readonly List<Renderer> RendererScratch = new();
+
+    /// <summary>the mesh-avatar renderers under an avatar that are drawn now (enabled, not forceRenderingOff): 0 for a dancer with splat
+    /// data (the Play-mode check of the owner's rule)</summary>
+    public static int MeshRenderersDrawn(SmplxAvatar avatar)
+    {
+        if (avatar == null) return 0;
+        avatar.GetComponentsInChildren(true, RendererScratch);
+        int n = 0;
+        foreach (Renderer r in RendererScratch)
+        {
+            if (r != null && r.enabled && !r.forceRenderingOff && r.gameObject.activeInHierarchy) n++;
+        }
+
+        RendererScratch.Clear();
+        return n;
     }
 
     /// <summary>an avatar whose pelvis is more than this far under the floor (in the avatar's own space) is PARKED: dancecap
@@ -1150,23 +1199,22 @@ public sealed class SplatDancers : MonoBehaviour
         return pelvis != null && e.Avatar.transform.InverseTransformPoint(pelvis.position).y < -ParkedBelowM;
     }
 
+    /// <summary>every renderer under the avatar off, scanned every frame (an attachment that adds its renderer later - the shoes, the
+    /// hair cards, a head prop - is off on its first frame; about 70 transforms per avatar, no allocation)</summary>
     void Hide(Entry e)
     {
-        Transform t = e.Avatar.transform;
-        if (t.hierarchyCount != e.ScannedHierarchy || Time.unscaledTime >= e.NextScan)
+        e.Avatar.GetComponentsInChildren(true, RendererScratch);
+        foreach (Renderer r in RendererScratch)
         {
-            e.ScannedHierarchy = t.hierarchyCount;
-            e.NextScan = Time.unscaledTime + 0.5f;
-            foreach (Renderer r in e.Avatar.GetComponentsInChildren<Renderer>(true))
-            {
-                if (!e.Hidden.Contains(r)) e.Hidden.Add(r);
-            }
+            if (r == null) continue;
+            if (!r.forceRenderingOff) r.forceRenderingOff = true;
+            if (!e.Hidden.Contains(r)) e.Hidden.Add(r);
         }
 
+        RendererScratch.Clear();
         for (int i = e.Hidden.Count - 1; i >= 0; i--)
         {
             if (e.Hidden[i] == null) e.Hidden.RemoveAt(i);
-            else e.Hidden[i].forceRenderingOff = true;
         }
     }
 
@@ -1178,7 +1226,6 @@ public sealed class SplatDancers : MonoBehaviour
         }
 
         e.Hidden.Clear();
-        e.ScannedHierarchy = -1;
     }
 
     void OnDisable()
@@ -1186,14 +1233,48 @@ public sealed class SplatDancers : MonoBehaviour
         SplatUrpFeature.OverSplats.Clear();
         SplatUrpFeature.OverSplatsInstanced.Clear();
         LinesBackOn();
-        foreach (Entry e in entries) Unhide(e);
+        foreach (Entry e in entries)
+        {
+            if (e.JsonPath == null) Unhide(e); // a dancer with splat data keeps its mesh avatar hidden (never drawn)
+        }
+
         SplatUrpFeature.Remove();
         Shader.SetGlobalFloat(OpacityId, 1f);
     }
 
+    /// <summary>the on-screen note when the loaded capture's splat dancers cannot be drawn (CannotDrawNote: D3D11 / GLES / no compute, the
+    /// players' watchdog, a splat avatar that failed to build) - the editor's Game view, a Windows player's desktop window</summary>
+    void OnGUI()
+    {
+        if (string.IsNullOrEmpty(CannotDrawNote) || entries.Count == 0 || HeadMovement.LibraryOwnsScreen) return;
+        if (noteStyle == null || noteBackground == null)
+        {
+            // an opaque panel of its own (the skin's box is nearly transparent over the scene)
+            noteBackground = new Texture2D(1, 1, TextureFormat.RGBA32, false) { hideFlags = HideFlags.HideAndDontSave };
+            noteBackground.SetPixel(0, 0, new Color(0.06f, 0.06f, 0.08f, 0.94f));
+            noteBackground.Apply();
+            noteStyle = new GUIStyle(GUI.skin.label)
+            {
+                wordWrap = true, fontSize = 15, alignment = TextAnchor.MiddleCenter, padding = new RectOffset(12, 12, 8, 8)
+            };
+            noteStyle.normal.textColor = new Color(1f, 0.85f, 0.4f);
+            noteStyle.normal.background = noteBackground;
+        }
+
+        // bottom centre, above the HUD's timing ticker (HeadMovement: Screen.height - 96 .. - 12): clear of the HUD text block at the top
+        // left and of the Enter VR button at the top right
+        float w = Mathf.Min(Screen.width - 24f, 760f);
+        float h = noteStyle.CalcHeight(new GUIContent(CannotDrawNote), w);
+        GUI.Box(new Rect((Screen.width - w) * 0.5f, Mathf.Max(12f, Screen.height - 108f - h), w, h), CannotDrawNote, noteStyle);
+    }
+
+    GUIStyle noteStyle;
+    Texture2D noteBackground;
+
     void OnDestroy()
     {
         Clear();
+        if (noteBackground != null) Destroy(noteBackground);
         if (Instance == this) Instance = null;
     }
 
@@ -1204,7 +1285,9 @@ public sealed class SplatDancers : MonoBehaviour
         {
             ["enabled"] = splatsOn,
             ["why"] = DefaultWhy,
-            ["handSet"] = handSet,
+            ["rule"] = "a dancer with splat data is always drawn as splats, never as its mesh avatar; no splat path: skeleton lines (owner 2026-10-23)",
+            ["cannotDrawNote"] = CannotDrawNote,
+            ["noPath"] = noPathNow,
             ["captureFlag"] = hm != null && hm.Manifest != null ? hm.Manifest.splat_dancers : null,
             ["capture"] = capture != null ? Path.GetFileName(capture) : null,
             ["opacityMode"] = opacityMode.ToString(),
@@ -1218,7 +1301,7 @@ public sealed class SplatDancers : MonoBehaviour
             ["lowResLayer"] = SplatUrpFeature.LowResActive ? SplatLowResFeature.Status : "off",
             ["alphaCutoff"] = group != null ? group.m_AlphaCutoff : -1f,
             ["sortEvery"] = group != null ? group.m_SortNthFrame : -1,
-            ["fellBackToAvatars"] = fellBack,
+            ["fellBackToSkeleton"] = fellBack,
             ["depthPatch"] = SplatUrpFeature.DepthPatch,
             ["hairMode"] = hairMode.ToString(),
             ["hairMotion"] = hairMotion,
@@ -1238,6 +1321,8 @@ public sealed class SplatDancers : MonoBehaviour
             dancers.Add(new Dictionary<string, object>
             {
                 ["role"] = e.Role.ToString(),
+                ["look"] = LookOf(e).ToString(),
+                ["meshRenderersDrawn"] = MeshRenderersDrawn(e.Avatar),
                 ["json"] = e.JsonPath,
                 ["loading"] = e.Loading != null,
                 ["error"] = e.Error,

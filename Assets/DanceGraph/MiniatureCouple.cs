@@ -5,7 +5,8 @@ using UnityEngine;
 /// The miniature couple of the "Dance graph" state (VIEWER_SPEC 3.10): both dancers at ~0.15 scale with their
 /// travel removed - the floor-projected couple centre, smoothed over ±0.75 s, is subtracted - so body rotation,
 /// sway and limb motion stay while the couple stands on a graph node. Glowing skeletons (lead red, follow white)
-/// always; translucent SMPL-X avatars when the capture has them (separate instances of the skins, scaled).
+/// always; translucent SMPL-X avatars when the capture has them (separate instances of the skins, scaled) - except for a dancer with a
+/// splat avatar (splats/&lt;role&gt;.json): owner rule 2026-10-23, never its mesh avatar - its skeleton only.
 /// </summary>
 public class MiniatureCouple : MonoBehaviour
 {
@@ -66,6 +67,7 @@ public class MiniatureCouple : MonoBehaviour
             string skin = manifest?.RolePath(manifest.smplx_skin, role);
             string motion = manifest?.RolePath(manifest.smplx, role);
             if (skin == null || motion == null) continue;
+            if (manifest.HasSplatAvatar(role)) continue; // a dancer with splat data is never drawn as its mesh avatar: skeleton only
             try
             {
                 SmplxAvatar avatar = SmplxAvatar.Create(skin, motion, role, avatarRoot);

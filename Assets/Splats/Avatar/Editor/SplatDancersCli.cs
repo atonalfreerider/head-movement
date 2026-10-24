@@ -13,9 +13,11 @@ using UnityEngine.Profiling;
 /// Splat dancers on the desktop (Play mode; Assets/Splats/Avatar/SplatDancers.cs):
 ///
 ///   unity command hm_splatdancers --action state
-///   unity command hm_splatdancers --action on | off            # the "splat dancers" viewer toggle by hand (wins for the editor session)
-///   unity command hm_splatdancers --action auto                # forget the hand choice: each capture's default (off; on for a
-///                                                                     # capture whose capture.json asks for it: SplatDancersDefault)
+///   unity command hm_splatdancers --action on | auto           # apply the rule to the loaded capture again (owner 2026-10-23: a dancer
+///                                                                     # with splat data is ALWAYS drawn as splats, never as its mesh avatar;
+///                                                                     # no splat path: skeleton lines; SplatDancersDefault)
+///   unity command hm_splatdancers --action off                 # REFUSED for a capture with splat data (no switch back to the mesh
+///                                                                     # avatars; hm_layer --layer avatars --visible false hides the dancers)
 ///   unity command hm_splatdancers --action hair --mode skinned | hidden | only
 ///   unity command hm_splatdancers --action opacity --mode opaque | avatars | scale   # avatars = fade the splat image to the avatars' opacity
 ///   unity command hm_splatdancers --action path --mode composite | direct          # composite (default): overlays depth-test against the splats
@@ -42,7 +44,7 @@ using UnityEngine.Profiling;
 /// </summary>
 public static class SplatDancersCli
 {
-    [CliCommand("hm_splatdancers", "Splat dancers (skinned LHM++ Gaussians instead of the mesh avatars; default off, on for a capture whose capture.json asks for it): state | on | off | auto (each capture's default again) | hair --mode skinned|hidden|only | hairmotion --mode strands|rigid | opacity --mode opaque|avatars|scale | path --mode composite|direct | depth --mode before|after | skeleton --mode physics|always|never (skeleton lines with the splats) | check [--samples N] (GPU skinning vs CPU reference) | haircheck (hair pass vs CPU reference, swing, head intrusion, stray bound hair) | perf_start | perf_report (frame + Gaussian pass GPU ms) | thin --max N --sigma M (load-time thinning, as -hmsplatmax / -hmsplatsigma in a player)")]
+    [CliCommand("hm_splatdancers", "Splat dancers (skinned LHM++ Gaussians; a dancer with splat data is always drawn as splats, never as its mesh avatar - skeleton lines where the device cannot draw them): state | on | auto (apply the rule again) | off (refused for a capture with splat data) | hair --mode skinned|hidden|only | hairmotion --mode strands|rigid | opacity --mode opaque|avatars|scale | path --mode composite|direct | depth --mode before|after | skeleton --mode physics|always|never (skeleton lines with the splats) | check [--samples N] (GPU skinning vs CPU reference) | haircheck (hair pass vs CPU reference, swing, head intrusion, stray bound hair) | perf_start | perf_report (frame + Gaussian pass GPU ms) | thin --max N --sigma M (load-time thinning, as -hmsplatmax / -hmsplatsigma in a player)")]
     public static string Command(
         [CliArg("action", "state | on | off | auto | hair | hairmotion | opacity | path | depth | skeleton | check | haircheck | perf_start | perf_report | thin")] string action = "state",
         [CliArg("mode", "hair: skinned|hidden|only; hairmotion: strands|rigid; opacity: opaque|avatars|scale; path: composite|direct; depth: before|after (the transparents); skeleton: physics|always|never")] string mode = null,
@@ -69,14 +71,14 @@ public static class SplatDancersCli
         switch ((action ?? "state").Trim().ToLowerInvariant())
         {
             case "on":
-                SplatDancers.SetEnabled(true);
+            case "auto":
+                SplatDancers.Reapply();
                 break;
             case "off":
-                SplatDancers.SetEnabled(false);
-                break;
-            case "auto":
-                SplatDancers.UseCaptureDefault();
-                break;
+            {
+                string note = SplatDancers.RefuseOff(); // throws for a capture with splat data
+                return JsonConvert.SerializeObject(new Dictionary<string, object> { ["note"] = note, ["enabled"] = SplatDancers.Enabled, ["why"] = SplatDancers.DefaultWhy });
+            }
             case "hair":
                 SplatDancers.HairMode = (mode ?? "skinned").ToLowerInvariant() switch
                 {
@@ -140,13 +142,13 @@ public static class SplatDancersCli
                 throw new ArgumentException($"unknown action '{action}'");
         }
 
-        return JsonConvert.SerializeObject(SplatDancers.Instance != null ? SplatDancers.Instance.State() : new Dictionary<string, object> { ["enabled"] = SplatDancers.Enabled, ["why"] = SplatDancers.DefaultWhy, ["handSet"] = SplatDancers.HandSet, ["instance"] = false });
+        return JsonConvert.SerializeObject(SplatDancers.Instance != null ? SplatDancers.Instance.State() : new Dictionary<string, object> { ["enabled"] = SplatDancers.Enabled, ["why"] = SplatDancers.DefaultWhy, ["cannotDrawNote"] = SplatDancers.CannotDrawNote, ["instance"] = false });
     }
 
     /// <summary>read back posed Gaussians from the GPU frame and compare with SplatSkinning on the CPU (same bones)</summary>
     static object Check(int samples)
     {
-        if (SplatDancers.Instance == null) throw new InvalidOperationException("splat dancers are not built (hm_splatdancers --action on)");
+        if (SplatDancers.Instance == null) throw new InvalidOperationException("splat dancers are not built (load a capture with splats/ on a D3D12 editor)");
         List<object> rows = new();
         foreach (Role role in new[] { Role.Lead, Role.Follow })
         {
@@ -209,7 +211,7 @@ public static class SplatDancersCli
     /// here (both avatars' bones, the hair's Advance), then the viewer is put back on its frame.</summary>
     static object HairCheck(float from = float.NaN, float to = float.NaN)
     {
-        if (SplatDancers.Instance == null) throw new InvalidOperationException("splat dancers are not built (hm_splatdancers --action on)");
+        if (SplatDancers.Instance == null) throw new InvalidOperationException("splat dancers are not built (load a capture with splats/ on a D3D12 editor)");
         SkinnedSplatAvatar s = SplatDancers.Instance.Splat(Role.Follow);
         if (s == null || s.HairBinding == null) throw new InvalidOperationException("the follow has no bound hair");
         HeadMovement hm = HeadMovement.Instance;
