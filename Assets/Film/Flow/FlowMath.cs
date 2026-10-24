@@ -7,7 +7,8 @@ namespace HmFilm
     /// The maths of the v3 film flow (dancecap docs/RECAP_FILM.md "What the Unity director must implement"): ONE easing (smootherstep),
     /// the frustum surface envelopes, cylindrical coordinates about the couple, and the composite camera paths of the transitions -
     /// a line along a phone's optical axis, a cylindrical Bezier about the couple's centre, a crane (a vertical arc about the look
-    /// point). Pure functions of their inputs: the director evaluates them from LIVE poses every frame, so a seek or a frame-locked
+    /// point); v4.3 adds the sampled azimuth tracks' interpolation (TrackAt).
+    /// Pure functions of their inputs: the director evaluates them from LIVE poses every frame, so a seek or a frame-locked
     /// recording shows exactly the same pictures. No Assembly-CSharp types (edit-mode tests: Assets/Film/Flow/Tests).
     /// </summary>
     public static class FlowMath
@@ -130,6 +131,23 @@ namespace HmFilm
             if (easeIn.HasValue) w *= Ramp(t, easeIn.Value.x, easeIn.Value.y);
             if (easeOut.HasValue) w *= 1f - Ramp(t, easeOut.Value.x, easeOut.Value.y);
             return 1f + (1f / scale - 1f) * (1f - w);
+        }
+
+        /// <summary>
+        /// v4.3 (dancecap UNITY_CONTRACT_v4 K): a sampled table at t0 + i x dt (i = 0 .. n - 1) at time t, linear between the samples and clamped to
+        /// the first / last sample outside them: x = (t - t0) / dt, i = clamp(floor(x), 0, n - 2), u = clamp(x - i, 0, 1), v[i] + (v[i + 1] - v[i]) u.
+        /// NaN for an empty table (or dt &lt;= 0 with more than one sample); one sample is a constant.
+        /// </summary>
+        public static float TrackAt(float t0, float dt, float[] v, float t)
+        {
+            if (v == null || v.Length == 0) return float.NaN;
+            int n = v.Length;
+            if (n == 1) return v[0];
+            if (!(dt > 0f)) return float.NaN;
+            float x = (t - t0) / dt;
+            int i = Mathf.Clamp(Mathf.FloorToInt(x), 0, n - 2);
+            float u = Mathf.Clamp01(x - i);
+            return v[i] + (v[i + 1] - v[i]) * u;
         }
 
         /// <summary>the FOV (deg) of the log-tan zoom: tan(fov / 2) = tan(a / 2)^(1 - z) x tan(b / 2)^z (an even zoom speed in the picture)</summary>

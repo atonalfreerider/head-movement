@@ -492,7 +492,15 @@ public class FilmCamera
             : s.Camera["azimuth_deg"] != null
             ? (s.P("azimuth_deg", 0f) + s.P("drift_deg_s", 0f) * Mathf.Max(0f, film - s.F0)) * Mathf.Deg2Rad
             : SideAzimuth(s, 1) + RunAngle(s, film, r => OrbitRate(r));
-        if (s.B("avoid_inline"))
+        if (s.Flow?.Track != null && s.Flow.Track.TryLift(film, out float trackLift))
+        {
+            // v4.3 (UNITY_CONTRACT_v4 K): inside an azimuth track's window its planned lift REPLACES the live inline lift below (the planner's twin
+            // of it: the damped pelvises, the +-36-frame Hann window, the cap and the closer factor already applied; the track's crossing.lift says
+            // whether the planned line crossing raises the eye toward the ground band's top, so the dancer behind shows longer); outside the
+            // window the live lift
+            height += trackLift;
+        }
+        else if (s.B("avoid_inline"))
         {
             float cap = (s.Camera["inline_lift_max_m"] != null ? s.P("inline_lift_max_m", 0.4f) : float.PositiveInfinity) * closer;
             float lift;
@@ -502,7 +510,9 @@ public class FilmCamera
                 // dancers' line, which a spin swings past the view in a few frames: measured on the first v4 sweep, the eye dropped 25 cm in
                 // 0.2 s (1.6 m/s) every time the couple turned. A pure function of film time, so seeks and recordings still agree
                 // every frame of the window (1/30 s; sparser samples alias the lift's frame-level twitches into a 6-frame wobble); a sample
-                // beyond a dance-time cut (the replay) takes the value at the cut's own side: the window never reaches across it
+                // beyond a dance-time cut (the replay) takes the value at the cut's own side: the window never reaches across it.
+                // v4.3: this live lift only runs OUTSIDE an azimuth track's window (inside it the table's lift plays, above), so its samples read
+                // the block's law, never the table: a frame next to the window (a phone way) is exactly the frame without the track
                 float sum = 0f, ws = 0f;
                 float lastCut = LastCutAtOrBefore(film), nextCut = NextCutAfter(film);
                 for (int k = -36; k <= 36; k++)
@@ -510,7 +520,7 @@ public class FilmCamera
                     float w = Mathf.Cos(k / 37f * Mathf.PI * 0.5f);
                     w *= w;
                     float tk = Mathf.Clamp(film + k / 30f, Mathf.Max(lastCut, 0f), nextCut - 1e-3f);
-                    WorldAzimuth(s, tk, out float pk);
+                    WorldAzimuth(s, tk, out float pk, useTrack: false);
                     sum += w * Mathf.Min(InlineLift(s, tk, pk), cap);
                     ws += w;
                 }
@@ -1355,10 +1365,20 @@ public class FilmCamera
     }
 
     /// <summary>the eye's planned azimuth (rad) of a v3 3D shot: world_azimuth_deg + drift_deg_s x (film - F0) (not clamped before F0: a
-    /// transition into the shot starts before it and sees the same smooth drift)</summary>
-    bool WorldAzimuth(FilmShot s, float film, out float phi)
+    /// transition into the shot starts before it and sees the same smooth drift). v4.3 (dancecap UNITY_CONTRACT_v4 K): a block that names an
+    /// azimuth track (camera.azimuth_track) plays the track's table strictly inside its film window instead - the ONE place every caller (the
+    /// orbit, rhythm, physics_3q, the feature zoom, the feet close-up, the overhead's orbit Up) and every way (they blend these live poses)
+    /// read the azimuth from; at and outside the window the law, so a way next to the window is exactly as without it. useTrack = false: the
+    /// law always (the live inline lift's Hann samples of a frame outside the window, which may reach into it)</summary>
+    bool WorldAzimuth(FilmShot s, float film, out float phi, bool useTrack = true)
     {
         phi = 0f;
+        if (useTrack && s.Flow?.Track != null && s.Flow.Track.TryAzimuthDeg(film, out float deg))
+        {
+            phi = deg * Mathf.Deg2Rad;
+            return true;
+        }
+
         if (s.Camera["world_azimuth_deg"] == null) return false;
         phi = (s.P("world_azimuth_deg", 0f) + s.P("drift_deg_s", 0f) * (film - s.F0)) * Mathf.Deg2Rad;
         return true;

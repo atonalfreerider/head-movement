@@ -467,7 +467,8 @@ namespace HmFilm.Tests
                 Assert.IsTrue(s1.Any(x => x.Camera == w.Phone && x.Alpha > 0.999f && x.Top > 0.999f), $"phone {w.Phone}: no opaque surface at the departure {w.Departure}");
             }
 
-            if (tl.Revision != "4.2") return;
+            // v4.3 = v4.2 + the planned azimuth tracks (UNITY_CONTRACT_v4 K): every v4.2 rule below holds for it too
+            if (tl.Revision != "4.2" && tl.Revision != "4.3") return;
             // v4.2: the physics meter - one window per switch-on of the physics view in the layer timeline (none dropped here), each starting at or
             // after its switch-on, 0.3 s up, shown to 4 s after its start, 1 s down; never over a chapter card; gone between the windows
             Assert.IsTrue(tl.HasMeter);
@@ -538,6 +539,199 @@ namespace HmFilm.Tests
                     Assert.AreEqual(next.TransStart, eout.Value.y, 0.01f);
                     Assert.AreEqual(1.25f, FlowMath.CloserFactor(0.8f, next.TransStart, ein, eout), 1e-3f);
                 }
+            }
+        }
+
+        // ------------------------------------------------------------------ v4.3: the planned azimuth tracks (flow.azimuth_tracks, UNITY_CONTRACT_v4 K / L)
+
+        [Test]
+        public void TrackAtIsLinearBetweenItsSamplesAndClampedOutside()
+        {
+            float[] v = { 0f, 1f, 4f, 9f };
+            const float t0 = 10f, dt = 0.5f;
+            for (int i = 0; i < v.Length; i++) Assert.AreEqual(v[i], FlowMath.TrackAt(t0, dt, v, t0 + i * dt), 1e-5f, $"sample {i}");
+            Assert.AreEqual(0.5f, FlowMath.TrackAt(t0, dt, v, 10.25f), 1e-5f, "a midpoint");
+            Assert.AreEqual(2.5f, FlowMath.TrackAt(t0, dt, v, 10.75f), 1e-5f);
+            Assert.AreEqual(6.5f, FlowMath.TrackAt(t0, dt, v, 11.25f), 1e-5f);
+            Assert.AreEqual(1f + 3f * 0.3f, FlowMath.TrackAt(t0, dt, v, 10.65f), 1e-4f, "linear inside a step");
+            Assert.AreEqual(0f, FlowMath.TrackAt(t0, dt, v, 9f), Eps, "before the first sample: the first");
+            Assert.AreEqual(9f, FlowMath.TrackAt(t0, dt, v, 11.5f), Eps, "the last sample");
+            Assert.AreEqual(9f, FlowMath.TrackAt(t0, dt, v, 12f), Eps, "after the last sample: the last");
+            Assert.AreEqual(7f, FlowMath.TrackAt(0f, 1f, new[] { 7f }, 3f), Eps, "one sample: a constant");
+            Assert.IsTrue(float.IsNaN(FlowMath.TrackAt(0f, 1f, new float[0], 0f)), "an empty table");
+            Assert.IsTrue(float.IsNaN(FlowMath.TrackAt(0f, 1f, null, 0f)));
+            Assert.IsTrue(float.IsNaN(FlowMath.TrackAt(0f, 0f, v, 0f)), "dt 0");
+            // continuous: no step anywhere (never steeper than the table's steepest slope, 10 per second)
+            float prev = FlowMath.TrackAt(t0, dt, v, 9.9f);
+            for (int k = 1; k <= 1800; k++)
+            {
+                float x = FlowMath.TrackAt(t0, dt, v, 9.9f + k * 1e-3f);
+                Assert.LessOrEqual(Mathf.Abs(x - prev), 10f * 1e-3f + 1e-4f, $"at {9.9f + k * 1e-3f}");
+                prev = x;
+            }
+        }
+
+        /// <summary>the synthetic v4 direction with a planned track on orbit b (30-40 s, law -80 + 3 (t - 30) deg): its window [31, 39], 10-Hz samples
+        /// over 30.9 .. 39.1, deg = the law + 20 x bump, lift = 0.3 x bump (bump = C2Bump over the window: 0 with two derivatives at both ends);
+        /// short = how many samples the arrays miss (a broken track)</summary>
+        static JObject SyntheticV43(int shortBy = 0)
+        {
+            JObject d = SyntheticV4();
+            d["flow"]["revision"] = "4.3";
+            const float t0 = 30.9f, dt = 0.1f, a = 31f, b = 39f;
+            const int n = 83;
+            JArray deg = new(), lift = new();
+            for (int i = 0; i < n - shortBy; i++)
+            {
+                float t = t0 + i * dt, bump = FlowMath.C2Bump((t - a) / (b - a));
+                deg.Add(-80f + 3f * (t - 30f) + 20f * bump);
+                lift.Add(0.3f * bump);
+            }
+
+            d["flow"]["azimuth_tracks"] = new JObject
+            {
+                ["b2"] = new JObject
+                {
+                    ["schema"] = "hm film azimuth track v1", ["film"] = new JArray(a, b), ["t0"] = t0, ["dt"] = dt, ["n"] = n, ["deg"] = deg, ["lift_m"] = lift, ["interp"] = "linear",
+                    ["law"] = new JObject { ["world_azimuth_deg"] = -80, ["drift_deg_s"] = 3, ["F0"] = 30 },
+                    ["rules"] = new JObject
+                    {
+                        ["rate_min_deg_s"] = 1.0, ["rate_max_deg_s"] = 7.0, ["rate_max_outside_deg_s"] = 6.0, ["accel_max_deg_s2"] = 2.0, ["lift_top_m"] = 2.4
+                    },
+                    ["crossing"] = new JObject { ["film"] = new JArray(34.0, 36.0) }
+                }
+            };
+            ((JObject)d["segments"][2]["camera"])["azimuth_track"] = "b2";
+            return d;
+        }
+
+        [Test]
+        public void AzimuthTrackPlaysOnlyStrictlyInsideItsWindow()
+        {
+            FlowTimeline tl = FlowTimeline.Build(SyntheticV43());
+            Assert.AreEqual(0, tl.Warnings.Count, string.Join("; ", tl.Warnings));
+            Assert.AreEqual("4.3", tl.Revision);
+            Assert.AreEqual(4, tl.Shots.Count, "the track key does not split a shot");
+            Assert.AreEqual(1, tl.Tracks.Count);
+            FlowShot sb = tl.Shots[2];
+            Assert.AreEqual("b2", sb.TrackId);
+            Assert.NotNull(sb.Track);
+            Assert.IsNull(tl.Shots[0].Track);
+            Assert.IsNull(tl.Shots[3].Track);
+            FlowTrack tr = sb.Track;
+            Assert.AreEqual(83, tr.N);
+            // at the window's ends and outside it: the block's law (no table value, no planned lift)
+            foreach (float t in new[] { 30f, 30.95f, 31f, 39f, 39.05f, 40f })
+            {
+                Assert.IsFalse(tr.TryAzimuthDeg(t, out _), $"azimuth at {t}");
+                Assert.IsFalse(tr.TryLift(t, out _), $"lift at {t}");
+            }
+
+            // inside: the table (the law + 20 deg at the middle, lift 0.3 m)
+            Assert.IsTrue(tr.TryAzimuthDeg(35f, out float d35));
+            Assert.AreEqual(-80f + 3f * 5f + 20f, d35, 1e-3f);
+            Assert.IsTrue(tr.TryLift(35f, out float l35));
+            Assert.AreEqual(0.3f, l35, 1e-4f);
+            // the switch at the ends is invisible: the table equals the law there
+            Assert.IsTrue(tr.TryAzimuthDeg(31.0001f, out float dA));
+            Assert.AreEqual(tr.LawDeg(31.0001f), dA, 1e-3f);
+            Assert.IsTrue(tr.TryAzimuthDeg(38.9999f, out float dB));
+            Assert.AreEqual(tr.LawDeg(38.9999f), dB, 1e-3f);
+            Assert.IsTrue(tr.TryLift(31.0001f, out float lA));
+            Assert.AreEqual(0f, lA, 1e-5f);
+            // the rules for the orbit check (UNITY_CONTRACT_v4 L)
+            Assert.AreEqual(1f, tr.RateMin, Eps);
+            Assert.AreEqual(7f, tr.RateMaxAt(35f), Eps, "inside the crossing");
+            Assert.AreEqual(6f, tr.RateMaxAt(32f), Eps, "outside it");
+            Assert.AreEqual(6f, tr.RateMaxAt(float.NaN), Eps);
+            Assert.IsTrue(tr.InCrossing(34f) && tr.InCrossing(36f));
+            Assert.IsFalse(tr.InCrossing(33.9f) || tr.InCrossing(36.1f));
+            Assert.AreEqual(2f, tr.AccelMax, Eps);
+            Assert.AreEqual(2.4f, tr.LiftTopM, Eps);
+        }
+
+        [Test]
+        public void ABrokenAzimuthTrackIsDroppedWithAWarning()
+        {
+            // arrays one sample short of n: the track is dropped, the shot naming it plays its law (two warnings: the track, the shot)
+            FlowTimeline tl = FlowTimeline.Build(SyntheticV43(1));
+            Assert.AreEqual(0, tl.Tracks.Count);
+            Assert.AreEqual("b2", tl.Shots[2].TrackId);
+            Assert.IsNull(tl.Shots[2].Track);
+            Assert.AreEqual(2, tl.Warnings.Count, string.Join("; ", tl.Warnings));
+            // a window not inside its samples
+            JObject d = SyntheticV43();
+            d["flow"]["azimuth_tracks"]["b2"]["film"] = new JArray(30.5, 39.0);
+            FlowTimeline t2 = FlowTimeline.Build(d);
+            Assert.AreEqual(0, t2.Tracks.Count);
+            Assert.IsTrue(t2.Warnings.Any(w => w.Contains("not inside the samples")), string.Join("; ", t2.Warnings));
+            // a lift table of the wrong length
+            JObject d3 = SyntheticV43();
+            ((JArray)d3["flow"]["azimuth_tracks"]["b2"]["lift_m"]).RemoveAt(0);
+            Assert.AreEqual(0, FlowTimeline.Build(d3).Tracks.Count);
+            // a shot naming a track that does not exist
+            JObject d4 = SyntheticV4();
+            ((JObject)d4["segments"][0]["camera"])["azimuth_track"] = "nope";
+            FlowTimeline t4 = FlowTimeline.Build(d4);
+            Assert.IsNull(t4.Shots[0].Track);
+            Assert.AreEqual(1, t4.Warnings.Count, string.Join("; ", t4.Warnings));
+        }
+
+        [Test]
+        public void V43DirectionAzimuthTrackKeepsItsRules()
+        {
+            if (!File.Exists(V4Direction)) Assert.Ignore($"no {V4Direction}");
+            JObject d = JObject.Parse(File.ReadAllText(V4Direction));
+            FlowTimeline tl = FlowTimeline.Build(d);
+            Assert.NotNull(tl);
+            if (tl.Revision != "4.3") Assert.Ignore($"revision {tl.Revision}: no azimuth tracks");
+            Assert.AreEqual(0, tl.Warnings.Count, string.Join("; ", tl.Warnings));
+            Assert.GreaterOrEqual(tl.Tracks.Count, 1);
+            JArray segs = (JArray)d["segments"];
+            foreach (FlowTrack tr in tl.Tracks.Values)
+            {
+                List<FlowShot> users = tl.Shots.Where(s => s.Track == tr).ToList();
+                Assert.AreEqual(1, users.Count, $"track {tr.Id}: played by {users.Count} shots");
+                FlowShot sh = users[0];
+                Assert.AreEqual("orbit", sh.Mode);
+                JObject cam = (JObject)segs[sh.FirstSegment]["camera"];
+                // every segment of the shot names the track (the blocks stay identical: still one shot)
+                for (int i = sh.FirstSegment; i <= sh.LastSegment; i++) Assert.AreEqual(tr.Id, segs[i]["camera"]?.Value<string>("azimuth_track"), $"segment {i}");
+                // the window lies between the arrival of the shot's way in and the start of the next shot's way: no way frame plays the table
+                Assert.GreaterOrEqual(tr.A, sh.TransEnd - 1e-3f, "the window starts inside the way in");
+                FlowShot next = sh.Index + 1 < tl.Shots.Count ? tl.Shots[sh.Index + 1] : null;
+                if (next?.T != null) Assert.LessOrEqual(tr.B, next.TransStart + 1e-3f, "the window reaches into the next way");
+                Assert.LessOrEqual(tr.B, sh.F1 + 1e-3f);
+                // the law at both ends of the window (the block's keys and the track's own record agree)
+                float w0 = cam.Value<float>("world_azimuth_deg"), dr = cam.Value<float>("drift_deg_s");
+                Assert.AreEqual(w0, tr.LawAzimuthDeg, 1e-4f);
+                Assert.AreEqual(dr, tr.LawDriftDegS, 1e-4f);
+                Assert.AreEqual(sh.F0, tr.LawF0, 1e-3f);
+                float Law(float t) => w0 + dr * (t - sh.F0);
+                Assert.AreEqual(Law(tr.A), FlowMath.TrackAt(tr.T0, tr.Dt, tr.Deg, tr.A), 1e-3f, "the table vs the law at the window's start");
+                Assert.AreEqual(Law(tr.B), FlowMath.TrackAt(tr.T0, tr.Dt, tr.Deg, tr.B), 1e-3f, "... at its end");
+                // every 1/30-s step turns RateMin .. RateMax its way (never reversing; RateMaxOutside unless both ends are in the crossing), |accel| <= AccelMax
+                float sign = Mathf.Sign(dr);
+                double rMin = double.MaxValue, rMax = 0.0, rMaxOut = 0.0, aMax = 0.0;
+                for (int i = 0; i + 1 < tr.N; i++)
+                {
+                    double r = sign * ((double)tr.Deg[i + 1] - tr.Deg[i]) / tr.Dt;
+                    rMin = System.Math.Min(rMin, r);
+                    rMax = System.Math.Max(rMax, r);
+                    if (!(tr.InCrossing(tr.T0 + i * tr.Dt) && tr.InCrossing(tr.T0 + (i + 1) * tr.Dt))) rMaxOut = System.Math.Max(rMaxOut, r);
+                    if (i + 2 < tr.N) aMax = System.Math.Max(aMax, System.Math.Abs(((double)tr.Deg[i + 2] - 2.0 * tr.Deg[i + 1] + tr.Deg[i]) / ((double)tr.Dt * tr.Dt)));
+                }
+
+                Assert.GreaterOrEqual(rMin, tr.RateMin - 0.01, "the slowest step");
+                Assert.LessOrEqual(rMax, tr.RateMax + 0.01, "the fastest step");
+                if (!float.IsNaN(tr.RateMaxOutside)) Assert.LessOrEqual(rMaxOut, tr.RateMaxOutside + 0.01, "the fastest step outside the crossing");
+                Assert.LessOrEqual(aMax, tr.AccelMax + 0.05, "the acceleration (float tables: 0.05 deg/s2 of rounding)");
+                // the lift: 0 at both ends of the window, never below 0, never above the ground band's top over the block's eye height
+                Assert.NotNull(tr.Lift);
+                Assert.AreEqual(0f, FlowMath.TrackAt(tr.T0, tr.Dt, tr.Lift, tr.A), 1e-4f);
+                Assert.AreEqual(0f, FlowMath.TrackAt(tr.T0, tr.Dt, tr.Lift, tr.B), 1e-4f);
+                Assert.GreaterOrEqual(tr.Lift.Min(), -1e-4f);
+                Assert.LessOrEqual(tr.Lift.Max(), tr.LiftTopM - cam.Value<float>("height_m") + 1e-3f);
             }
         }
     }

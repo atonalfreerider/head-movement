@@ -197,6 +197,125 @@ namespace HmFilm
         public FlowFrustum Frustum;
     }
 
+    /// <summary>
+    /// v4.3 flow.azimuth_tracks.&lt;id&gt; (dancecap UNITY_CONTRACT_v4 K): a planned azimuth table for one slow orbit, named by its camera block's
+    /// `azimuth_track`. Strictly inside its film window (A &lt; film &lt; B) the eye's WORLD azimuth about the orbit centre (deg, unwrapped, the
+    /// viewer's atan2(z, x)) and its inline lift (m) come from the table (FlowMath.TrackAt: linear between the samples at T0 + i x Dt); at and
+    /// outside the window the block's own law plays, exactly as without a track. Rate rules (deg/s, the orbit's way) for the checks:
+    /// RateMin .. RateMax inside the crossing window [CrossA, CrossB], RateMin .. RateMaxOutside elsewhere.
+    /// </summary>
+    public sealed class FlowTrack
+    {
+        public string Id;
+        public float A, B, T0, Dt;
+        public float[] Deg, Lift;
+        public float RateMin = 1f, RateMax = 7f, RateMaxOutside = float.NaN, AccelMax = 2f, LiftTopM = 2.4f;
+        public float CrossA = float.NaN, CrossB = float.NaN;
+        public float LawAzimuthDeg = float.NaN, LawDriftDegS = float.NaN, LawF0 = float.NaN;
+
+        public int N => Deg?.Length ?? 0;
+
+        /// <summary>film strictly inside the window (the open interval: the window's ends play the law)</summary>
+        public bool Inside(float film) => film > A && film < B;
+
+        /// <summary>the crossing window (the line crossing the rules allow up to RateMax); false without one</summary>
+        public bool InCrossing(float film) => !float.IsNaN(CrossA) && film >= CrossA && film <= CrossB;
+
+        /// <summary>the fastest planned turn (deg/s) at film: RateMax inside the crossing, RateMaxOutside elsewhere (RateMax when not given)</summary>
+        public float RateMaxAt(float film) => InCrossing(film) || float.IsNaN(RateMaxOutside) ? RateMax : RateMaxOutside;
+
+        /// <summary>the table's world azimuth (deg) at film inside the window; false outside it (the block's law)</summary>
+        public bool TryAzimuthDeg(float film, out float deg)
+        {
+            deg = 0f;
+            if (!Inside(film)) return false;
+            deg = FlowMath.TrackAt(T0, Dt, Deg, film);
+            return !float.IsNaN(deg);
+        }
+
+        /// <summary>the table's inline lift (m) at film inside the window (0 without a lift table); false outside it (the live lift)</summary>
+        public bool TryLift(float film, out float lift)
+        {
+            lift = 0f;
+            if (!Inside(film)) return false;
+            if (Lift != null && Lift.Length > 0) lift = FlowMath.TrackAt(T0, Dt, Lift, film);
+            if (float.IsNaN(lift)) lift = 0f;
+            return true;
+        }
+
+        /// <summary>the block's law at film (deg): world_azimuth_deg + drift_deg_s x (film - F0), from the track's `law` record (NaN without it)</summary>
+        public float LawDeg(float film) => LawAzimuthDeg + LawDriftDegS * (film - LawF0);
+
+        static float F(JToken t, float fallback = float.NaN) =>
+            t != null && (t.Type == JTokenType.Float || t.Type == JTokenType.Integer) ? t.Value<float>() : fallback;
+
+        static float[] Floats(JToken t)
+        {
+            if (t is not JArray a) return null;
+            float[] v = new float[a.Count];
+            for (int i = 0; i < a.Count; i++)
+            {
+                float x = F(a[i]);
+                if (float.IsNaN(x)) return null;
+                v[i] = x;
+            }
+
+            return v;
+        }
+
+        /// <summary>one track from its JSON; null (with the reason) when its arrays are not n long, dt is not positive or its window is not inside
+        /// its samples - the shot then plays its law</summary>
+        public static FlowTrack Parse(string id, JToken t, out string error)
+        {
+            error = null;
+            if (t is not JObject o)
+            {
+                error = "not an object";
+                return null;
+            }
+
+            if (o["film"] is not JArray w || w.Count != 2)
+            {
+                error = "no film [a, b] window";
+                return null;
+            }
+
+            FlowTrack tr = new() { Id = id, A = F(w[0]), B = F(w[1]), T0 = F(o["t0"]), Dt = F(o["dt"]), Deg = Floats(o["deg"]) };
+            int n = o["n"] != null ? (int)F(o["n"], -1f) : tr.N;
+            if (float.IsNaN(tr.A) || float.IsNaN(tr.B) || !(tr.B > tr.A)) error = $"film window {w} is not a < b";
+            else if (float.IsNaN(tr.T0) || !(tr.Dt > 0f)) error = "t0 / dt missing or dt <= 0";
+            else if (tr.Deg == null || tr.N != n || n < 2) error = $"deg has {(tr.Deg == null ? "no numbers" : tr.N + " values")}, n = {n}";
+            else if (o["lift_m"] != null && (Floats(o["lift_m"]) is not float[] lift || lift.Length != n)) error = $"lift_m is not {n} numbers";
+            else if (tr.T0 > tr.A + 1e-3f || tr.T0 + (n - 1) * tr.Dt < tr.B - 1e-3f)
+                error = $"the window [{tr.A}, {tr.B}] is not inside the samples [{tr.T0}, {tr.T0 + (n - 1) * tr.Dt}]";
+            if (error != null) return null;
+            if (o["lift_m"] != null) tr.Lift = Floats(o["lift_m"]);
+            if (o["rules"] is JObject r)
+            {
+                tr.RateMin = F(r["rate_min_deg_s"], tr.RateMin);
+                tr.RateMax = F(r["rate_max_deg_s"], tr.RateMax);
+                tr.RateMaxOutside = F(r["rate_max_outside_deg_s"]);
+                tr.AccelMax = F(r["accel_max_deg_s2"], tr.AccelMax);
+                tr.LiftTopM = F(r["lift_top_m"], tr.LiftTopM);
+            }
+
+            if (o["crossing"]?["film"] is JArray cw && cw.Count == 2)
+            {
+                tr.CrossA = F(cw[0]);
+                tr.CrossB = F(cw[1]);
+            }
+
+            if (o["law"] is JObject law)
+            {
+                tr.LawAzimuthDeg = F(law["world_azimuth_deg"]);
+                tr.LawDriftDegS = F(law["drift_deg_s"]);
+                tr.LawF0 = F(law["F0"]);
+            }
+
+            return tr;
+        }
+    }
+
     /// <summary>a shot of the flow (the same grouping as FilmCamera.BuildShots: consecutive segments with an identical camera block and no
     /// dance-time jump)</summary>
     public sealed class FlowShot
@@ -205,6 +324,10 @@ namespace HmFilm
         public string Mode, FirstSegmentId, Phone;
         public float F0, F1;
         public FlowTransition T;
+
+        /// <summary>v4.3: the planned azimuth track the shot's camera block names (camera.azimuth_track); null = the block's law everywhere</summary>
+        public FlowTrack Track;
+        public string TrackId;
         public float TransStart => T != null ? F0 + T.StartS : F0;
         public float TransEnd => T != null ? F0 + T.StartS + T.DurationS : F0;
         public bool IsPhone => Mode == "camera_tour";
@@ -266,6 +389,9 @@ namespace HmFilm
         public readonly List<FlowMeterWindow> MeterWindows = new();
         public bool HasMeter;
 
+        /// <summary>v4.3 flow.azimuth_tracks: id -&gt; the planned azimuth track (a shot plays the one its camera block names)</summary>
+        public readonly Dictionary<string, FlowTrack> Tracks = new();
+
         /// <summary>v4.2 flow.meter.place: the meter's size factor per aspect (the 300 x 74 px box; 9:16 1.65, 16:9 1.5); NaN = the director's own</summary>
         public float MeterScaleVertical = float.NaN, MeterScaleHorizontal = float.NaN;
 
@@ -322,6 +448,16 @@ namespace HmFilm
                 tl.MeterScaleHorizontal = F(meter["place"]?["horizontal"]?["scale"]);
             }
 
+            if (flow["azimuth_tracks"] is JObject tracks)
+            {
+                foreach (KeyValuePair<string, JToken> kv in tracks)
+                {
+                    FlowTrack tr = FlowTrack.Parse(kv.Key, kv.Value, out string why);
+                    if (tr != null) tl.Tracks[kv.Key] = tr;
+                    else tl.Warnings.Add($"flow.azimuth_tracks.{kv.Key}: {why}: dropped (its shot plays its law)");
+                }
+            }
+
             if (flow["defaults"] is JObject def)
             {
                 tl.FrustumDepthM = F(def["frustum_depth_m"], 0.9f);
@@ -370,6 +506,13 @@ namespace HmFilm
                     FirstSegmentId = s.Value<string>("id"), T = FlowTransition.Parse(cam["transition_in"] as JObject)
                 };
                 if (cam["cameras"] is JArray list && list.Count > 0) cur.Phone = list[0].Value<string>("camera");
+                if (cam["azimuth_track"]?.Type == JTokenType.String)
+                {
+                    cur.TrackId = cam.Value<string>("azimuth_track");
+                    if (!tl.Tracks.TryGetValue(cur.TrackId, out cur.Track))
+                        tl.Warnings.Add($"shot {cur.FirstSegmentId}: azimuth_track '{cur.TrackId}' is not in flow.azimuth_tracks (the shot plays its law)");
+                }
+
                 curCam = cam;
                 tl.Shots.Add(cur);
                 if (cur.T != null) tl.SegmentLayerStart[i] = f0 + cur.T.LayersSwitchS;

@@ -444,16 +444,22 @@ public static class FilmFlowCheck
             });
         }
 
-        // the orbits' own poses (3D shots between the ways): their settled rate about the couple
+        // the orbits' own poses (3D shots between the ways): their settled rate about the couple. v4.3 (UNITY_CONTRACT_v4 L): a frame inside the
+        // window of the shot's azimuth track is in band at the track's own rates (RateMin .. RateMax inside its crossing, RateMin .. RateMaxOutside
+        // elsewhere, +-0.25: the live centre is damped), counted apart from the 2.5-6 band of the untracked orbits; turning back is the same rule
         List<object> orbits = new();
         int orbitOut = 0, orbitStatic = 0, orbitBack = 0, orbitFrames = 0;
+        int trackedFrames = 0, trackedOut = 0, trackedCrossingFrames = 0;
+        float trackedLo = float.PositiveInfinity, trackedHi = 0f, trackedHiOutsideCrossing = 0f, trackedEyeMax = float.NegativeInfinity;
+        List<string> trackedOutAt = new();
         foreach (FlowShot s in flow.Shots)
         {
             if (s.Mode != "orbit" && s.Mode != "overhead_floorcraft") continue;
             FilmShot fs = fc.Shots[s.Index];
             float drift = fs.P("drift_deg_s", float.NaN);
-            float lo = float.PositiveInfinity, hi = 0f;
-            int frames = 0;
+            FlowTrack trk = s.Track;
+            float lo = float.PositiveInfinity, hi = 0f, tLo = float.PositiveInfinity, tHi = 0f, tHiOut = 0f, tEye = float.NegativeInfinity;
+            int frames = 0, tFrames = 0, tOut = 0;
             List<float> dists = new(), rads = new(), fovs = new(), tops = new();
             float nearMin = float.PositiveInfinity;
             for (int i = 0; i < n; i++)
@@ -479,18 +485,49 @@ public static class FilmFlowCheck
                 float ar = Mathf.Abs(r);
                 lo = Mathf.Min(lo, ar);
                 hi = Mathf.Max(hi, ar);
-                if (ar < 2.5f - 0.25f || ar > 6f + 0.25f) orbitOut++;
+                if (trk != null && trk.Inside(time[i]))
+                {
+                    // v4.3: the tracked frame's own band (the rate its way: a turning-back frame is out of band too)
+                    bool cross = trk.InCrossing(time[i]);
+                    float sr = !float.IsNaN(drift) && Mathf.Abs(drift) > 0.1f ? r * Mathf.Sign(drift) : ar;
+                    tFrames++;
+                    trackedFrames++;
+                    if (cross) trackedCrossingFrames++;
+                    tLo = Mathf.Min(tLo, sr);
+                    tHi = Mathf.Max(tHi, sr);
+                    if (!cross) tHiOut = Mathf.Max(tHiOut, sr);
+                    tEye = Mathf.Max(tEye, eye[i].y);
+                    if (sr < trk.RateMin - 0.25f || sr > trk.RateMaxAt(time[i]) + 0.25f)
+                    {
+                        tOut++;
+                        trackedOut++;
+                        if (trackedOutAt.Count < 40) trackedOutAt.Add($"{F(time[i])} {state[i]}: {sr:0.00} deg/s its way (band {trk.RateMin:0.##}-{trk.RateMaxAt(time[i]):0.##} +-0.25)");
+                    }
+                }
+                else if (ar < 2.5f - 0.25f || ar > 6f + 0.25f) orbitOut++;
                 if (ar < 0.2f) orbitStatic++;
                 if (!float.IsNaN(drift) && Mathf.Abs(drift) > 0.1f && Mathf.Sign(r) != Mathf.Sign(drift) && ar > 1f) orbitBack++;
             }
 
+            trackedLo = Mathf.Min(trackedLo, tLo);
+            trackedHi = Mathf.Max(trackedHi, tHi);
+            trackedHiOutsideCrossing = Mathf.Max(trackedHiOutsideCrossing, tHiOut);
+            trackedEyeMax = Mathf.Max(trackedEyeMax, tEye);
             if (frames > 0)
                 orbits.Add(new
                 {
                     shot = s.FirstSegmentId, film = $"{F(s.F0)}-{F(s.F1)}", planDriftDegS = drift, frames, rateMin = Math.Round(lo, 2), rateMax = Math.Round(hi, 2),
                     planRadiusM = Math.Round(fs.P(fd.Vertical ? "radius_vertical_m" : "radius_m", float.NaN), 3), eyeDistanceMedianM = Math.Round(Median(dists), 3),
                     eyeDistanceMinM = dists.Count > 0 ? Math.Round(dists.Min(), 3) : double.NaN, radiusMedianM = Math.Round(Median(rads), 3),
-                    nearestDancerMinM = Math.Round(nearMin, 3), fovMedianDeg = Math.Round(Median(fovs), 2), headTopMedian = Math.Round(Median(tops), 3)
+                    nearestDancerMinM = Math.Round(nearMin, 3), fovMedianDeg = Math.Round(Median(fovs), 2), headTopMedian = Math.Round(Median(tops), 3),
+                    track = trk == null ? null : new
+                    {
+                        id = trk.Id, window = $"{F(trk.A)}-{F(trk.B)}", crossing = float.IsNaN(trk.CrossA) ? null : $"{F(trk.CrossA)}-{F(trk.CrossB)}",
+                        band = $"{trk.RateMin:0.##}-{trk.RateMax:0.##} deg/s in the crossing, {trk.RateMin:0.##}-{trk.RateMaxAt(float.NaN):0.##} elsewhere (+-0.25)",
+                        frames = tFrames, outsideBand = tOut, rateMinItsWay = tFrames > 0 ? Math.Round(tLo, 2) : double.NaN,
+                        rateMaxItsWay = tFrames > 0 ? Math.Round(tHi, 2) : double.NaN, rateMaxOutsideCrossing = tFrames > 0 ? Math.Round(tHiOut, 2) : double.NaN,
+                        eyeMaxM = tFrames > 0 ? Math.Round(tEye, 3) : double.NaN
+                    }
                 });
         }
 
@@ -530,6 +567,10 @@ public static class FilmFlowCheck
                 limits = "turn 12, rotation 12, speed 1.2 (ground ways), crane pitch 20"
             },
             ways, orbits, orbitFrames, orbitFramesOutside2p5to6 = orbitOut, orbitStaticFrames = orbitStatic, orbitTurningBackFrames = orbitBack,
+            orbitTrackedFrames = trackedFrames, orbitTrackedFramesOutsideBand = trackedOut, orbitTrackedCrossingFrames = trackedCrossingFrames,
+            orbitTrackedRateMinItsWay = trackedFrames > 0 ? Math.Round(trackedLo, 2) : double.NaN, orbitTrackedRateMaxItsWay = trackedFrames > 0 ? Math.Round(trackedHi, 2) : double.NaN,
+            orbitTrackedRateMaxOutsideCrossing = trackedFrames > 0 ? Math.Round(trackedHiOutsideCrossing, 2) : double.NaN,
+            orbitTrackedEyeMaxM = trackedFrames > 0 ? Math.Round(trackedEyeMax, 3) : double.NaN, orbitTrackedOutAt = trackedOutAt,
             orbitAll = new
             {
                 frames = allDist.Count, eyeDistanceMedianM = Math.Round(Median(allDist), 3), eyeDistanceMinM = allDist.Count > 0 ? Math.Round(allDist.Min(), 3) : double.NaN,
