@@ -13,7 +13,9 @@ using UnityEngine.Profiling;
 /// Splat dancers on the desktop (Play mode; Assets/Splats/Avatar/SplatDancers.cs):
 ///
 ///   unity command hm_splatdancers --action state
-///   unity command hm_splatdancers --action on | off            # the "splat dancers" viewer toggle (default off)
+///   unity command hm_splatdancers --action on | off            # the "splat dancers" viewer toggle by hand (wins for the editor session)
+///   unity command hm_splatdancers --action auto                # forget the hand choice: each capture's default (off; on for a
+///                                                                     # capture whose capture.json asks for it: SplatDancersDefault)
 ///   unity command hm_splatdancers --action hair --mode skinned | hidden | only
 ///   unity command hm_splatdancers --action opacity --mode opaque | avatars | scale   # avatars = fade the splat image to the avatars' opacity
 ///   unity command hm_splatdancers --action path --mode composite | direct          # composite (default): overlays depth-test against the splats
@@ -24,7 +26,8 @@ using UnityEngine.Profiling;
 ///   unity command hm_splatdancers --action check [--samples 4096]   # GPU skinning vs the CPU reference (posed centres)
 ///   unity command hm_splatdancers --action hairmotion --mode strands | rigid      # bound hair on the simulated strands (default) / LHM++ LBS
 ///   unity command hm_splatdancers --action haircheck [--from s --to s]   # the hair pass: GPU vs CPU reference, swing, intrusion (head,
-///                                                                     # own torso, partner); --from/--to: every frame of a span
+///                                                                     # own torso, partner), stray bound hair (isolated / sparse
+///                                                                     # Gaussians, opaque clumps); --from/--to: every frame of a span
 ///   unity command hm_splatdancers --action hairshot --out C:/abs/prefix --azimuths 0,90,180,270 [--radius 1.2 --elevation 8 --width 720 --height 960]
 ///                                                                     # off-screen stills around the follow's head (what is shown now: splats or avatars)
 ///   unity command hm_splatdancers --action perf_start | perf_report   # frame time and the Gaussian passes' GPU ms
@@ -39,9 +42,9 @@ using UnityEngine.Profiling;
 /// </summary>
 public static class SplatDancersCli
 {
-    [CliCommand("hm_splatdancers", "Splat dancers (skinned LHM++ Gaussians instead of the mesh avatars; default off): state | on | off | hair --mode skinned|hidden|only | hairmotion --mode strands|rigid | opacity --mode opaque|avatars|scale | path --mode composite|direct | depth --mode before|after | skeleton --mode physics|always|never (skeleton lines with the splats) | check [--samples N] (GPU skinning vs CPU reference) | haircheck (hair pass vs CPU reference, swing, head intrusion) | perf_start | perf_report (frame + Gaussian pass GPU ms) | thin --max N --sigma M (load-time thinning, as -hmsplatmax / -hmsplatsigma in a player)")]
+    [CliCommand("hm_splatdancers", "Splat dancers (skinned LHM++ Gaussians instead of the mesh avatars; default off, on for a capture whose capture.json asks for it): state | on | off | auto (each capture's default again) | hair --mode skinned|hidden|only | hairmotion --mode strands|rigid | opacity --mode opaque|avatars|scale | path --mode composite|direct | depth --mode before|after | skeleton --mode physics|always|never (skeleton lines with the splats) | check [--samples N] (GPU skinning vs CPU reference) | haircheck (hair pass vs CPU reference, swing, head intrusion, stray bound hair) | perf_start | perf_report (frame + Gaussian pass GPU ms) | thin --max N --sigma M (load-time thinning, as -hmsplatmax / -hmsplatsigma in a player)")]
     public static string Command(
-        [CliArg("action", "state | on | off | hair | hairmotion | opacity | path | depth | skeleton | check | haircheck | perf_start | perf_report | thin")] string action = "state",
+        [CliArg("action", "state | on | off | auto | hair | hairmotion | opacity | path | depth | skeleton | check | haircheck | perf_start | perf_report | thin")] string action = "state",
         [CliArg("mode", "hair: skinned|hidden|only; hairmotion: strands|rigid; opacity: opaque|avatars|scale; path: composite|direct; depth: before|after (the transparents); skeleton: physics|always|never")] string mode = null,
         [CliArg("samples", "check: Gaussians per dancer")] int samples = 4096,
         [CliArg("from", "haircheck sweep: first dance second (omit: the shown frame only)")] float from = float.NaN,
@@ -70,6 +73,9 @@ public static class SplatDancersCli
                 break;
             case "off":
                 SplatDancers.SetEnabled(false);
+                break;
+            case "auto":
+                SplatDancers.UseCaptureDefault();
                 break;
             case "hair":
                 SplatDancers.HairMode = (mode ?? "skinned").ToLowerInvariant() switch
@@ -134,7 +140,7 @@ public static class SplatDancersCli
                 throw new ArgumentException($"unknown action '{action}'");
         }
 
-        return JsonConvert.SerializeObject(SplatDancers.Instance != null ? SplatDancers.Instance.State() : new Dictionary<string, object> { ["enabled"] = SplatDancers.Enabled, ["instance"] = false });
+        return JsonConvert.SerializeObject(SplatDancers.Instance != null ? SplatDancers.Instance.State() : new Dictionary<string, object> { ["enabled"] = SplatDancers.Enabled, ["why"] = SplatDancers.DefaultWhy, ["handSet"] = SplatDancers.HandSet, ["instance"] = false });
     }
 
     /// <summary>read back posed Gaussians from the GPU frame and compare with SplatSkinning on the CPU (same bones)</summary>
@@ -197,8 +203,10 @@ public static class SplatDancersCli
     /// CPU with the same segments; how far the strands moved the hair from the head-rigid / LBS pose; bound centres inside
     /// her head (a sphere of 0.85 x the groom's head radius about the splat head), inside her own torso / neck capsules and
     /// inside the PARTNER (capsules on his bones: head, neck, torso, arms; the simulation has no partner colliders), each
-    /// also for the rigid LBS hair as the baseline of the crude capsules. sweep: from..to dance seconds, every frame posed
-    /// and simulated here (both avatars' bones, the hair's Advance), then the viewer is put back on its frame.</summary>
+    /// also for the rigid LBS hair as the baseline of the crude capsules; stray bound hair (Isolation: isolated / sparse
+    /// Gaussians off the hair mass, opaque clumps of them; Projected: their composite as drawn - peak alpha, opaque area,
+    /// opaque cores = discs). sweep: from..to dance seconds, every frame posed and simulated
+    /// here (both avatars' bones, the hair's Advance), then the viewer is put back on its frame.</summary>
     static object HairCheck(float from = float.NaN, float to = float.NaN)
     {
         if (SplatDancers.Instance == null) throw new InvalidOperationException("splat dancers are not built (hm_splatdancers --action on)");
@@ -217,6 +225,9 @@ public static class SplatDancersCli
         List<float> stepMax = new(), stepP99 = new(), guideStepMax = new();
         int headIn = 0, partnerIn = 0, partnerInRigid = 0, ownIn = 0, ownInRigid = 0, frames = 0, worstPartnerFrame = -1, worstPartner = 0;
         int worstHeadFrame = -1, worstOwnFrame = -1;
+        int isoMax = 0, isoOpaqueMax = 0, sparseMax = 0, sparseOpaqueMax = 0, clumpsMax = 0, worstClumpFrame = -1;
+        float clumpOpacityMax = 0f, projPeakMax = 0f, projOpaqueMax = 0f, projMs = 0f;
+        int projCoreMax = 0, worstCoreFrame = -1, worstPeakFrame = -1;
         List<int[]> perFrame = new();
         float3[] gPrev = null;
         try
@@ -243,7 +254,22 @@ public static class SplatDancersCli
                 gPrev = g;
                 if (st.InsideHead > headIn) worstHeadFrame = f;
                 if (st.InsideOwn > ownIn) worstOwnFrame = f;
-                perFrame.Add(new[] { f, st.InsideHead, st.InsideOwn, st.InsideOwnRigid, st.InsidePartner, st.InsidePartnerRigid });
+                perFrame.Add(new[] { f, st.InsideHead, st.InsideOwn, st.InsideOwnRigid, st.InsidePartner, st.InsidePartnerRigid,
+                                     st.Isolated, st.IsolatedOpaque, st.Sparse, st.SparseOpaque, st.InOpaqueClumps,
+                                     (int)math.round(st.ProjPeak * 1000f), (int)math.round(st.ProjOpaqueMm2), st.ProjCorePx });
+                if (st.ProjCorePx > projCoreMax) worstCoreFrame = f;
+                projCoreMax = Math.Max(projCoreMax, st.ProjCorePx);
+                if (st.ProjPeak > projPeakMax) worstPeakFrame = f;
+                projPeakMax = Math.Max(projPeakMax, st.ProjPeak);
+                projOpaqueMax = Math.Max(projOpaqueMax, st.ProjOpaqueMm2);
+                projMs += st.ProjMs;
+                isoMax = Math.Max(isoMax, st.Isolated);
+                isoOpaqueMax = Math.Max(isoOpaqueMax, st.IsolatedOpaque);
+                sparseMax = Math.Max(sparseMax, st.Sparse);
+                sparseOpaqueMax = Math.Max(sparseOpaqueMax, st.SparseOpaque);
+                if (st.InOpaqueClumps > clumpsMax) worstClumpFrame = f;
+                clumpsMax = Math.Max(clumpsMax, st.InOpaqueClumps);
+                clumpOpacityMax = Math.Max(clumpOpacityMax, st.ClumpMax);
                 headIn = Math.Max(headIn, st.InsideHead);
                 ownIn = Math.Max(ownIn, st.InsideOwn);
                 ownInRigid = Math.Max(ownInRigid, st.InsideOwnRigid);
@@ -273,7 +299,23 @@ public static class SplatDancersCli
             maxInsideHead = headIn, maxInsideOwnTorso = ownIn, maxInsideOwnTorsoRigid = ownInRigid,
             maxInsidePartner = partnerIn, maxInsidePartnerRigid = partnerInRigid, worstPartnerFrame, worstHeadFrame, worstOwnFrame,
             framesWithHeadIntrusion = perFrame.Count(r => r[1] > 0), framesWithOwnTorso = perFrame.Count(r => r[2] > 0),
-            perFrame = "frame, insideHead, insideOwnTorso, insideOwnTorsoRigid, insidePartner, insidePartnerRigid",
+            stray = new
+            {
+                maxIsolated = isoMax, maxIsolatedOpaque = isoOpaqueMax, maxSparse = sparseMax, maxSparseOpaque = sparseOpaqueMax,
+                maxInOpaqueClumps = clumpsMax, clumpOpacityMax = Math.Round(clumpOpacityMax, 3), worstClumpFrame,
+                framesWithIsolated = perFrame.Count(r => r[6] > 0), framesWithIsolatedOpaque = perFrame.Count(r => r[7] > 0),
+                framesWithSparseOpaque = perFrame.Count(r => r[9] > 0), framesWithOpaqueClumps = perFrame.Count(r => r[10] > 0),
+                rule = "bound hair: isolated = no other hair Gaussian within 5 cm; sparse = fewer than 8; opaque = opacity > 0.5; " +
+                       "clump = the sparse Gaussians within 1 cm, composite opacity 1 - prod(1 - a) > 0.5",
+                projected = new
+                {
+                    maxPeakAlpha = Math.Round(projPeakMax, 3), worstPeakFrame, maxOpaqueAreaMm2 = Math.Round(projOpaqueMax),
+                    maxOpaqueCorePx = projCoreMax, worstCoreFrame,
+                    framesWithOpaque = perFrame.Count(r => r[12] > 0), framesWithOpaqueCore = perFrame.Count(r => r[13] > 0),
+                    seconds = Math.Round(projMs / 1000f, 2), rule = ProjRule
+                }
+            },
+            perFrame = "frame, insideHead, insideOwnTorso, insideOwnTorsoRigid, insidePartner, insidePartnerRigid, isolated, isolatedOpaque, sparse, sparseOpaque, inOpaqueClumps, projPeakAlphaX1000, projOpaqueAreaMm2, projOpaqueCorePx",
             rows = perFrame
         };
     }
@@ -283,7 +325,190 @@ public static class SplatDancersCli
         public float4[] Positions;
         public float StepMax, StepP99;
         public int InsideHead, InsideOwn, InsideOwnRigid, InsidePartner, InsidePartnerRigid;
+        public int Isolated, IsolatedOpaque, Sparse, SparseOpaque, InOpaqueClumps;
+        public float ClumpMax;
+        public float ProjPeak, ProjOpaqueMm2, ProjMs;
+        public int ProjCorePx;
         public object Report;
+    }
+
+    // ------------------------------------------------------------------ stray hair: bound Gaussians off the hair mass
+    const float IsoRadius = 0.05f;   // isolated = no other hair Gaussian (hair byte) within 5 cm; sparse = fewer than SparseMin
+    const int SparseMin = 8;
+    const float ClumpRadius = 0.01f; // sparse Gaussians within 1 cm composite as one clump (stacked near-copies draw as one disc)
+
+    static float Opacity(SplatAvatarData d, int i) => 1f / (1f + math.exp(-d.OpacityLogit[i]));
+
+    static long Cell(int3 c) => ((long)(c.x + 1048576) << 42) | ((long)(c.y + 1048576) << 21) | (long)(c.z + 1048576);
+
+    /// <summary>bound hair Gaussians the strands carried away from the rest of the hair (posed centres read back): isolated (no
+    /// other hair Gaussian within 5 cm), sparse (fewer than 8), each also with opacity above 0.5; and the clumps of sparse
+    /// Gaussians within 1 cm: the composite opacity 1 - prod(1 - a) (a stack of opaque near-copies draws as a solid disc)</summary>
+    static void Isolation(SkinnedSplatAvatar s, float4[] all, Stats st)
+    {
+        SplatAvatarData d = s.Data;
+        SplatHairBinding hb = s.HairBinding;
+        Dictionary<long, List<int>> grid = new();
+        for (int i = 0; i < d.Count; i++)
+        {
+            if (d.Hair[i] == 0) continue;
+            long k = Cell((int3)math.floor(all[i * 3].xyz / IsoRadius));
+            if (!grid.TryGetValue(k, out List<int> l)) grid[k] = l = new List<int>();
+            l.Add(i);
+        }
+
+        List<int> sparse = new();
+        float r2 = IsoRadius * IsoRadius;
+        for (int b = 0; b < hb.Bound; b++)
+        {
+            int i = hb.Index[b];
+            float3 p = all[i * 3].xyz;
+            int3 c = (int3)math.floor(p / IsoRadius);
+            int n = 0;
+            for (int dx = -1; dx <= 1 && n < SparseMin; dx++)
+            for (int dy = -1; dy <= 1 && n < SparseMin; dy++)
+            for (int dz = -1; dz <= 1 && n < SparseMin; dz++)
+            {
+                if (!grid.TryGetValue(Cell(c + new int3(dx, dy, dz)), out List<int> l)) continue;
+                foreach (int j in l)
+                {
+                    if (j != i && math.distancesq(all[j * 3].xyz, p) < r2 && ++n >= SparseMin) break;
+                }
+            }
+
+            if (n >= SparseMin) continue;
+            float op = Opacity(d, i);
+            if (n == 0)
+            {
+                st.Isolated++;
+                if (op > 0.5f) st.IsolatedOpaque++;
+            }
+
+            st.Sparse++;
+            if (op > 0.5f) st.SparseOpaque++;
+            sparse.Add(i);
+        }
+
+        float c2 = ClumpRadius * ClumpRadius;
+        foreach (int i in sparse)
+        {
+            float t = 1f;
+            foreach (int j in sparse)
+            {
+                if (math.distancesq(all[j * 3].xyz, all[i * 3].xyz) < c2) t *= 1f - Opacity(d, j);
+            }
+
+            st.ClumpMax = math.max(st.ClumpMax, 1f - t);
+            if (1f - t > 0.5f) st.InOpaqueClumps++;
+        }
+
+        Projected(d, all, sparse, st);
+    }
+
+    // ------------------------------------------------------------------ stray hair as drawn: the projected composite
+    const float ProjPx = 0.002f;        // 2 mm pixels, orthographic
+    const int ProjMaxSide = 1200;       // a larger spread of sparse hair coarsens the pixel instead
+    const float ProjCut = 1f / 255f;
+    // 3 axes (side, front, top): an orthographic composite seen from -v is the mirror image of +v's (same transmittance)
+    static readonly float3[] ProjViews = { new(1, 0, 0), new(0, 0, 1), new(0, 1, 0) };
+    const string ProjRule = "the sparse bound hair (as above) splatted orthographically along the 3 world axes (side, front, top) on a " +
+                            "2 mm grid with its posed rotations and scales: alpha = 1 - prod(1 - a g(x)); per frame the worst view's peak " +
+                            "alpha, opaque area (alpha > 0.5) and opaque CORE = opaque pixels whose 8 neighbours are opaque too (a solid " +
+                            "patch >= 6 mm across: a disc, not a 3 mm strand)";
+
+    /// <summary>what the sparse bound hair looks like on screen (fix round 2: the per-Gaussian "opaque" counts above are 0
+    /// by construction once the data caps each Gaussian's opacity): every sparse Gaussian is EWA-splatted orthographically
+    /// along the 3 world axes (its posed centre / rotation, its scales; 2 mm pixels; alpha = 1 - prod(1 - a g)), and per
+    /// frame the worst view gives the peak alpha, the opaque area (alpha > 0.5) and the opaque core (opaque pixels with all
+    /// 8 neighbours opaque: a solid patch at least 6 mm across - a disc - where a lone 3 mm strand has none)</summary>
+    static void Projected(SplatAvatarData d, float4[] all, List<int> sparse, Stats st)
+    {
+        if (sparse.Count == 0) return;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        int n = sparse.Count;
+        float3 up = new(0, 1, 0), fwd = new(0, 0, 1);
+        float2[] mu = new float2[n];
+        float3[] cov = new float3[n];   // xx, xy, yy of the 2D covariance
+        float[] a = new float[n];
+        foreach (float3 v in ProjViews)
+        {
+            float3 e1 = math.normalize(math.cross(math.abs(v.y) > 0.9f ? fwd : up, v));
+            float3 e2 = math.cross(v, e1);
+            float2 lo = new(float.MaxValue), hi = new(float.MinValue);
+            for (int k = 0; k < n; k++)
+            {
+                int i = sparse[k];
+                float3 p = all[i * 3].xyz;
+                float3x3 R = new float3x3(math.normalize(new quaternion(all[i * 3 + 2])));
+                float3 s = math.exp(d.LogScale[i]);
+                float3x3 M = math.mul(R, float3x3.Scale(s));
+                float3x3 S = math.mul(M, math.transpose(M));
+                float3 s1 = math.mul(S, e1), s2 = math.mul(S, e2);
+                cov[k] = new float3(math.dot(e1, s1), math.dot(e1, s2), math.dot(e2, s2)) + new float3(1e-8f, 0, 1e-8f);
+                mu[k] = new float2(math.dot(p, e1), math.dot(p, e2));
+                a[k] = Opacity(d, i);
+                float2 ext = math.sqrt(2f * math.log(math.max(a[k], ProjCut) / ProjCut) * new float2(cov[k].x, cov[k].z));
+                lo = math.min(lo, mu[k] - ext);
+                hi = math.max(hi, mu[k] + ext);
+            }
+
+            float px = math.max(ProjPx, math.cmax(hi - lo) / ProjMaxSide);
+            int W = (int)math.ceil((hi.x - lo.x) / px) + 3, H = (int)math.ceil((hi.y - lo.y) / px) + 3;
+            float[] T = new float[W * H];
+            Array.Fill(T, 1f);
+            for (int k = 0; k < n; k++)
+            {
+                float3 c = cov[k];
+                float det = c.x * c.z - c.y * c.y;
+                if (det <= 0 || a[k] < ProjCut) continue;
+                float ixx = c.z / det, ixy = -c.y / det, iyy = c.x / det;
+                float r2 = 2f * math.log(a[k] / ProjCut);           // the ellipse where a g(x) >= 1/255
+                float ey = math.sqrt(r2 * c.z);
+                int y0 = math.max(0, (int)math.floor((mu[k].y - ey - lo.y) / px)), y1 = math.min(H - 1, (int)math.ceil((mu[k].y + ey - lo.y) / px));
+                for (int y = y0; y <= y1; y++)
+                {
+                    float dy = lo.y + (y + 0.5f) * px - mu[k].y;
+                    float disc = ixy * ixy * dy * dy - ixx * (iyy * dy * dy - r2);   // this row's span of the ellipse
+                    if (disc < 0) continue;
+                    float sq = math.sqrt(disc);
+                    float xa = mu[k].x + (-ixy * dy - sq) / ixx, xb = mu[k].x + (-ixy * dy + sq) / ixx;
+                    int x0 = math.max(0, (int)math.floor((xa - lo.x) / px)), x1 = math.min(W - 1, (int)math.ceil((xb - lo.x) / px));
+                    for (int x = x0; x <= x1; x++)
+                    {
+                        float dx = lo.x + (x + 0.5f) * px - mu[k].x;
+                        float al = a[k] * math.exp(-0.5f * (ixx * dx * dx + 2f * ixy * dx * dy + iyy * dy * dy));
+                        if (al < ProjCut) continue;
+                        T[y * W + x] *= 1f - math.min(al, 0.99f);
+                    }
+                }
+            }
+
+            float minT = 1f;
+            int opaque = 0, core = 0;
+            for (int y = 0; y < H; y++)
+            for (int x = 0; x < W; x++)
+            {
+                float l = T[y * W + x];
+                minT = math.min(minT, l);
+                if (l >= 0.5f) continue;
+                opaque++;
+                if (x == 0 || y == 0 || x == W - 1 || y == H - 1) continue;
+                bool solid = true;
+                for (int yy = -1; yy <= 1 && solid; yy++)
+                for (int xx = -1; xx <= 1; xx++)
+                {
+                    if (T[(y + yy) * W + x + xx] >= 0.5f) { solid = false; break; }
+                }
+
+                if (solid) core++;
+            }
+
+            st.ProjPeak = math.max(st.ProjPeak, 1f - minT);
+            st.ProjOpaqueMm2 = math.max(st.ProjOpaqueMm2, opaque * px * px * 1e6f);
+            st.ProjCorePx = math.max(st.ProjCorePx, core);
+        }
+
+        st.ProjMs = (float)clock.Elapsed.TotalMilliseconds;
     }
 
     static float CapsuleDepth(Vector3 p, Vector3 a, Vector3 b, float r)
@@ -310,11 +535,12 @@ public static class SplatDancersCli
         SplatAvatarData d = s.Data;
         float4[] all = s.ReadBack(0, d.Count);
         float4[] segCpu = s.HairSegmentsCpu();
+        Stats st = new() { Positions = new float4[hb.Bound] };
+        Isolation(s, all, st);
         Matrix4x4 s15 = s.CurrentSkin[SplatHairBinding.HeadJoint];
         Vector3 headCentre = s15.MultiplyPoint3x4((Vector3)(d.RestJoints[SplatHairBinding.HeadJoint] + (float3)hair.SplatHeadCentreLocal));
         float headR = hair.HeadRadius;
         List<float> gpuCpu = new(), rotErr = new(), swingRigid = new(), swingLbs = new(), attachTop = new(), steps = new();
-        Stats st = new() { Positions = new float4[hb.Bound] };
         Vector3 J(SmplxAvatar a, int j) => a.BonePosition(j);
         Vector3 headUp(SmplxAvatar a) => a.Bone(15).TransformPoint(new Vector3(0, 0.06f, 0));
         for (int b = 0; b < hb.Bound; b++)
@@ -379,6 +605,12 @@ public static class SplatDancersCli
             moveVsHeadRigidMm = Q(swingRigid), moveVsLbsMm = Q(swingLbs), attachTopMoveMm = Q(attachTop),
             insideHead = st.InsideHead, insideOwnTorso = st.InsideOwn, insideOwnTorsoRigid = st.InsideOwnRigid,
             insidePartner = st.InsidePartner, insidePartnerRigid = st.InsidePartnerRigid, headRadiusM = headR,
+            isolated = st.Isolated, isolatedOpaque = st.IsolatedOpaque, sparse = st.Sparse, sparseOpaque = st.SparseOpaque,
+            inOpaqueClumps = st.InOpaqueClumps, clumpOpacityMax = Math.Round(st.ClumpMax, 3),
+            projPeakAlpha = Math.Round(st.ProjPeak, 3), projOpaqueAreaMm2 = Math.Round(st.ProjOpaqueMm2), projOpaqueCorePx = st.ProjCorePx,
+            strayRule = "bound hair: isolated = no other hair Gaussian within 5 cm; sparse = fewer than 8; opaque = opacity > 0.5; " +
+                        "clump = the sparse Gaussians within 1 cm, composite opacity 1 - prod(1 - a)",
+            projRule = ProjRule,
             restDiffMm = hb.RestDiffMaxMm, canonResidualMm = hb.CanonResidualMaxMm
         };
     }

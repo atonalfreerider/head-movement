@@ -1,16 +1,18 @@
 # Splat dancers: skinned Gaussian-splat dancers in the viewer (PC and Quest)
 
-Written 2026-10-20. VIEWER_SPEC 3.2a (the splat layer shows the dancers only and is off by default). The data contract is the
+Written 2026-10-20. VIEWER_SPEC 3.2a (the splat layer shows the dancers only and is off by default on the desktop, on by default
+for a capture whose capture.json asks for it: "Default per capture" below). The data contract is the
 workspace's `dancecap/docs/SPLAT_AVATAR_FORMAT.md` (`splats/<role>.splatav` + `<role>.json` in a capture folder; LHM++ skinned
 Gaussians, canonical pose = the shaped SMPL-X zero pose, Unity coordinates). The capture data is likeness data and lives only in the
 git-ignored `Assets/StreamingAssets/<capture>/splats/`.
 
 ## Use it
 
-    unity command hm_splatdancers --action on | off | state      # the "splat dancers" toggle (default OFF)
+    unity command hm_splatdancers --action on | off | state      # the "splat dancers" toggle by hand (wins for the editor session)
+    unity command hm_splatdancers --action auto                  # forget the hand choice: each capture's default again
     unity command hm_splatdancers --action hair --mode skinned | hidden | only
     unity command hm_splatdancers --action hairmotion --mode strands | rigid   # bound hair on the simulated strands (default) / LHM++ LBS
-    unity command hm_splatdancers --action haircheck [--from <dance s> --to <dance s>]   # hair pass vs CPU reference, swing, intrusion
+    unity command hm_splatdancers --action haircheck [--from <dance s> --to <dance s>]   # hair pass vs CPU reference, swing, intrusion, stray hair
     unity command hm_splatdancers --action hairshot --out C:/abs/prefix --azimuths 0,90,180,270 [--radius 1.2]   # stills around her head
     unity command hm_splatdancers --action opacity --mode opaque | avatars | scale
     unity command hm_splatdancers --action path --mode composite | direct
@@ -21,8 +23,36 @@ git-ignored `Assets/StreamingAssets/<capture>/splats/`.
 While on, each dancer whose capture has a splat avatar is drawn as Gaussians instead of the mesh avatar: every Renderer under the avatar
 (body, shoes, head props, hair cards, tip glows) gets `forceRenderingOff`, and a `SkinnedSplatAvatar` is posed every frame from the
 avatar's own bones, so playback, seeks, slow motion, the film director's sub-frame poses and the film recorder all drive it. The toggle
-survives Play-mode restarts for the rest of the editor session (SessionState, so `hm_film record` records splats when it was on); a new
-editor session starts with it off. Splats hide with the avatars layer, inside role-hidden spans and when the avatar opacity is 0.
+set by hand survives Play-mode restarts for the rest of the editor session (SessionState, so `hm_film record` records splats when it
+was on); a new editor session starts with it unset: each capture's default (below). Splats hide with the avatars layer, inside
+role-hidden spans, when the avatar opacity is 0 and while the dancer is parked (below).
+
+## Default per capture (2026-10-23)
+
+A capture shows its splat dancers by default when its `capture.json` asks for it: `"splat_dancers": "on"` (`CaptureManifest.splat_dancers`;
+written by dancecap `export_unity` from `takes/<take>.toml [export] splat_dancers = "on"`; absent / `"off"` = the viewer default). The
+decision is one pure function, `SplatDancersDefault.Decide` (`Core/SplatDancersDefault.cs`, EditMode tests
+`Tests/Editor/SplatDancersDefaultTests.cs`), applied by `SplatDancers` at every capture load (`HeadMovement.AvatarsLoaded`):
+
+| where | the splat dancers at a capture load |
+|---|---|
+| Editor | set by hand this editor session (`hm_splatdancers --action on` / `off`): that, for every capture, as before. Otherwise ON for a flagged capture that has `splats/<role>.json` when the device can draw them (D3D12 / Vulkan / Metal with compute shaders), else OFF |
+| Editor, flagged capture on D3D11 / OpenGL / no compute | OFF (the mesh avatars) and one warning per capture: `splat dancers: capture default refused: ... D3D11: the renderer needs D3D12 - start the editor with -force-d3d12; avatars` |
+| Windows player | `"splats"` / `-hmsplats` when given; otherwise ON in VR (as before) and, for a flagged capture with `splats/`, ON on the desktop too; never without a drawing path (the `HM-SPLATS tier` line says why) |
+| Quest | unchanged: on unless `"splats": false` / `-hmsplats off` (every capture with `splats/`) |
+
+Loading an unflagged capture after a flagged one turns the splats off again (the avatars come back, the Gaussians feature leaves the URP
+renderer). A capture loaded while the splats are off reads none of its splat files (`state`: `count` 0, `loadSeconds` 0); switching
+them on later loads them then (before 2026-10-23 every capture load after the first flagged one read both files, 1.5-4.3 s, with the
+splats off). `hm_splatdancers --action state` reports `why` (e.g. `capture default (capture.json splat_dancers on)` or `viewer default (off
+on the desktop)`), `handSet` and `captureFlag`; `--action auto` forgets the hand choice and applies the loaded capture's default. A film
+recorded from a flagged capture records splats without any `hm_splatdancers` call (`FilmRecorder` reads `SplatDancers.Enabled`).
+
+**Parked dancers.** dancecap `export_unity` parks a dancer that is not yet in any camera's view (capture.json `absent`) 30 m under its
+partner's pelvis. The opaque splats of a parked dancer showed through the empty floor in overhead views (checked 2026-10-23 on the first
+flagged capture: a tiny figure under the couple at 60 deg elevation). While the avatar's pelvis is more than `ParkedBelowM` (5 m) under
+the floor in the avatar's own space, its splats are drawn at opacity 0 (`OpacityScale`; the avatar stays hidden under them, `state`
+reports `parked`), and the film's face sidecar counts that dancer as not shown.
 
 **Graphics API.** The renderer needs D3D12 (or Vulkan / Metal). On this 4-thread PC the editor's automatic choice is D3D11 (Unity's
 built-in D3D12 device filter rejects 4 CPUs or fewer; the log says "D3D12 API denied by user filter"), so open the editor with
@@ -156,13 +186,58 @@ cards, on the guides, do not); a bound Gaussian is on ONE segment of ONE guide (
 different guides can part; the simulation has no partner colliders (the cards neither); hair the guides press onto her back
 partly enters the body (hidden by the opaque body).
 
+**Stray hair (2026-10-23).** A guide that swings out alone carries its bound Gaussians away from the hair mass. LHM++ can draw dark
+hair with few large, opaque Gaussians, often several near-copies stacked within 2 mm (composite opacity up to 0.99): on a flagged
+capture they showed as round dark discs on the partner's white top and on her sleeve during head throws. The fix is in the data
+(dancecap `mono4d/recap_splat_hair.py`, a per-take "look"; the format is unchanged): bound hair Gaussians are made strand-shaped
+(longest axis along their rest segment, at most 3 mm across, the projected area kept) and each stack of near-copies is capped at a
+composite opacity of 0.25, so a lone strand draws as a thin translucent wisp; the binding itself is untouched. `haircheck` reports
+the stray bound hair per frame (posed centres read back): `isolated` (no other hair Gaussian within 5 cm), `sparse` (fewer than 8),
+each also with opacity > 0.5 (`isolatedOpaque`, `sparseOpaque`), and `inOpaqueClumps` / `clumpOpacityMax` (the sparse Gaussians
+within 1 cm, composite opacity 1 - prod(1 - a)); a sweep adds `stray` (maxima, frames with any, the worst clump frame) and the
+per-frame columns. The per-Gaussian "opaque" counts are 0 by construction once the data caps every bound Gaussian at 0.25, so they
+are no evidence on such a file. What is drawn is scored by `projPeakAlpha` / `projOpaqueAreaMm2` / `projOpaqueCorePx` (sweep:
+`stray.projected`): the sparse bound hair is EWA-splatted orthographically along the 3 world axes (side, front, top; posed centres,
+rotations and scales; 2 mm pixels; alpha = 1 - prod(1 - a g(x))); per frame the worst axis gives the peak alpha, the opaque area
+(alpha > 0.5) and the opaque CORE = opaque pixels whose 8 neighbours are opaque too, i.e. a solid patch at least 6 mm across (a
+disc; a lone 3 mm strand has none, crossing strands can make a few). On the first flagged capture (the same file posed by the same
+simulation; only the look differs):
+
+| span | file | peak alpha | opaque area max | opaque core max | frames with a core |
+|---|---|---|---|---|---|
+| 10 s of head throws (301 frames) | LHM++ hair as exported | 1.0 | 5,896 mm2 | 1,101 px | 213 |
+| | strand look | 0.83 | 896 mm2 | 44 px | 75 |
+| 5 s spin (151 frames) | LHM++ hair as exported | 1.0 | 5,896 mm2 | 966 px | 102 |
+| | strand look | 0.82 | 660 mm2 | 35 px | 29 |
+| | Quest `quest_25k` fitted without the look | 1.0 | 44,536 mm2 | 9,370 px | 151 |
+| | Quest `quest_25k` with the look | 0.83 | 772 mm2 | 67 px | 38 |
+
+The worst remaining frames show thin strands crossing (looked at, four sides); the round discs are gone. The projected pass costs
+about 3.5 ms per frame; a 301-frame sweep takes about 2 min in the editor (run it with `unity command --timeout 800 ...`).
+
+**Her top under the hair (2026-10-23).** LHM++ cannot see the clothes under long hair and paints the hidden layer itself: on the
+first flagged capture a dark hair "paint" layer about 1.5 cm over the top's back, and under it the top's own surface guessed GREY
+(Lab about 23 / 13 / 4 against the top's red, C* 31-35). With the hair swung off her back, that showed as a dark smear and, once the
+paint was faded, as a pale grey-mauve blotch between the shoulder blades. The data fix (the same per-take look) fades the paint
+(opacity x 0.03) and gives the exposed grey and brown-black Gaussians, and the faded paint, the top's LOCAL colour: the
+opacity-weighted median of the clearly red Gaussians nearby (C* >= 25, hue 15-40 deg, within 3-12 cm), each keeping its own shading
+(L* ratio to its group, clipped to 0.7-1.3). Only colours change (844 Gaussians); positions, scales, opacities and the binding do not.
+In pixel-aligned editor shots of her back at 7 moments x 3 sides, the blotch area went from C* 11-15 to C* 26-28 (the top around it
+31-35) and its share of greyish pixels (C* < 15) from 0.53-0.67 to 0.03-0.12.
+
 ## Quest (Android build, 2026-10-21)
 
 The owner chose **splats on by default** on the headset (2026-10-20, over "avatars + splat test switch" and "avatars only"). In a
 player build for Android (`SplatDancers.QuestPlayer`) the toggle starts ON; every lesson whose capture has `splats/` shows the
 splat dancers (`HasSplatData`): the class recap, and also the Jack & Jill lesson because its `splats/` folder was pushed too (the
 owner decides whether it stays); every other lesson shows its mesh avatars exactly as before (no Gaussians feature is added to the
-URP renderer for them). The PC default is unchanged (off; `hm_splatdancers --action on`).
+URP renderer for them). The PC default is unchanged (off; `hm_splatdancers --action on`), except a capture whose capture.json asks for
+its splat dancers ("Default per capture" above). The Quest needs no flag: deploy a capture's distilled `quest_*` sets together with its
+`splats/` (the shipped `quest_settings.json` asks for `quest_15k`; a capture without the set falls back to the full files). A
+follow whose `follow.json` carries a hair look (`hair.look`, "Stray hair" above) must be distilled with dancecap's `quest_distill`
+of 2026-10-23 or later: it keeps the look on the students over bound hair (needle-shaped, opacity <= the stack cap, while fitting and
+in the written set; `quest_distill.hair.look` in the set's json). Sets fitted before that re-grow the bound hair into large opaque
+Gaussians (the round dark discs on a swinging strand) - do not deploy them.
 
 - **Data**: `Tools/deploy_data.ps1` copies the whole capture folder without `.meta`, `*.hmj`, `*.mp4`, so `splats/lead.*`,
   `splats/follow.*` (with the hair binding in `follow.json`) and `hair_groom.json` reach
@@ -291,7 +366,8 @@ QUEST.md section 2a.
   Builds/vr/logs/pcvr_<time>.log`, and a summary of the `HM-SPLATS` / `HM-PERF` / `VrMode` lines when the app closes.
 - **Default**: a Windows player (`SplatDancers.PcPlayer`) applies the player tier at each capture load like the Quest: without a
   `"splats"` key in `<data>/quest_settings.json` and without `-hmsplats`, the splat dancers are ON while the viewer is in VR
-  (`VrMode.Active`: a headset through OpenXR, or `-hmvr sim`) and OFF on the desktop (the PC default is unchanged). Lessons with
+  (`VrMode.Active`: a headset through OpenXR, or `-hmvr sim`) and OFF on the desktop (the PC default is unchanged), except ON for a
+capture whose capture.json asks for it (2026-10-23, "Default per capture"; not yet run in a player build). Lessons with
   `splats/`: the class recap and John & Lula; the others keep their avatars. Every `-hmsplat*` switch applies; D3D11 keeps the avatars
   and says why (`HM-SPLATS tier: ... (D3D11: ... -force-d3d12; avatars)`). The Player log gets the same `HM-SPLATS` lines as logcat.
 - **Smoke test without a headset** (the Quest 3 was in use standalone): `-force-d3d12 -hmvr sim -hmvr-display immersive -hmplay recap

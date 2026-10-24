@@ -63,6 +63,18 @@ public class CaptureManifest
     /// Written by dancecap export_unity from takes/&lt;take&gt;.toml [export] floor_yaw_deg.</summary>
     public float floor_yaw_deg;
 
+    /// <summary>splatDancers: "on" = this capture shows its splat dancers by default (VIEWER_SPEC 3.2a, docs/SPLAT_DANCERS.md "Default per
+    /// capture"): in the Editor when the device can draw them (D3D12 / Vulkan / Metal with compute shaders) and nobody set the toggle by hand
+    /// this editor session (hm_splatdancers --action on | off still wins), and in a Windows player on the desktop as in VR; the Quest is
+    /// unchanged (every capture with splat data is on there). Absent / "off" = the viewer default (off on the desktop). Only meaningful for
+    /// a capture with splats/&lt;role&gt;.json. Written by dancecap export_unity from takes/&lt;take&gt;.toml [export] splat_dancers.</summary>
+    public string splat_dancers;
+
+    /// <summary>capture.json asks for its splat dancers by default (splat_dancers "on" / "true")</summary>
+    [JsonIgnore] public bool SplatDancersDefaultOn =>
+        string.Equals(splat_dancers?.Trim(), "on", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(splat_dancers?.Trim(), "true", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>roleHidden: per-role hidden spans with a fade, in CAPTURE seconds (from the first frame = the viewer HUD's clock):
     /// { "lead": [ { "from": 0.0, "to": 4.0, "fade_in": 1.0 } ] } hides the lead's avatar, skeleton and the overlays derived from his pose
     /// from the first frame up to 4.0 s, then fades them in over 1.0 s. Entries may also be [from, to, fade_in, fade_out] arrays. Written by

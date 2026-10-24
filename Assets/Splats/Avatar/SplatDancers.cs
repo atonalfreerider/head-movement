@@ -10,8 +10,10 @@ using UnityEngine;
 using UnityEngine.XR;
 
 /// <summary>
-/// Viewer toggle "splat dancers" (default OFF: the viewer shows the current mesh avatars until the splat recordings are
-/// approved). While on, and when the loaded capture has <c>splats/&lt;role&gt;.json</c> + <c>.splatav</c> (dancecap
+/// Viewer toggle "splat dancers" (default OFF on the desktop: the viewer shows the current mesh avatars until the splat recordings
+/// are approved; ON by default for a capture whose capture.json asks for it, <c>"splat_dancers": "on"</c>, when the device can draw
+/// them and nobody set the toggle by hand this editor session: SplatDancersDefault, docs/SPLAT_DANCERS.md "Default per capture").
+/// While on, and when the loaded capture has <c>splats/&lt;role&gt;.json</c> + <c>.splatav</c> (dancecap
 /// SPLAT_AVATAR_FORMAT.md; LHM++ skinned Gaussians), each dancer's mesh avatar (body, shoes, head props, hair cards and
 /// tip glows: every Renderer under the avatar) is hidden with Renderer.forceRenderingOff and a SkinnedSplatAvatar draws
 /// that dancer instead, posed every frame from the avatar's own bones (so playback, seeks, slow motion and the film
@@ -31,8 +33,10 @@ using UnityEngine.XR;
 /// (quest_settings.json "splats", "splat_max", "splat_max_sigma", "splat_path", "splat_depth"; -hmsplats on|off and the
 /// other switches, VrSettings), and the Gaussians are thinned at load to the Quest default (QuestDefaultMax /
 /// QuestDefaultSigma: SplatAvatarData.Reduce) so the lesson holds 72 Hz. GLES (no compute path in the renderer) keeps the
-/// avatars. The PC default stays OFF on the desktop. A Windows player (PC VR over Meta Quest Link, PcPlayer) applies the same
-/// tier at each capture load: without a "splats" key / -hmsplats switch the splat dancers are ON in VR and OFF on the desktop;
+/// avatars. The PC default stays OFF on the desktop, except for a capture whose capture.json asks for its splat dancers (the Editor:
+/// when the API can draw them and the toggle was not set by hand this session; one log line when the API refuses). A Windows player
+/// (PC VR over Meta Quest Link, PcPlayer) applies the same tier at each capture load: without a "splats" key / -hmsplats switch the
+/// splat dancers are ON in VR and OFF on the desktop (ON on the desktop too for a flagged capture);
 /// D3D11 keeps the avatars (start the exe with -force-d3d12). Hair: when the splat file carries a hair binding
 /// (dancecap mono4d/recap_splat_hair.py: the free hair Gaussians bound to the HairStrands guides) the dancer's simulated
 /// HairStrands (the same simulation that moves the hair cards, which are hidden with the rest of the avatar) drive the
@@ -118,8 +122,19 @@ public sealed class SplatDancers : MonoBehaviour
 
     public static SplatDancers Instance { get; private set; }
 
-    /// <summary>the "splat dancers" toggle (default off)</summary>
+    /// <summary>the "splat dancers" toggle (default off; on for a capture whose capture.json asks for it: SplatDancersDefault)</summary>
     public static bool Enabled => splatsOn;
+
+    /// <summary>Editor: the toggle was set by hand this editor session (hm_splatdancers --action on | off): it then wins over every
+    /// capture's default until UseCaptureDefault (hm_splatdancers --action auto) or a new editor session</summary>
+    public static bool HandSet => handSet;
+
+    /// <summary>why the toggle is as it is at the last capture load (SplatDancersDefault.Decision.Why; the CLI state)</summary>
+    public static string DefaultWhy { get; private set; } = "";
+
+    static bool handSet;
+    const string HandKey = "HM.SplatDancers.Explicit";
+    static string refusedLogged;
 
     public static OpacityModes OpacityMode
     {
@@ -157,8 +172,9 @@ public sealed class SplatDancers : MonoBehaviour
     ComputeShader compute;
     readonly System.Diagnostics.Stopwatch loadWatch = new();
 
-    /// <summary>Editor: the toggle survives Play-mode restarts (the film recorder re-enters Play mode) for the rest of the
-    /// editor session (SessionState, never saved to the project); a new editor session starts with it off.</summary>
+    /// <summary>Editor: the toggle set by hand survives Play-mode restarts (the film recorder re-enters Play mode) for the rest of the
+    /// editor session (SessionState, never saved to the project); a new editor session starts with it unset (each capture's default:
+    /// off, or on for a capture whose capture.json asks for it).</summary>
     const string SessionKey = "HM.SplatDancers.On";
 
     /// <summary>a player build for the Quest (Android): splats on by default, thinned to the Quest budget</summary>
@@ -211,10 +227,15 @@ public sealed class SplatDancers : MonoBehaviour
     static void ResetStatics()
     {
 #if UNITY_EDITOR
-        splatsOn = UnityEditor.SessionState.GetBool(SessionKey, false);
+        // set by hand this editor session (an "on" stored before the hand flag existed counts as set by hand: only SetEnabled wrote it)
+        handSet = UnityEditor.SessionState.GetBool(HandKey, false) || UnityEditor.SessionState.GetBool(SessionKey, false);
+        splatsOn = handSet && UnityEditor.SessionState.GetBool(SessionKey, false);
 #else
+        handSet = false;
         splatsOn = QuestPlayer; // the Quest: on by default (VrSettings "splats" / -hmsplats off turn it off at the capture load)
 #endif
+        DefaultWhy = handSet ? $"set by hand this editor session ({(splatsOn ? "on" : "off")})" : "";
+        refusedLogged = null;
         reduceMax = 0;
         reduceSigma = 0f;
         splatSet = "";
@@ -242,15 +263,51 @@ public sealed class SplatDancers : MonoBehaviour
 
     static void OnAvatarsLoaded(HeadMovement viewer)
     {
+        bool wasOn = splatsOn;
         if (TierPlayer) ApplyPlayerTier(viewer);
+        else ApplyEditorDefault(viewer);
         if (Instance != null) Instance.Rebuild(viewer);
         else if (splatsOn) Ensure().Rebuild(viewer);
         if (!TierPlayer)
         {
             if (splatsOn) SplatUrpFeature.Ensure();
+            else if (wasOn) TurnedOff(); // the previous capture's default had them on, this capture's is off
         }
         else if (!splatsOn || Instance == null || !Instance.HasSplatData) SplatUrpFeature.Remove(); // a player lesson without splat data renders as before
         // (in a player the Gaussians feature is added when the first splat dancer is built: Build)
+    }
+
+    /// <summary>the capture has a splat avatar (splats/&lt;role&gt;.json) for at least one dancer</summary>
+    static bool CaptureHasSplats(CaptureManifest m, string set = "")
+    {
+        string folder = m?.Folder;
+        if (folder == null) return false;
+        return SplatAvatarData.JsonPath(folder, "lead", set, out _) != null || SplatAvatarData.JsonPath(folder, "follow", set, out _) != null;
+    }
+
+    /// <summary>the Editor at each capture load: the toggle set by hand this session, else the capture's default
+    /// (SplatDancersDefault: on for a capture whose capture.json asks for it, when the API can draw it; one log line when it cannot)</summary>
+    static void ApplyEditorDefault(HeadMovement viewer)
+    {
+        CaptureManifest m = viewer.Manifest;
+        SplatDancersDefault.Decision d = SplatDancersDefault.Decide(new SplatDancersDefault.Inputs
+        {
+            Host = SplatDancersDefault.Host.Editor,
+            HandSet = handSet,
+            HandOn = splatsOn,
+            CaptureFlag = m != null && m.SplatDancersDefaultOn,
+            HasSplatData = CaptureHasSplats(m),
+            NoPath = SplatDancersDefault.NoPath(SystemInfo.graphicsDeviceType, SystemInfo.supportsComputeShaders, SplatDancersDefault.Host.Editor)
+        });
+        splatsOn = d.On;
+        DefaultWhy = d.Why;
+        string name = Path.GetFileName(m?.Folder ?? "?");
+        if (d.Refused)
+        {
+            if (refusedLogged != m?.Folder) Debug.LogWarning($"splat dancers: {d.Why} (capture {name})");
+            refusedLogged = m?.Folder;
+        }
+        else if (d.On && !handSet) Debug.Log($"splat dancers: on by default for this capture ({d.Why}; {SystemInfo.graphicsDeviceType}; capture {name})");
     }
 
     /// <summary>thinning for the next capture load / rebuild (SplatAvatarData.Reduce): at most max Gaussians per dancer (0 = all), every
@@ -350,14 +407,25 @@ public sealed class SplatDancers : MonoBehaviour
     {
         HmVr.VrSettings st = HmVr.VrSettings.Current.Loaded ? HmVr.VrSettings.Current : HmVr.VrSettings.Load();
         bool vr = HmVr.VrMode.Active;
-        bool on = (QuestPlayer || st.SplatsGiven) ? st.Splats : vr;
         UnityEngine.Rendering.GraphicsDeviceType api = SystemInfo.graphicsDeviceType;
-        bool gles = api is UnityEngine.Rendering.GraphicsDeviceType.OpenGLES3 or UnityEngine.Rendering.GraphicsDeviceType.OpenGLCore;
-        string noPath = gles ? " (GLES: no compute path, avatars)"
-            : api == UnityEngine.Rendering.GraphicsDeviceType.Direct3D11 ? " (D3D11: the renderer needs D3D12 - start the exe with -force-d3d12; avatars)"
-            : !SystemInfo.supportsComputeShaders ? " (no compute shaders: avatars)" : "";
-        if (noPath.Length > 0) on = false; // the renderer has no OpenGL / D3D11 path: the avatars stay
+        SplatDancersDefault.Host host = QuestPlayer ? SplatDancersDefault.Host.Quest : SplatDancersDefault.Host.WindowsPlayer;
+        string reason = SplatDancersDefault.NoPath(api, SystemInfo.supportsComputeShaders, host);
+        string noPath = reason.Length > 0 ? $" ({reason})" : "";
+        // the Quest: "splats" (on unless given off); a Windows player: given, else on in VR and (a flagged capture) on the desktop;
+        // never without a drawing path (the renderer has no OpenGL / D3D11 path: the avatars stay)
+        SplatDancersDefault.Decision d = SplatDancersDefault.Decide(new SplatDancersDefault.Inputs
+        {
+            Host = host,
+            SettingsGiven = st.SplatsGiven,
+            SettingsOn = st.Splats,
+            Vr = vr,
+            CaptureFlag = viewer.Manifest != null && viewer.Manifest.SplatDancersDefaultOn,
+            HasSplatData = CaptureHasSplats(viewer.Manifest),
+            NoPath = reason
+        });
+        bool on = d.On;
         splatsOn = on;
+        DefaultWhy = d.Why;
         reduceMax = st.SplatMax > 0 ? st.SplatMax : st.SplatMax < 0 ? 0 : QuestDefaultMax;
         reduceSigma = st.SplatMaxSigma > 0f ? st.SplatMaxSigma : st.SplatMaxSigma < 0f ? 0f : QuestDefaultSigma;
         renderPath = st.SplatPath == "direct" ? Paths.Direct : st.SplatPath == "composite" ? Paths.Composite : QuestDefaultPath;
@@ -373,7 +441,7 @@ public sealed class SplatDancers : MonoBehaviour
         alphaCutoff = st.SplatAlphaCutoff > 0f ? st.SplatAlphaCutoff : QuestPlayer ? QuestDefaultAlphaCutoff : 0f;
         sortEvery = Math.Max(1, st.SplatSortEvery > 0 ? st.SplatSortEvery : QuestPlayer ? QuestDefaultSortEvery : 1);
         string who = QuestPlayer ? "quest" : vr ? "pc vr" : "pc desktop";
-        string why = QuestPlayer ? "" : st.SplatsGiven ? " (given)" : " (pc default: on in VR, off on the desktop)";
+        string why = QuestPlayer ? "" : $" ({d.Why})";
         QuestTier = $"{who}: splats {(on ? "on" : "off")}{why}{noPath}, max {(reduceMax > 0 ? reduceMax.ToString() : "all")} per dancer, " +
                     $"sigma clamp {(reduceSigma > 0f ? $"{reduceSigma * 100f:0.##} cm" : "none")}, path {renderPath}, depth {(questDepth ? "on" : "off")}, " +
                     $"set '{(splatSet.Length > 0 ? splatSet : "full")}', layer scale {SplatUrpFeature.LowResScale:0.##}{(SplatUrpFeature.LowResScale < 0.999f ? $" (low-res layer, {(questDepth ? "low-res splat depth" : "no splat depth")})" : "")}, " +
@@ -389,27 +457,63 @@ public sealed class SplatDancers : MonoBehaviour
         return Instance;
     }
 
-    /// <summary>turn the splat dancers on or off (on: loads the capture's splat avatars if it has any)</summary>
+    /// <summary>turn the splat dancers on or off by hand (on: loads the capture's splat avatars if it has any). In the Editor the hand
+    /// choice wins over every capture's default for the rest of the editor session (UseCaptureDefault gives it back).</summary>
     public static void SetEnabled(bool on)
     {
-        splatsOn = on;
+        handSet = true;
+        DefaultWhy = $"set by hand this editor session ({(on ? "on" : "off")})";
 #if UNITY_EDITOR
+        UnityEditor.SessionState.SetBool(HandKey, true);
         UnityEditor.SessionState.SetBool(SessionKey, on);
 #endif
+        ApplyState(on);
+    }
+
+    /// <summary>Editor: forget the hand choice (hm_splatdancers --action auto): the loaded capture's default applies now and at every
+    /// later capture load (SplatDancersDefault: on for a capture whose capture.json asks for it, else off)</summary>
+    public static void UseCaptureDefault()
+    {
+        handSet = false;
+#if UNITY_EDITOR
+        UnityEditor.SessionState.SetBool(HandKey, false);
+        UnityEditor.SessionState.SetBool(SessionKey, false);
+#endif
+        HeadMovement viewer = HeadMovement.Instance;
+        if (viewer == null || viewer.Manifest == null)
+        {
+            DefaultWhy = "viewer default (off on the desktop)";
+            ApplyState(false);
+            return;
+        }
+
+        if (TierPlayer) ApplyPlayerTier(viewer);
+        else ApplyEditorDefault(viewer);
+        ApplyState(splatsOn);
+    }
+
+    /// <summary>the on / off paths without touching the hand choice (SetEnabled, UseCaptureDefault)</summary>
+    static void ApplyState(bool on)
+    {
+        splatsOn = on;
         if (on)
         {
             SplatDancers s = Ensure();
-            if (HeadMovement.Instance != null && (s.entries.Count == 0 || s.hm != HeadMovement.Instance)) s.Rebuild(HeadMovement.Instance);
+            if (HeadMovement.Instance != null && (s.entries.Count == 0 || s.hm != HeadMovement.Instance || s.NeedsLoad)) s.Rebuild(HeadMovement.Instance);
             SplatUrpFeature.Ensure();
         }
-        else if (Instance != null)
-        {
-            Instance.ApplyVisibility();
-            Instance.LinesBackOn();
-            SplatUrpFeature.OverSplats.Clear();
-            SplatUrpFeature.OverSplatsInstanced.Clear();
-            SplatUrpFeature.Remove();
-        }
+        else TurnedOff();
+    }
+
+    /// <summary>the avatars back, the over-the-splats lists empty, the URP feature out (the toggle is off)</summary>
+    static void TurnedOff()
+    {
+        if (Instance == null) return;
+        Instance.ApplyVisibility();
+        Instance.LinesBackOn();
+        SplatUrpFeature.OverSplats.Clear();
+        SplatUrpFeature.OverSplatsInstanced.Clear();
+        SplatUrpFeature.Remove();
     }
 
     void Awake()
@@ -455,7 +559,9 @@ public sealed class SplatDancers : MonoBehaviour
             Entry e = new() { Role = kv.Key, Avatar = kv.Value, JsonPath = json };
             if (json != null && splatSet.Length > 0 && !fromSet && !string.Equals(splatSet, "full", StringComparison.OrdinalIgnoreCase))
                 Debug.LogWarning($"{(TierPlayer ? "HM-SPLATS " : "")}splat dancers: {kv.Key}: no set '{splatSet}' in {capture}/splats: the full file is used");
-            if (json != null && (splatsOn || !TierPlayer))
+            // the data is read only while the splats are on (a capture visited later with them off does not read its splat files;
+            // turning them on rebuilds: ApplyState / NeedsLoad)
+            if (json != null && splatsOn)
             {
                 string path = json;
                 int max = reduceMax; // a player: VrSettings at the capture load; the Editor: SetReduction (default none)
@@ -471,6 +577,20 @@ public sealed class SplatDancers : MonoBehaviour
             }
 
             entries.Add(e);
+        }
+    }
+
+    /// <summary>a dancer of this capture has splat data that was not read (the capture was built while the splats were off)</summary>
+    bool NeedsLoad
+    {
+        get
+        {
+            foreach (Entry e in entries)
+            {
+                if (e.JsonPath != null && e.Splat == null && e.Loading == null && e.Error == null) return true;
+            }
+
+            return false;
         }
     }
 
@@ -670,7 +790,7 @@ public sealed class SplatDancers : MonoBehaviour
         if (!splatsOn || s == null) return 0f;
         foreach (Entry e in s.entries)
         {
-            if (e.Role == role && e.Splat != null && e.Avatar != null && e.Avatar.Visible) return Mathf.Clamp01(s.CompositeOpacity());
+            if (e.Role == role && e.Splat != null && e.Avatar != null && e.Avatar.Visible && !Parked(e)) return Mathf.Clamp01(s.CompositeOpacity());
         }
 
         return 0f;
@@ -1009,12 +1129,25 @@ public sealed class SplatDancers : MonoBehaviour
                 if (e.Splat.gameObject.activeSelf != show) e.Splat.gameObject.SetActive(show);
                 e.Splat.HairMode = hairMode;
                 e.Splat.HairMotion = hairMotion;
-                e.Splat.OpacityScale = opacityMode == OpacityModes.ScaleSplats ? Mathf.Clamp01(e.Avatar.Opacity) : 1f;
+                // a parked dancer draws nothing (the opaque splats showed through the empty floor in overhead views); it stays
+                // "shown" for everything else (the avatar hidden under it, its skeleton lines as for a shown dancer)
+                e.Splat.OpacityScale = Parked(e) ? 0f : opacityMode == OpacityModes.ScaleSplats ? Mathf.Clamp01(e.Avatar.Opacity) : 1f;
             }
 
             if (show) Hide(e);
             else Unhide(e);
         }
+    }
+
+    /// <summary>an avatar whose pelvis is more than this far under the floor (in the avatar's own space) is PARKED: dancecap
+    /// export_unity park_absent puts a dancer that is not yet in any camera's view 30 m under its partner (capture.json "absent")</summary>
+    public const float ParkedBelowM = 5f;
+
+    static bool Parked(Entry e)
+    {
+        if (e.Avatar == null) return false;
+        Transform pelvis = e.Avatar.Bone(0);
+        return pelvis != null && e.Avatar.transform.InverseTransformPoint(pelvis.position).y < -ParkedBelowM;
     }
 
     void Hide(Entry e)
@@ -1070,6 +1203,9 @@ public sealed class SplatDancers : MonoBehaviour
         Dictionary<string, object> s = new()
         {
             ["enabled"] = splatsOn,
+            ["why"] = DefaultWhy,
+            ["handSet"] = handSet,
+            ["captureFlag"] = hm != null && hm.Manifest != null ? hm.Manifest.splat_dancers : null,
             ["capture"] = capture != null ? Path.GetFileName(capture) : null,
             ["opacityMode"] = opacityMode.ToString(),
             ["displayOpacity"] = DisplayOpacity,
@@ -1115,6 +1251,8 @@ public sealed class SplatDancers : MonoBehaviour
                 ["hairRestDiffMm"] = e.Splat?.HairBinding != null ? e.Splat.HairBinding.RestDiffMaxMm : float.NaN,
                 ["hairCanonResidualMm"] = e.Splat?.HairBinding != null ? e.Splat.HairBinding.CanonResidualMaxMm : float.NaN,
                 ["shown"] = e.Splat != null && e.Splat.gameObject.activeInHierarchy,
+                ["parked"] = Parked(e),
+                ["opacityScale"] = e.Splat != null ? e.Splat.OpacityScale : 0f,
                 ["avatarVisible"] = e.Avatar != null && e.Avatar.Visible,
                 ["avatarOpacity"] = e.Avatar != null ? e.Avatar.Opacity : 0f,
                 ["avatarRenderersHidden"] = e.Hidden.Count,

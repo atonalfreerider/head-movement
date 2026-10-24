@@ -54,7 +54,7 @@ optional layer exists.
 | Photoreal avatar textures | optional | texture bake |
 | Hair groom + simulation parameters | optional | hair |
 | Source camera videos + per-frame camera tracks | optional (desktop camera tour only) | ingest + cameras |
-| Gaussian splats of the **dancers only** (4D sequence) | optional, future; layer **off by default** | — |
+| Gaussian splats of the **dancers only** (4D sequence) | optional, future; layer **off by default** (on by default for a capture whose capture.json asks for it, §3.2a) | — |
 | Room reconstruction (mesh / splats) | not displayed (kept only as alignment reference) | room |
 
 ### 2.2 Dance metadata, silos and categories
@@ -182,6 +182,14 @@ optional layer exists.
 - Splats show **only the dancers** — literally nothing else: no floor, no room, no spectators. The splat
   layer is **off by default**; when switched on it replaces or overlays the avatars (4D dancer splats are
   future work). The room reconstruction is not displayed in any mode.
+- **Default per capture** (owner 2026-10-23: make the splat dancers the default for one capture): a capture whose
+  `capture.json` has `"splat_dancers": "on"` (dancecap `takes/<take>.toml [export] splat_dancers`) shows its splat dancers
+  by default — in the Editor when the device can draw them (D3D12 / Vulkan / Metal with compute; otherwise the avatars
+  and one log line naming `-force-d3d12`) and nobody set the toggle by hand this editor session (`hm_splatdancers --action
+  on | off` still wins; `--action auto` gives the default back), and in a Windows player on the desktop as in VR. The
+  Quest is unchanged (every capture with `splats/` is on there). Captures without the key keep the default above. A
+  dancer parked under the floor while absent from the cameras (capture.json `absent`) draws no splats. A capture loaded
+  while the splats are off reads no splat files (they load when switched on). `docs/SPLAT_DANCERS.md` "Default per capture".
 
 ### 3.2b Head-worn props (the performance headset)
 - Some dancers wear a head-worn performance microphone in the source videos (a class taught with a headset). The avatar can wear it as a
@@ -1203,7 +1211,8 @@ Decided by the user (2026-10-06):
   **Sarrada**; Little Turn is the **Viradinha**.
 - Directed playback shows the move caption with a confidence score and the graph inset (§3.12).
 - Each dance is a reaction "Leader + Follower × Song" producing its fingerprint (§3.13).
-- Splats show the dancers only (no floor or room), off by default; the room reconstruction is not shown.
+- Splats show the dancers only (no floor or room), off by default (on for a capture whose capture.json asks for it, §3.2a); the room
+  reconstruction is not shown.
 - Hair matches the follower's shape and colour and keeps the tip bloom; faces from portraits; expressions and hand
   contact refined (§3.2).
 - Graph chase camera zoomed far out, may be slightly inside the graph (§5.5).
