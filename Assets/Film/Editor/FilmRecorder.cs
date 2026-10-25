@@ -685,8 +685,10 @@ public static class FilmRecorder
         if (!string.IsNullOrEmpty(p) && File.Exists(p)) return p;
         foreach (string venv in new[] { ".venv-nopo4d", ".venv" })
         {
-            // Windows venvs keep the interpreter in Scripts/python.exe, Linux / macOS ones in bin/python
-            foreach (string c in new[] { Path.Combine(WorkspaceRoot, venv, "Scripts", "python.exe"), Path.Combine(WorkspaceRoot, venv, "bin", "python") })
+            // Windows venvs keep the interpreter in Scripts/python.exe, Linux / macOS ones in bin/python; a workspace whose dancecap/ is a link
+            // (~/Desktop/Unity/dancecap -> ~/Desktop/HeadMovement-Pipeline/dancecap) has its venv beside the link's target: dancecap/../<venv>
+            foreach (string root in new[] { WorkspaceRoot, Path.Combine(WorkspaceRoot, "dancecap", "..") })
+            foreach (string c in new[] { Path.Combine(root, venv, "Scripts", "python.exe"), Path.Combine(root, venv, "bin", "python") })
                 if (File.Exists(c)) return c;
         }
 
