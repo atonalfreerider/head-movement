@@ -69,6 +69,7 @@ public static class FilmRecorder
         public string stopReason;
         public bool needsMix, restartPlay, enterRequested, loadRequested, prepareCalled, begin3, gameViewSet;
         public bool aborted;
+        public bool webm; // Linux editor: the Unity Recorder has no MP4 encoder there (VP8 WebM), transcoded to the H.264 MP4 by ffmpeg
         public float filmTime, danceTime, lastFilmTime;
         public string segment, directorError, directorType;
         public int frames, expectedFrames, startFrame, stopFrame = -1, stallFrames, warmFrames;
@@ -211,7 +212,8 @@ public static class FilmRecorder
             case PlayModeStateChange.EnteredEditMode:
                 if (j.state == "stopping")
                 {
-                    if (File.Exists(j.output)) BeginValidation(j);
+                    if (j.webm && !File.Exists(j.output) && File.Exists(WebmPath(j))) SetState(j, "transcoding", "VP8 WebM -> H.264 MP4 (ffmpeg)");
+                    else if (File.Exists(j.output)) BeginValidation(j);
                     else Fail(j, j.message ?? "no output file");
                 }
                 else if (j.state is "loading" or "preparing" or "arming" or "recording")
@@ -262,6 +264,9 @@ public static class FilmRecorder
             case "audiofix":
                 TickAudioFix(j);
                 break;
+            case "transcoding":
+                TickTranscode(j);
+                break;
             case "loading":
             case "preparing":
             case "arming":
@@ -269,7 +274,9 @@ public static class FilmRecorder
             case "stopping":
                 if (!EditorApplication.isPlaying && !EditorApplication.isPlayingOrWillChangePlaymode)
                 {
-                    if (j.state == "stopping" && File.Exists(j.output)) BeginValidation(j);
+                    if (j.state == "stopping" && j.webm && !File.Exists(j.output) && File.Exists(WebmPath(j)))
+                        SetState(j, "transcoding", "VP8 WebM -> H.264 MP4 (ffmpeg)");
+                    else if (j.state == "stopping" && File.Exists(j.output)) BeginValidation(j);
                     else Fail(j, $"not in Play mode while {j.state}");
                 }
 
@@ -511,7 +518,24 @@ public static class FilmRecorder
     // ------------------------------------------------------------------ discovery
 
     public static string ProjectRoot => Directory.GetParent(Application.dataPath)!.FullName;
-    public static string WorkspaceRoot => Directory.GetParent(ProjectRoot)!.FullName;
+    /// <summary>the pipeline workspace (dancecap/, .venv/): the project's parent on Windows (HeadMovement-Pipeline/head-movement); elsewhere
+    /// $HM_WORKSPACE, or a folder beside the project's parent that holds dancecap/ and a head-movement link to the project (Linux, 2026-10-25:
+    /// ~/Desktop/Unity/head-movement with ~/Desktop/HeadMovement-Pipeline/head-movement -> it)</summary>
+    public static string WorkspaceRoot
+    {
+        get
+        {
+            string parent = Directory.GetParent(ProjectRoot)!.FullName;
+            if (Directory.Exists(Path.Combine(parent, "dancecap"))) return parent;
+            string env = Environment.GetEnvironmentVariable("HM_WORKSPACE");
+            if (!string.IsNullOrEmpty(env) && Directory.Exists(Path.Combine(env, "dancecap"))) return env;
+            string grand = Directory.GetParent(parent)?.FullName;
+            if (grand != null)
+                foreach (string d in Directory.GetDirectories(grand))
+                    if (Directory.Exists(Path.Combine(d, "dancecap")) && Directory.Exists(Path.Combine(d, "head-movement", "Assets"))) return d;
+            return parent;
+        }
+    }
     public static string RecordingsDir => Path.Combine(ProjectRoot, "Recordings");
 
     public static string[] CaptureNames() =>
@@ -661,8 +685,9 @@ public static class FilmRecorder
         if (!string.IsNullOrEmpty(p) && File.Exists(p)) return p;
         foreach (string venv in new[] { ".venv-nopo4d", ".venv" })
         {
-            string c = Path.Combine(WorkspaceRoot, venv, "Scripts", "python.exe");
-            if (File.Exists(c)) return c;
+            // Windows venvs keep the interpreter in Scripts/python.exe, Linux / macOS ones in bin/python
+            foreach (string c in new[] { Path.Combine(WorkspaceRoot, venv, "Scripts", "python.exe"), Path.Combine(WorkspaceRoot, venv, "bin", "python") })
+                if (File.Exists(c)) return c;
         }
 
         return null;
@@ -908,15 +933,26 @@ public static class FilmRecorder
         // H.264 High profile at an explicit bitrate (the preset "High" quality gives Constrained Baseline at ~8 Mbps on
         // Windows, too little for hair, thin skeleton lines and caption text): 1 s GOP, 2 B-frames
         j.videoMbps = (j.size == "4k" ? 60f : 20f) * (j.fps > 30 ? 1.5f : 1f);
-        movie.EncoderSettings = new CoreEncoderSettings
-        {
-            Codec = CoreEncoderSettings.OutputCodec.MP4,
-            EncodingQuality = CoreEncoderSettings.VideoEncodingQuality.Custom,
-            EncodingProfile = CoreEncoderSettings.H264EncodingProfile.High,
-            TargetBitRate = j.videoMbps,
-            GopSize = (uint)j.fps,
-            NumConsecutiveBFrames = 2
-        };
+        // the Linux editor has no H.264 encoder in the Unity Recorder ("Codec 'MP4' is not supported on this platform"): VP8 WebM at
+        // 1.5x the bitrate, then ffmpeg -> the same H.264 High MP4 (TickTranscode) before the checks, which stay the MP4's
+        j.webm = Application.platform == RuntimePlatform.LinuxEditor;
+        movie.EncoderSettings = j.webm
+            ? new CoreEncoderSettings
+            {
+                Codec = CoreEncoderSettings.OutputCodec.WEBM,
+                EncodingQuality = CoreEncoderSettings.VideoEncodingQuality.Custom,
+                TargetBitRate = j.videoMbps * 1.5f,
+                GopSize = (uint)j.fps
+            }
+            : new CoreEncoderSettings
+            {
+                Codec = CoreEncoderSettings.OutputCodec.MP4,
+                EncodingQuality = CoreEncoderSettings.VideoEncodingQuality.Custom,
+                EncodingProfile = CoreEncoderSettings.H264EncodingProfile.High,
+                TargetBitRate = j.videoMbps,
+                GopSize = (uint)j.fps,
+                NumConsecutiveBFrames = 2
+            };
         movie.CaptureAlpha = false;
         movie.CaptureAudio = true;
         movie.ImageInputSettings = new GameViewInputSettings { OutputWidth = j.width, OutputHeight = j.height };
@@ -1293,6 +1329,92 @@ public static class FilmRecorder
     /// mix (from the job's film start) as AAC 192k, verifies sync / loudness / peak / no burst against the mix and adds its result to
     /// the report (.json "audio_fix", a section in the .md).
     /// </summary>
+    static string WebmPath(Job j) => Path.ChangeExtension(j.output, ".webm");
+
+    static System.Diagnostics.Process transcodeProcess;
+    static System.Text.StringBuilder transcodeLog;
+
+    /// <summary>Linux: the recorder's VP8 WebM -> the H.264 High MP4 the checks and the audio fix expect (same frames, the audio as AAC);
+    /// the WebM is removed once the MP4 exists.</summary>
+    static void TickTranscode(Job j)
+    {
+        if (transcodeProcess == null)
+        {
+            string ff = FilmRenderCheck.Tool("ffmpeg");
+            if (ff == null)
+            {
+                Fail(j, "ffmpeg not found: the Linux recording is a WebM and needs ffmpeg for the MP4");
+                return;
+            }
+            string crf = j.size == "4k" ? "18" : "16";
+            string args = $"-y -hide_banner -loglevel error -i \"{WebmPath(j)}\" -c:v libx264 -preset medium -crf {crf} -profile:v high -pix_fmt yuv420p " +
+                          $"-g {j.fps} -bf 2 -c:a aac -b:a 192k -movflags +faststart \"{j.output}\"";
+            try
+            {
+                System.Diagnostics.ProcessStartInfo psi = new(ff, args)
+                {
+                    UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true
+                };
+                transcodeLog = new System.Text.StringBuilder();
+                transcodeProcess = new System.Diagnostics.Process { StartInfo = psi, EnableRaisingEvents = false };
+                transcodeProcess.OutputDataReceived += (_, e) => { if (e.Data != null) lock (transcodeLog) transcodeLog.AppendLine(e.Data); };
+                transcodeProcess.ErrorDataReceived += (_, e) => { if (e.Data != null) lock (transcodeLog) transcodeLog.AppendLine(e.Data); };
+                transcodeProcess.Start();
+                transcodeProcess.BeginOutputReadLine();
+                transcodeProcess.BeginErrorReadLine();
+            }
+            catch (Exception e)
+            {
+                transcodeProcess = null;
+                Fail(j, $"could not run ffmpeg: {e.Message}");
+            }
+
+            return;
+        }
+
+        if (!transcodeProcess.HasExited)
+        {
+            if (EditorApplication.timeSinceStartup - j.phaseStart > 1800)
+            {
+                try
+                {
+                    transcodeProcess.Kill();
+                }
+                catch
+                {
+                    // ignore
+                }
+
+                transcodeProcess = null;
+                Fail(j, "the WebM -> MP4 transcode ran past 30 min");
+            }
+
+            return;
+        }
+
+        int rc = transcodeProcess.ExitCode;
+        transcodeProcess = null;
+        if (rc != 0 || !File.Exists(j.output))
+        {
+            string log;
+            lock (transcodeLog) log = transcodeLog.ToString();
+            Fail(j, $"ffmpeg WebM -> MP4 failed (rc {rc}): {log.Trim()}");
+            return;
+        }
+
+        try
+        {
+            File.Delete(WebmPath(j));
+        }
+        catch (Exception e)
+        {
+            j.warnings.Add($"the WebM was kept: {e.Message}");
+        }
+
+        j.warnings.Add("Linux editor: recorded as VP8 WebM (the Unity Recorder has no MP4 encoder there), transcoded to H.264 High by ffmpeg");
+        BeginValidation(j);
+    }
+
     static void TickAudioFix(Job j)
     {
         if (fixProcess == null)
