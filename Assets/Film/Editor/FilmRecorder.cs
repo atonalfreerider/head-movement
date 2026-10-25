@@ -686,13 +686,37 @@ public static class FilmRecorder
         foreach (string venv in new[] { ".venv-nopo4d", ".venv" })
         {
             // Windows venvs keep the interpreter in Scripts/python.exe, Linux / macOS ones in bin/python; a workspace whose dancecap/ is a link
-            // (~/Desktop/Unity/dancecap -> ~/Desktop/HeadMovement-Pipeline/dancecap) has its venv beside the link's target: dancecap/../<venv>
-            foreach (string root in new[] { WorkspaceRoot, Path.Combine(WorkspaceRoot, "dancecap", "..") })
+            // (~/Desktop/Unity/dancecap -> ~/Desktop/HeadMovement-Pipeline/dancecap) has its venv beside the link's target (File.Exists
+            // normalises "dancecap/.." as text, so the link is resolved explicitly)
+            string linked = ResolvedDir(Path.Combine(WorkspaceRoot, "dancecap"));
+            foreach (string root in linked == null ? new[] { WorkspaceRoot } : new[] { WorkspaceRoot, Path.GetDirectoryName(linked) })
             foreach (string c in new[] { Path.Combine(root, venv, "Scripts", "python.exe"), Path.Combine(root, venv, "bin", "python") })
                 if (File.Exists(c)) return c;
         }
 
         return null;
+    }
+
+    /// <summary>the real path of a directory that may be a symbolic link (readlink -f; Windows: as it is); null when it does not exist</summary>
+    static string ResolvedDir(string path)
+    {
+        if (!Directory.Exists(path)) return null;
+        if (Application.platform == RuntimePlatform.WindowsEditor) return path;
+        try
+        {
+            System.Diagnostics.ProcessStartInfo psi = new("readlink", $"-f \"{path}\"")
+            {
+                UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true
+            };
+            using System.Diagnostics.Process p = System.Diagnostics.Process.Start(psi);
+            string real = p!.StandardOutput.ReadToEnd().Trim();
+            p.WaitForExit(5000);
+            return string.IsNullOrEmpty(real) ? path : real;
+        }
+        catch
+        {
+            return path;
+        }
     }
 
     static System.Diagnostics.Process mixProcess;
