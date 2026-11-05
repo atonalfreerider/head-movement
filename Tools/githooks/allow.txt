@@ -9,3 +9,9 @@
 # that adds it.
 
 Assets/Resources/Meshes/*   # third-party VR controller models and textures (large, tracked since the original project)
+docs/media/dancers.gif   # README media of the consented demo dancers (owner approved publishing, 2026-11-05)
+docs/media/rhythm.png   # README media of the consented demo dancers (owner approved publishing, 2026-11-05)
+docs/media/physics.png   # README media of the consented demo dancers (owner approved publishing, 2026-11-05)
+docs/media/counterbalance.png   # README media of the consented demo dancers (owner approved publishing, 2026-11-05)
+docs/media/dance_graph.png   # README media of the consented demo dancers (owner approved publishing, 2026-11-05)
+docs/media/fingerprint.png   # README media of the consented demo dancers (owner approved publishing, 2026-11-05)
