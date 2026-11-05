@@ -34,11 +34,9 @@ namespace HmSplats
             /// <summary>its skinned Gaussian splats (the mesh avatar hidden under them)</summary>
             Splats,
 
-            /// <summary>its skeleton lines only: it has splat data the device cannot draw (the mesh avatar is never the fallback)</summary>
-            Skeleton,
-
-            /// <summary>its mesh avatar: no splat data for this role</summary>
-            MeshAvatar
+            /// <summary>its skeleton lines only: no splat data for this role, or splat data the device cannot draw. The version-1 mesh
+            /// avatars are retired (owner 2026-11-05): never drawn.</summary>
+            Skeleton
         }
 
         /// <summary>what the decision depends on (one capture load)</summary>
@@ -117,8 +115,8 @@ namespace HmSplats
             bool canDraw = string.IsNullOrEmpty(i.NoPath);
             if (!i.HasSplatData)
                 return new Decision(false, false, i.CaptureFlag
-                    ? "capture.json asks for splat dancers but the capture has no splats/: mesh avatars"
-                    : "no splat data in this capture: mesh avatars");
+                    ? "capture.json asks for splat dancers but the capture has no splats/: skeleton lines"
+                    : "no splat data in this capture: skeleton lines (the mesh avatars are retired)");
             if (!canDraw) return new Decision(false, true, $"the capture has splat dancers but {i.NoPath}: skeleton lines, never the mesh avatars");
             string why = "the capture has splat dancers: always drawn as splats (owner rule 2026-10-23)";
             if (i.Host == Host.Editor && i.HandSet && !i.HandOn) why += "; the earlier hm_splatdancers off of this editor session is ignored";
@@ -127,14 +125,10 @@ namespace HmSplats
         }
 
         /// <summary>how one dancer is drawn: its role has splat data and the device draws it (and the watchdog has not given up) -> Splats;
-        /// splat data the device cannot draw -> Skeleton (never the mesh avatar); no splat data for the role -> MeshAvatar</summary>
+        /// splat data the device cannot draw, or no splat data for the role -> Skeleton (never a mesh avatar)</summary>
         public static Look DancerLook(bool roleHasSplatData, bool canDraw, bool fellBack = false)
         {
-            if (!roleHasSplatData) return Look.MeshAvatar;
-            return canDraw && !fellBack ? Look.Splats : Look.Skeleton;
+            return roleHasSplatData && canDraw && !fellBack ? Look.Splats : Look.Skeleton;
         }
-
-        /// <summary>the mesh avatar of a dancer may be drawn (only a dancer without splat data: DancerLook == MeshAvatar)</summary>
-        public static bool MeshAvatarDrawn(bool roleHasSplatData) => DancerLook(roleHasSplatData, true) == Look.MeshAvatar;
     }
 }

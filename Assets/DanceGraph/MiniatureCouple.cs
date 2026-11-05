@@ -67,7 +67,7 @@ public class MiniatureCouple : MonoBehaviour
             string skin = manifest?.RolePath(manifest.smplx_skin, role);
             string motion = manifest?.RolePath(manifest.smplx, role);
             if (skin == null || motion == null) continue;
-            if (manifest.HasSplatAvatar(role)) continue; // a dancer with splat data is never drawn as its mesh avatar: skeleton only
+            continue; // the mesh avatars are retired (owner 2026-11-05): the miniature couple is skeletons only
             try
             {
                 SmplxAvatar avatar = SmplxAvatar.Create(skin, motion, role, avatarRoot);

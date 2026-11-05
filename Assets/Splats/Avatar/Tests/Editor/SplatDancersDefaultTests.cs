@@ -89,7 +89,6 @@ namespace HmSplats.Tests
 
             // the players' 3-s rendering watchdog gave up: skeleton too
             Assert.AreEqual(D.Look.Skeleton, D.DancerLook(true, canDraw: true, fellBack: true));
-            Assert.IsFalse(D.MeshAvatarDrawn(true));
         }
 
         [Test]
@@ -104,7 +103,7 @@ namespace HmSplats.Tests
         }
 
         [Test]
-        public void NoSplatData_KeepsTheMeshAvatars()
+        public void NoSplatData_ShowsSkeletons_NeverAMeshAvatar()
         {
             foreach (D.Host h in Hosts)
             {
@@ -113,15 +112,14 @@ namespace HmSplats.Tests
                     D.Decision d = D.Decide(In(h, data: false, flag: flag));
                     Assert.IsFalse(d.On, $"{h}: {d}");
                     Assert.IsFalse(d.Refused, "nothing to draw: no refusal to report");
-                    StringAssert.Contains("mesh avatars", d.Why);
+                    StringAssert.Contains("skeleton lines", d.Why);
                     D.Decision d11 = D.Decide(In(h, data: false, noPath: Path11(h)));
                     Assert.IsFalse(d11.Refused, "a capture without splats on D3D11 asks for nothing: no log line");
                 }
             }
 
-            Assert.AreEqual(D.Look.MeshAvatar, D.DancerLook(false, canDraw: true));
-            Assert.AreEqual(D.Look.MeshAvatar, D.DancerLook(false, canDraw: false), "no splat data: the mesh avatar whatever the device");
-            Assert.IsTrue(D.MeshAvatarDrawn(false));
+            Assert.AreEqual(D.Look.Skeleton, D.DancerLook(false, canDraw: true), "no splat data: skeleton lines (owner 2026-11-05)");
+            Assert.AreEqual(D.Look.Skeleton, D.DancerLook(false, canDraw: false));
             Assert.AreEqual(D.Look.Splats, D.DancerLook(true, canDraw: true));
         }
 

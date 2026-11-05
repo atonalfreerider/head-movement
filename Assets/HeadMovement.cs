@@ -584,7 +584,7 @@ public class HeadMovement : MonoBehaviour
         if (async) yield return null;
 
         floorPatterns.Init(Lead, Follow, BloomMaterial, beatGrid, Fps, AudioOffset);
-        floorPatterns.SetVisible(showFloor);
+        ApplyFootprints();
         if (async) yield return null;
         partnerConnection.Init(Lead, Follow, BloomMaterial, Fps);
         partnerConnection.SetVisible(showConnection);
@@ -690,13 +690,11 @@ public class HeadMovement : MonoBehaviour
 
             try
             {
-                // owner rule 2026-10-23: a dancer with a splat avatar (splats/<role>.json) is never drawn as its mesh avatar - the avatar is
-                // built as an invisible rig (the splats, the hair simulation and physics ride on its bones), without its albedo (archived for
-                // such a capture: dancecap export_unity archive-avatars), its renderers off from the start (SplatDancers keeps them off)
-                bool rigOnly = manifest.HasSplatAvatar(role);
-                SmplxAvatar avatar = SmplxAvatar.Create(skin, motion, role, null, rigOnly ? null : manifest.RolePath(manifest.smplx_albedo, role));
-                if (rigOnly) RigOnly(avatar);
-                else if (manifest.smplx_albedo != null && !avatar.Textured) Warn($"{role}: albedo declared but not applied");
+                // owner rule 2026-11-05: the version-1 mesh avatars are retired - every avatar is an invisible rig (the LHM++ splats, the
+                // hair simulation, shoes and physics ride on its bones; SmplxAvatar.Conceal keeps every renderer under it off). A capture
+                // without splat data shows its skeletons only.
+                SmplxAvatar avatar = SmplxAvatar.Create(skin, motion, role);
+                RigOnly(avatar);
                 DanceOrigin.Place(avatar.transform);
                 if (avatar.FrameCount < FrameCount) Warn($"{role} avatar has {avatar.FrameCount} frames < {FrameCount}");
                 avatar.Opacity = EffectiveAvatarOpacity * roleAlpha[(int)role & 1];
@@ -719,7 +717,7 @@ public class HeadMovement : MonoBehaviour
         }
 
         LoadHair();
-        if (avatars.TryGetValue(Role.Follow, out SmplxAvatar hairOn) && hairOn != null && manifest.HasSplatAvatar(Role.Follow)) RigOnly(hairOn); // the hair cards too
+        if (avatars.TryGetValue(Role.Follow, out SmplxAvatar hairOn) && hairOn != null) RigOnly(hairOn); // the hair cards too
         Stage(0.62f, "hair");
         if (async) yield return null;
         try
@@ -772,10 +770,7 @@ public class HeadMovement : MonoBehaviour
 
     /// <summary>every renderer under a rig-only avatar off (a dancer with a splat avatar: never drawn as its mesh avatar; SplatDancers keeps
     /// them off, also those attachments add later)</summary>
-    static void RigOnly(SmplxAvatar avatar)
-    {
-        foreach (Renderer r in avatar.GetComponentsInChildren<Renderer>(true)) r.forceRenderingOff = true;
-    }
+    static void RigOnly(SmplxAvatar avatar) => avatar.Conceal();
 
     /// <summary>the follow's groomed, simulated hair (Assets/Hair) when the capture has hair_groom.json; it lives on the
     /// follow avatar (destroyed with it) and follows the avatar's frame and visibility</summary>
@@ -1165,7 +1160,7 @@ public class HeadMovement : MonoBehaviour
     {
         switch (layer.ToLowerInvariant())
         {
-            case "floor": floorPatterns.SetVisible(showFloor = visible); break;
+            case "floor": showFloor = visible; ApplyFootprints(); break;
             case "grid": floorGrid.SetVisible(showGrid = visible); break;
             case "tension": partnerConnection.SetVisible(showConnection = visible); break;
             case "splats": splatCloud.SetVisible(showSplats = visible); break;
@@ -1204,6 +1199,14 @@ public class HeadMovement : MonoBehaviour
         showPhysics = visible;
         if (physicsOverlay != null) physicsOverlay.SetVisible(visible);
         RefreshSkeletons(); // physics mode colours the skeletons by load; rhythm mode pulses them
+        ApplyFootprints();
+    }
+
+    /// <summary>the footprints (floor layer) show in physics mode only: rhythm mode, the default view, draws no prints on the
+    /// floor (owner 2026-11-05)</summary>
+    void ApplyFootprints()
+    {
+        if (floorPatterns != null) floorPatterns.SetVisible(showFloor && showPhysics);
     }
 
     /// <summary>skeleton mode by name (hm_skeleton): physics turns the physics layer on, rhythm turns it off</summary>
@@ -1254,9 +1257,9 @@ public class HeadMovement : MonoBehaviour
             {
                 ["visible"] = kv.Value.Visible, ["frame"] = kv.Value.CurrentFrame, ["bones"] = kv.Value.BoneCount,
                 ["vertices"] = kv.Value.VertexCount, ["triangles"] = kv.Value.TriangleCount,
-                ["textured"] = kv.Value.Textured, ["textureSize"] = kv.Value.TextureSize,
+                ["meshRenderersDrawn"] = SplatDancers.MeshRenderersDrawn(kv.Value),
                 ["opacity"] = kv.Value.Opacity, ["layerVisible"] = kv.Value.LayerVisible, ["feetHidden"] = kv.Value.FeetHidden,
-                ["textureFormat"] = kv.Value.TextureFormatName, ["fkErrorMm"] = kv.Value.FkErrorMm(),
+                ["fkErrorMm"] = kv.Value.FkErrorMm(),
                 ["pelvis"] = Vec(kv.Value.BonePosition(0)), ["queueOffset"] = kv.Value.QueueOffset,
                 ["minY"] = b.min.y, ["maxY"] = b.max.y, ["sizeX"] = b.size.x, ["sizeZ"] = b.size.z,
                 ["head"] = Vec(kv.Value.BonePosition(15)), ["skeletonHead"] = Vec(Lead != null && kv.Key == Role.Lead
@@ -1539,7 +1542,7 @@ public class HeadMovement : MonoBehaviour
         if (keyboard.lKey.wasPressedThisFrame) ToggleLoopMeasure();
         if (keyboard.homeKey.wasPressedThisFrame || keyboard.rKey.wasPressedThisFrame) Restart();
 
-        if (keyboard.fKey.wasPressedThisFrame) floorPatterns.SetVisible(showFloor = !showFloor);
+        if (keyboard.fKey.wasPressedThisFrame) { showFloor = !showFloor; ApplyFootprints(); }
         if (keyboard.tKey.wasPressedThisFrame) // footprints: recent -> all -> off -> recent
         {
             floorPatterns.SetMode(floorPatterns.Mode switch

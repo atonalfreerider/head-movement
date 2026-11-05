@@ -609,9 +609,7 @@ public sealed class SplatDancers : MonoBehaviour
         beadDraws.Clear();
         foreach (Entry e in entries)
         {
-            // a dancer with splat data keeps its mesh avatar hidden (a rebuild of the same capture hides it again at once; another
-            // capture destroys these avatars)
-            if (e.JsonPath == null) Unhide(e);
+            // the mesh avatar stays hidden (it is never drawn: owner 2026-11-05; another capture destroys these avatars)
             if (e.Splat != null)
             {
                 e.Splat.Dispose();
@@ -1161,8 +1159,7 @@ public sealed class SplatDancers : MonoBehaviour
                 e.Splat.OpacityScale = Parked(e) ? 0f : opacityMode == OpacityModes.ScaleSplats ? Mathf.Clamp01(e.Avatar.Opacity) : 1f;
             }
 
-            if (e.JsonPath != null) Hide(e); // splat data for this role: the mesh avatar is never drawn
-            else Unhide(e);                  // no splat data: its mesh avatar, as before
+            Hide(e); // the mesh avatar is never drawn, with or without splat data (owner 2026-11-05)
         }
     }
 
@@ -1218,26 +1215,11 @@ public sealed class SplatDancers : MonoBehaviour
         }
     }
 
-    static void Unhide(Entry e)
-    {
-        foreach (Renderer r in e.Hidden)
-        {
-            if (r != null) r.forceRenderingOff = false;
-        }
-
-        e.Hidden.Clear();
-    }
-
     void OnDisable()
     {
         SplatUrpFeature.OverSplats.Clear();
         SplatUrpFeature.OverSplatsInstanced.Clear();
         LinesBackOn();
-        foreach (Entry e in entries)
-        {
-            if (e.JsonPath == null) Unhide(e); // a dancer with splat data keeps its mesh avatar hidden (never drawn)
-        }
-
         SplatUrpFeature.Remove();
         Shader.SetGlobalFloat(OpacityId, 1f);
     }

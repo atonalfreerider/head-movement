@@ -9,9 +9,11 @@ using UnityEngine.Rendering;
 /// binary and driven per frame by the motion binary (SMPL-X local joint rotations). The math is SMPL-X linear
 /// blend skinning: bones sit at the shaped rest joints with identity rest rotations, so bindpose_j = T(-J_j); the
 /// root bone goes to J_0 + transl. Pose-corrective blendshapes are not applied (plain LBS).
-/// Material (Resources/HM_AvatarLit, one texture, main light + SH: Quest-friendly): the photoreal albedo when the
-/// skin is seam-split (version 2) and capture.json has smplx_albedo, else a neutral role tint (lead warm grey,
-/// follow cool grey). Translucent per VIEWER_SPEC 3.2 (Opacity, ~0.3): the renderer carries a depth-prepass
+/// The mesh body is NEVER drawn (owner 2026-11-05: the version-1 mesh avatars are retired; the dancers are LHM++ Gaussian
+/// splats, Assets/Splats/Avatar): every Renderer under the avatar (body, shoes, hair, props) stays forceRenderingOff, and
+/// the avatar is only the rig the splats, hair simulation, shoes and physics ride on. The material below still exists so the
+/// opacity and visibility state (Visible, Opacity) that the splats follow keeps working. Material (Resources/HM_AvatarLit):
+/// a neutral role tint (lead warm grey, follow cool grey). Translucent per VIEWER_SPEC 3.2 (Opacity, ~0.3): the renderer carries a depth-prepass
 /// material (queue 2990) and a colour material (queue 3000), so every pixel shows the front-most body surface once
 /// over the opaque glowing skeleton inside. The two dancers are sorted back to front per camera: the nearer one's
 /// translucent materials (body, shoes, hair: everything under it in the 2986-3009 band) move up by NearerQueueOffset,
@@ -108,7 +110,6 @@ public class SmplxAvatar : MonoBehaviour
     Vector3 restRoot;
     SkinnedMeshRenderer skinned;
     Material depthMaterial, colourMaterial;
-    Texture2D albedo;
     DisplayTransparency display; // displayed opacity -> this body's blend alpha (VIEWER_SPEC 3.2)
     int frame = -1;
     float opacity = 1f;
@@ -165,9 +166,6 @@ public class SmplxAvatar : MonoBehaviour
         }
     }
     public Bounds WorldBounds => skinned.bounds;
-    public bool Textured => albedo != null;
-    public int TextureSize => albedo != null ? albedo.width : 0;
-    public string TextureFormatName => albedo != null ? albedo.format.ToString() : null;
     public int TriangleCount { get; private set; }
     /// <summary>0 = drawn first (farther from the camera that rendered last), NearerQueueOffset = drawn after the partner</summary>
     public int QueueOffset => queueOffset;
@@ -248,9 +246,7 @@ public class SmplxAvatar : MonoBehaviour
     /// <summary>avatar-local rest-pose position of a SMPL-X joint</summary>
     public Vector3 RestJoint(int joint) => restJoints[joint];
 
-    /// <param name="albedoPath">optional photoreal albedo PNG on the SMPL-X UV layout (needs a seam-split skin)</param>
-    public static SmplxAvatar Create(string skinPath, string motionPath, Role role, Transform parent = null,
-        string albedoPath = null)
+    public static SmplxAvatar Create(string skinPath, string motionPath, Role role, Transform parent = null)
     {
         SmplxData.Skin skin = LoadPrefetch.Take("skin:" + skinPath, () => SmplxData.ReadSkin(skinPath));
         SmplxData.Motion motion = LoadPrefetch.Take("motion:" + motionPath, () => SmplxData.ReadMotion(motionPath));
@@ -259,11 +255,11 @@ public class SmplxAvatar : MonoBehaviour
         if (parent != null) go.transform.SetParent(parent, false);
         SmplxAvatar avatar = go.AddComponent<SmplxAvatar>();
         avatar.SkinPath = skinPath;
-        avatar.Build(skin, motion, role, albedoPath);
+        avatar.Build(skin, motion, role);
         return avatar;
     }
 
-    void Build(SmplxData.Skin skin, SmplxData.Motion m, Role role, string albedoPath)
+    void Build(SmplxData.Skin skin, SmplxData.Motion m, Role role)
     {
         DancerRole = role;
         motion = m;
@@ -311,41 +307,11 @@ public class SmplxAvatar : MonoBehaviour
         skinned.updateWhenOffscreen = true; // bounds follow the dance, never culled
         skinned.quality = SkinQuality.Bone4;
         skinned.shadowCastingMode = ShadowCastingMode.On;
-        Texture tex = null;
-        Color tint = Color.white;
-        float lightInfluence = 0.35f; // the photo albedo carries the studio lighting
-        if (skin.Textured && !string.IsNullOrEmpty(albedoPath) && System.IO.File.Exists(albedoPath))
-        {
-            if (BakedTexture.TryLoad(albedoPath, $"{role} albedo", out Texture2D baked, out DisplayTransparency bakedDisplay) && bakedDisplay != null)
-            {
-                // the deploy step compressed the albedo for the GPU and measured its transparency model beforehand: nothing to decode or sample here
-                albedo = baked;
-                display = bakedDisplay;
-            }
-            else
-            {
-                albedo = LoadTexture(albedoPath, $"{role} albedo",
-                    readable => display = DisplayTransparency.FromTexture(readable, skin.RestVertices, skin.Triangles, skin.Uv, Color.white));
-            }
-
-            tex = albedo;
-        }
-        else
-        {
-            if (!string.IsNullOrEmpty(albedoPath) && !skin.Textured)
-            {
-                Debug.LogWarning($"{role}: albedo given but the skin has no UVs (re-export with textures)");
-            }
-
-            // neutral shaded body: lead warm grey, follow cool grey (VIEWER_SPEC 3.2), shaped by the scene light
-            tint = role == Role.Lead ? new Color(0.74f, 0.64f, 0.58f) : new Color(0.60f, 0.66f, 0.76f);
-            lightInfluence = 0.9f;
-        }
-
-        LoadTrace.Mark("  avatar albedo (png decode + transparency model)");
-        display ??= DisplayTransparency.FromColour(tint);
-
-        (depthMaterial, colourMaterial) = NewMaterials($"{role} avatar{(albedo != null ? " (textured)" : "")}", tex, tint, lightInfluence);
+        skinned.forceRenderingOff = true; // rig only: the mesh body is never drawn
+        // neutral tint (VIEWER_SPEC 3.2); the material only carries the opacity state the splats follow
+        Color tint = role == Role.Lead ? new Color(0.74f, 0.64f, 0.58f) : new Color(0.60f, 0.66f, 0.76f);
+        display = DisplayTransparency.FromColour(tint);
+        (depthMaterial, colourMaterial) = NewMaterials($"{role} avatar (rig)", null, tint, 0.9f);
         skinned.sharedMaterials = new[] { depthMaterial, colourMaterial }; // one submesh, drawn once per material
         ApplyAppearance();
     }
@@ -406,6 +372,7 @@ public class SmplxAvatar : MonoBehaviour
         SetPair(depthMaterial, colourMaterial, feetHidden);
         skinned.enabled = draw;
         skinned.shadowCastingMode = shadows;
+        Conceal();
         for (int i = attachments.Count - 1; i >= 0; i--)
         {
             Attachment a = attachments[i];
@@ -422,6 +389,21 @@ public class SmplxAvatar : MonoBehaviour
         }
 
         AppearanceChanged?.Invoke(this);
+    }
+
+    static readonly List<Renderer> ConcealScratch = new();
+
+    /// <summary>the mesh avatar is never drawn (owner 2026-11-05): every Renderer under it - body, shoes, hair, props, added at any
+    /// time - is forced off. The splats are not under the avatar (SplatDancers' own root).</summary>
+    public void Conceal()
+    {
+        GetComponentsInChildren(true, ConcealScratch);
+        foreach (Renderer r in ConcealScratch)
+        {
+            if (r != null && !r.forceRenderingOff) r.forceRenderingOff = true;
+        }
+
+        ConcealScratch.Clear();
     }
 
     void SetPair(Material depth, Material colour, bool hideFeet)
@@ -790,6 +772,5 @@ public class SmplxAvatar : MonoBehaviour
         if (colourMaterial != null) Destroy(colourMaterial);
         foreach (Attachment a in attachments) DestroyPair(a);
         attachments.Clear();
-        if (albedo != null) Destroy(albedo);
     }
 }

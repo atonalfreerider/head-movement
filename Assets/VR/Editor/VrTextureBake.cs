@@ -46,22 +46,6 @@ namespace HmVr.Editor
             {
                 if (!t.LoadImage(File.ReadAllBytes(png), false)) throw new InvalidDataException(png + ": not a PNG");
                 JObject meta = new();
-                // an avatar's albedo: <role>_albedo.png beside smplx_<role>_skin.bin - the transparency model is measured now, on the readable pixels
-                string name = Path.GetFileNameWithoutExtension(png);
-                if (name.EndsWith("_albedo", StringComparison.OrdinalIgnoreCase))
-                {
-                    string role = name.Substring(0, name.Length - "_albedo".Length);
-                    string skinPath = Path.Combine(Path.GetDirectoryName(png)!, $"smplx_{role}_skin.bin");
-                    if (File.Exists(skinPath))
-                    {
-                        SmplxData.Skin skin = SmplxData.ReadSkin(skinPath);
-                        if (skin.Textured)
-                        {
-                            DisplayTransparency.LuminanceBins(t, skin.RestVertices, skin.Triangles, skin.Uv, Color.white, out float[] ys, out float[] ws, out int tris);
-                            if (ys != null) meta["transparency"] = new JObject { ["ys"] = new JArray(ys), ["ws"] = new JArray(ws), ["tris"] = tris };
-                        }
-                    }
-                }
 
                 TextureFormat fmt = TextureFormat.ASTC_6x6;
                 int w = t.width, h = t.height, mips = t.mipmapCount;
