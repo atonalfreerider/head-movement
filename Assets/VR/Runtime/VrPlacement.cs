@@ -4,10 +4,13 @@ using UnityEngine;
 namespace HmVr
 {
     /// <summary>
-    /// Where the dance stands in the user's real room (passthrough mixed reality) - FIXED, not placed by the user:
+    /// Where the dance stands in the user's real room (passthrough mixed reality). Placed once at the start, then moved only by the user's
+    /// pinches (owner 2026-11-15): ONE pinch and drag slides the floor (x, z), TWO pinches turn it about the hands' midpoint; never a scale,
+    /// never a height change (DancePlacement has neither). A pinch that starts over a panel or with the palm menu up is not a grab.
+    /// The start placement:
     ///   - The capture's world origin is mapped ONCE, when the lesson starts, to the origin (0, 0, 0) of the headset's tracking floor
     ///     (the Floor tracking origin: the centre of the Meta world floor), the capture's floor (y = 0) on the real floor, scale exactly 1.0.
-    ///   - It is then LOCKED for the whole session: it never moves, drifts, re-centres or follows anything. The dancers keep their own
+    ///   - Nothing but the user's pinches moves it: it never drifts, re-centres or follows anything. The dancers keep their own
     ///     captured motion and travel across the floor around that origin (nothing cancels or re-centres their root motion).
     ///   - The one static offset allowed: a constant per lesson that puts the dance around the floor centre - the dancers' mean floor position
     ///     over the whole take (computed once at load) for a capture without its own origin, zero for a capture whose own origin (capture.json
@@ -43,6 +46,14 @@ namespace HmVr
         }
 
         public int Placements { get; private set; }
+        /// <summary>finished one-hand drags and two-hand turns</summary>
+        public int Drags { get; private set; }
+        public int Turns { get; private set; }
+
+        readonly bool[] grabbed = new bool[2];
+        int holding = -1;                 // bit mask of the hands holding the floor when the current grab began (-1 = none)
+        DancePlacement grab0;
+        Vector2 grabA, grabB;
 
         VrDisplay display;
         VrRig rig;
@@ -67,6 +78,8 @@ namespace HmVr
         public void Release()
         {
             Active = false;
+            holding = -1;
+            grabbed[0] = grabbed[1] = false;
             Current = null;
             if (rig != null) rig.ClearPlacement();
         }
@@ -86,6 +99,61 @@ namespace HmVr
                 Active = true;
                 PlaceOnce();
             }
+
+            UpdateGrab(input);
+        }
+
+        /// <summary>a hand's pinch point on the real floor (x, z of the tracking space)</summary>
+        Vector2 Point(VrHand h)
+        {
+            Vector3 r = rig.ToReal(h.PinchPoint);
+            return new Vector2(r.x, r.z);
+        }
+
+        void UpdateGrab(VrInput input)
+        {
+            VrPointers ptrs = VrPointers.Instance;
+            bool menu = VrMenu.Instance != null && VrMenu.Instance.IsOpen;
+            int mask = 0;
+            VrHand[] hands = { input.Left, input.Right };
+            for (int i = 0; i < 2; i++)
+            {
+                VrHand h = hands[i];
+                if (!h.Tracked || !h.Pinch.Held || menu)
+                {
+                    grabbed[i] = false;
+                    continue;
+                }
+
+                if (h.Pinch.Down) grabbed[i] = !h.Palm.Facing && (ptrs == null || !ptrs.OverUi(h.Side));
+                if (grabbed[i]) mask |= 1 << i;
+            }
+
+            if (mask != holding)
+            {
+                if (holding == 3) Turns++;
+                else if (holding > 0) Drags++;
+                holding = mask == 0 ? -1 : mask;
+                grab0 = Current.Clone();
+                if (mask == 3)
+                {
+                    grabA = Point(input.Left);
+                    grabB = Point(input.Right);
+                }
+                else if (mask != 0)
+                {
+                    grabA = Point(mask == 1 ? input.Left : input.Right);
+                }
+
+                return;
+            }
+
+            if (mask == 0) return;
+            DancePlacement p = mask == 3
+                ? PlacementMath.TwoHands(grab0, grabA, grabB, Point(input.Left), Point(input.Right))
+                : PlacementMath.OneHand(grab0, grabA, Point(mask == 1 ? input.Left : input.Right));
+            Current = p;
+            rig.ApplyPlacement(p);
         }
 
         /// <summary>the dancers' mean floor position over the whole take (world, after the capture's own origin shift), computed once</summary>
@@ -150,7 +218,7 @@ namespace HmVr
             Vector3 head = rig.HeadReal;
             Vector2 toUser = new(head.x, head.z);
             float userBearing = toUser.magnitude > 0.7f ? PlacementMath.Bearing(toUser) : PlacementMath.Wrap(rig.HeadRealYawDeg + 180f);
-            DancePlacement p = new() { Anchor = Vector2.zero, Scale = 1f, Pivot = pivot, YawDeg = PlacementMath.Wrap(userBearing - front) };
+            DancePlacement p = new() { Anchor = Vector2.zero, Pivot = pivot, YawDeg = PlacementMath.Wrap(userBearing - front) };
             Current = p;
             rig.ApplyPlacement(p);
             Placements++;
@@ -164,7 +232,7 @@ namespace HmVr
         {
             Dictionary<string, object> s = new()
             {
-                ["active"] = Active, ["placements"] = Placements, ["rigScale"] = rig != null ? rig.RigScale : 1f, ["offsetSource"] = OffsetSource,
+                ["active"] = Active, ["placements"] = Placements, ["drags"] = Drags, ["turns"] = Turns, ["holding"] = holding, ["rigScale"] = rig != null ? rig.RigScale : 1f, ["offsetSource"] = OffsetSource,
                 ["staticOffset"] = new[] { StaticOffset.x, StaticOffset.y }
             };
             if (Current != null)
