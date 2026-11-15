@@ -56,7 +56,7 @@ Other layers:
 | `H` | HUD |
 
 VR controller: button one play/pause, button two loop measure, up/down previous/next measure, left/right speed. On Quest the
-hands work too (pinch, palm menu, snap turn and teleport): see [docs/QUEST.md](docs/QUEST.md).
+hands work too (pinch, palm menu, snap turn and teleport; in passthrough, pinch-drag slides the floor and two pinches turn it): see [docs/QUEST.md](docs/QUEST.md).
 
 ## Data
 

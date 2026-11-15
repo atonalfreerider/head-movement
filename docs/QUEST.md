@@ -30,15 +30,16 @@ arrows, beat count and rhythm score where the lesson turns them on, captions whe
   (`PlayerPrefs hm_vr_display`; `-hmvr-display immersive|passthrough`, `HM_VR_DISPLAY`, `quest_settings.json` "display"). If passthrough does not start
   within 6 s the app falls back to immersive and says so in the menu's note line and in the log (`VrDisplay: passthrough failed: ...`).
 
-**The dance has a fixed place.** The capture's world origin is mapped once, when a lesson starts, to the origin (0, 0, 0) of the headset's Floor
+**Where the dance stands.** The capture's world origin is mapped once, when a lesson starts, to the origin (0, 0, 0) of the headset's Floor
 tracking space (the centre of the Meta world floor), the capture's floor on the real floor, scale exactly 1.0 (`VrPlacement`; the log line
-`VrPlacement: lesson '...' origin LOCKED: static offset (...) ... scale 1.000 OK (exactly 1:1)` states it). It never moves, drifts, re-centres or follows
-anything afterwards; the dancers keep their captured motion and travel across the floor around it (nothing cancels their root motion). The one
+`VrPlacement: lesson '...' origin LOCKED: static offset (...) ... scale 1.000 OK (exactly 1:1)` states it). Afterwards only your pinches move it
+(passthrough, 2026-11-15): **pinch and drag** with one hand slides the floor, **pinch with both hands** and turn the line between them to rotate it
+about their midpoint. It is never scaled and never moved up or down; a pinch that starts on a panel or with the palm menu up is not a grab. Nothing
+else moves, drifts or re-centres it; the dancers keep their captured motion and travel across the floor around it (nothing cancels their root motion). The one
 static offset per lesson: the dancers' mean floor position over the whole take for a capture without an origin of its own (the demo and the class
 recap), zero for a capture whose own `origin` already is that mean (Carlos + Aline, John + Lula). A constant turn about the vertical axis, applied
 with it, makes the dancers' front (the start vantage's side) face where the user stands at the start. Only a teleport moves the origin relative to
-the user (immersive mode); in passthrough teleport is off (it would make no sense in a real room), so the origin never moves. There are no place /
-rotate / scale gestures. If the headset recentres its tracking space the dance recentres with it (a Meta anchor would pin it; not done).
+the user (immersive mode); in passthrough teleport and snap turn are off (the user walks), so the pinches are free for the floor. If the headset recentres its tracking space the dance recentres with it (a Meta anchor would pin it; not done).
 
 **Menus are anchored.** Every panel (library menu, the in-lesson hand panel, captions, the beat / rhythm HUD, the loading splash) is placed ONCE when
 it opens - 0.8 to 1.0 m ahead of the head along the horizontal gaze, at chest-to-eye height, facing the user with a slight tilt - and then stays
@@ -192,7 +193,9 @@ The lesson starts; you stand about 3 m from the dancers at the floor's edge, fac
 | Seek | the scrubber on the hand panel: pinch and drag it (it sticks to chapter ticks); or +5 s / -5 s, previous / next chapter, **Chapters** list |
 | Slow motion | 1x, 0.5x, 0.25x, 0.1x on the panel (captions and 3D layers follow; music slows with the picture, a lesson with speech is silent in slow motion, the panel says "dialogue paused", and it is back at 1x) |
 | Teleport | with the **right** hand, pinch where no panel is, hold (an arc and a landing disc appear), open the pinch to go |
-| Turn 45 degrees | pinch with the **left** hand and flick it sideways; or Views > Turn 45 |
+| Turn 45 degrees | pinch with the **left** hand and flick it sideways; or Views > Turn 45 (immersive mode) |
+| Move the dance (passthrough) | pinch where no panel is and drag: the floor slides with your hand |
+| Turn the dance (passthrough) | pinch with both hands and turn them around each other: the floor turns about their midpoint (no scaling, no height change) |
 | Another viewpoint | Chapters/Views tabs > Views: floor edge, front row, from the side, overhead, and each filming phone's real place in the room |
 | The menu again | the small round **menu button on the back of your left wrist** (it pauses the lesson), or **Library** on the hand panel (stops the lesson) |
 | Left-handed | the menu footer: *Pointing: right hand* switches the roles |
@@ -367,4 +370,4 @@ shows the `VrMode:` lines.
 - The phones' real position viewpoints use the phone's pose at the moment you choose them, standing at its height (1.2 to 2.0 m).
 - Panels are drawn over the dancers (they sort after the translucent avatars); the film's 3D call-outs use an always-on-top shader and can
   draw over a panel.
-- Passthrough placement is fixed (section 0); there is no Meta spatial anchor and no scene-model alignment, so a recentre of the headset's tracking space moves the dance with it.
+- Passthrough placement moves only with your pinches (section 0); there is no Meta spatial anchor and no scene-model alignment, so a recentre of the headset's tracking space moves the dance with it.
