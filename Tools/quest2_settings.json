@@ -1,10 +1,11 @@
 {
-  "_comment": "Quest 2 STARTING tier (2026-10-21, before the Quest 2 bench): pushed as hm_data/quest_settings.json by Tools/deploy_data.ps1 -Push to a headset whose model is 'Quest 2' (Tools/quest_settings.json stays the Quest 3 default). The low-res splat layer at 0.5 with the fastest composite settings measured on the Quest 3.",
+  "_comment": "Quest 2 tier: pushed as hm_data/quest_settings.json by Tools/deploy_data.ps1 -Push to a headset whose model is 'Quest 2' (Tools/quest_settings.json stays the Quest 3 default). 2026-11-16 (owner: a steady 72 fps): one step lighter than the Quest 3 tier, the distilled 8k set (dancecap quest_distill) on the low-res splat layer at half the eye buffer, MSAA off (it saved ~2.3 ms on the Quest 2 on 2026-10-21; the hair cards are hidden under the splats), alpha cutoff 0.05, sort every 2. Before: quest_15k on the same layer at the device MSAA (2x).",
   "splats": true,
-  "splat_set": "quest_15k",
+  "splat_set": "quest_8k",
   "splat_scale": 0.5,
   "splat_path": "composite",
   "splat_depth": "on",
   "splat_alpha_cutoff": 0.05,
-  "splat_sort_every": 2
+  "splat_sort_every": 2,
+  "msaa": 1
 }
