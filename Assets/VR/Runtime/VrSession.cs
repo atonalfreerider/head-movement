@@ -29,7 +29,7 @@ namespace HmVr
         public VrPerf Perf { get; private set; }
         public VrHud Hud { get; private set; }
         public VrSplash Splash { get; private set; }
-        public VrChapterRing Ring { get; private set; }
+        public VrSkyTarget Sky { get; private set; }
         public bool Xr { get; private set; }
         public int LessonStarts, LessonEnds;
         public string LastLesson;
@@ -67,7 +67,7 @@ namespace HmVr
             Perf = root.AddComponent<VrPerf>();
             Hud = root.AddComponent<VrHud>();
             Splash = root.AddComponent<VrSplash>();
-            Ring = root.AddComponent<VrChapterRing>();
+            Sky = root.AddComponent<VrSkyTarget>();
             HeadMovement.AsyncLoad = true; // a lesson loads in slices behind the splash (the main thread keeps rendering)
 
             Menu.OnExitVr = () =>
@@ -265,7 +265,7 @@ namespace HmVr
                 ["pointers"] = Pointers?.State(), ["menu"] = Menu?.State(), ["handPanel"] = HandPanel?.State(),
                 ["captions"] = new Dictionary<string, object>
                     { ["enabled"] = Captions != null && Captions.Enabled, ["hasTranscript"] = Captions != null && Captions.HasTranscript, ["alpha"] = Captions?.Alpha ?? 0f, ["text"] = Captions?.CurrentText, ["word"] = Captions?.CurrentWord },
-                ["display"] = Display?.State_(), ["placement"] = Placement?.State(), ["ring"] = Ring?.State(), ["skeleton"] = VrSkeletonPref.Physics ? "physics" : "rhythm",
+                ["display"] = Display?.State_(), ["placement"] = Placement?.State(), ["sky"] = Sky?.State(), ["skeleton"] = VrSkeletonPref.Physics ? "physics" : "rhythm",
                 ["footprint"] = VrFilm.InLesson ? VrStage.State(HeadMovement.Instance) : null, ["perf"] = Perf?.Summary(), ["hud"] = Hud?.State(), ["splash"] = Splash?.State(), ["skeletonsOverBodies"] = SmplxAvatar.SkeletonsOverBodies,
                 ["wristButtonAlpha"] = Wrist?.Alpha ?? 0f, ["suppressedCanvases"] = suppressed.Count, ["quality"] = VrQuality.State(), ["hands"] = (Input?.Source as XrInputSource)?.HandsStatus
             };

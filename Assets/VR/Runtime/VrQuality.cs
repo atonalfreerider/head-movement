@@ -96,8 +96,19 @@ namespace HmVr
             }
 
             eyeScale = XRSettings.eyeTextureResolutionScale;
-            if (xr) XRSettings.eyeTextureResolutionScale = settings.EyeScale > 0f ? settings.EyeScale : q3 ? 1.0f : 0.9f;
+            if (xr)
+            {
+                float eye = settings.EyeScale > 0f ? settings.EyeScale : q3 ? 1.0f : 0.9f;
+                XRSettings.eyeTextureResolutionScale = eye;
+                // URP calls XRSystem.SetRenderScale(asset.renderScale) at every camera render, which sets every XR display's
+                // scaleOfAllRenderTargets and overrides the line above: with the asset at 1.0 a Quest 2 kept its full 1440x1584 eye
+                // buffer. The asset's render scale is the value that sticks (restored in Restore)
+                if (asset != null) asset.renderScale = Mathf.Clamp(eye, 0.1f, 2f);
+                LogEyeSizeNextFrame();
+            }
+
             if (xr) RequestRefreshRate(settings.RefreshHz);
+            SetHeadCameraFlags();
             Hair = settings.Hair;
             HairSteps = 0;
             HairUndos = 0;
@@ -222,7 +233,12 @@ namespace HmVr
             try
             {
                 FieldInfo f = typeof(UniversalRenderPipelineAsset).GetField("m_RendererDataList", BindingFlags.NonPublic | BindingFlags.Instance);
-                if (f?.GetValue(a) is not ScriptableRendererData[] list) return;
+                if (f?.GetValue(a) is not ScriptableRendererData[] list)
+                {
+                    Debug.LogError("HM-PERF intermediate texture: URP asset field m_RendererDataList not found (URP changed?): the renderer keeps its own mode (Always costs a full-screen copy per eye)");
+                    return;
+                }
+
                 foreach (ScriptableRendererData d in list)
                 {
                     if (d is not UniversalRendererData ur) continue;
@@ -235,10 +251,12 @@ namespace HmVr
                     Notes += "intermediate texture auto; ";
                     return;
                 }
+
+                Debug.LogError("HM-PERF intermediate texture: no UniversalRendererData with an intermediateTextureMode property found: the renderer keeps its own mode");
             }
             catch (Exception e)
             {
-                Debug.LogWarning("VrQuality: intermediate texture mode not changed: " + e.Message);
+                Debug.LogError("HM-PERF intermediate texture: mode not changed: " + e.Message);
             }
         }
 
@@ -255,6 +273,99 @@ namespace HmVr
 
             intermediateOwner = null;
             intermediateProp = null;
+        }
+
+        // ------------------------------------------------------------------ the VR head camera
+
+        static Camera flaggedCam;
+        static bool camHdr, camShadows, camStopNaN, camDither;
+        static CameraOverrideOption camDepth, camColor;
+        static LayerMask camVolumeMask;
+        static VolumeFrameworkUpdateMode camVolumeMode;
+
+        /// <summary>
+        /// The Quest tier's head camera flags (2026-11 GPU audit, insurance): no HDR target, no shadow pass, no depth / opaque-colour copies
+        /// asked by the camera, no volume evaluation (no post effects in VR, so the volume stack only costs CPU), no NaN stop and no dither
+        /// (both are post-process work). The head camera is VrRig's (read here, never changed in VrRig); the previous values come back in
+        /// Restore when the camera still exists.
+        /// </summary>
+        static void SetHeadCameraFlags()
+        {
+            Camera cam = VrRig.Instance != null && VrRig.Instance.Cam != null ? VrRig.Instance.Cam : Camera.main;
+            if (cam == null)
+            {
+                Debug.LogWarning("HM-PERF head camera: none found, its flags stay as they are");
+                return;
+            }
+
+            flaggedCam = cam;
+            camHdr = cam.allowHDR;
+            cam.allowHDR = false;
+            UniversalAdditionalCameraData d = cam.GetUniversalAdditionalCameraData();
+            if (d != null)
+            {
+                camShadows = d.renderShadows;
+                camDepth = d.requiresDepthOption;
+                camColor = d.requiresColorOption;
+                camVolumeMask = d.volumeLayerMask;
+                camVolumeMode = cam.GetVolumeFrameworkUpdateMode();
+                camStopNaN = d.stopNaN;
+                camDither = d.dithering;
+                d.renderShadows = false;
+                d.requiresDepthOption = CameraOverrideOption.Off;
+                d.requiresColorOption = CameraOverrideOption.Off;
+                d.volumeLayerMask = 0;
+                cam.SetVolumeFrameworkUpdateMode(VolumeFrameworkUpdateMode.ViaScripting);
+                d.stopNaN = false;
+                d.dithering = false;
+            }
+
+            Debug.Log($"HM-PERF head camera '{cam.name}': hdr off, shadows off, depth/colour textures off, volumes off, stopNaN/dither off");
+        }
+
+        static void RestoreHeadCameraFlags()
+        {
+            Camera cam = flaggedCam;
+            flaggedCam = null;
+            if (cam == null) return; // the rig (and its camera) is gone already
+            cam.allowHDR = camHdr;
+            UniversalAdditionalCameraData d = cam.GetUniversalAdditionalCameraData();
+            if (d == null) return;
+            d.renderShadows = camShadows;
+            d.requiresDepthOption = camDepth;
+            d.requiresColorOption = camColor;
+            d.volumeLayerMask = camVolumeMask;
+            cam.SetVolumeFrameworkUpdateMode(camVolumeMode);
+            d.stopNaN = camStopNaN;
+            d.dithering = camDither;
+        }
+
+        // ------------------------------------------------------------------ eye buffer size log
+
+        static int eyeLogAfterFrame = -1;
+        static bool eyeLogHooked;
+
+        /// <summary>the eye buffer size is known only after URP applied the render scale at a camera render: logged once, a frame later</summary>
+        static void LogEyeSizeNextFrame()
+        {
+            eyeLogAfterFrame = Time.frameCount;
+            if (eyeLogHooked) return;
+            eyeLogHooked = true;
+            RenderPipelineManager.beginContextRendering += LogEyeSize;
+        }
+
+        static void LogEyeSize(ScriptableRenderContext context, List<Camera> cameras)
+        {
+            if (Time.frameCount <= eyeLogAfterFrame + 1) return;
+            StopEyeSizeLog();
+            Debug.Log($"HM-PERF eye buffer {XRSettings.eyeTextureWidth}x{XRSettings.eyeTextureHeight} (eye scale {XRSettings.eyeTextureResolutionScale:0.00}, URP render scale {(asset != null ? asset.renderScale : -1f):0.00})");
+        }
+
+        static void StopEyeSizeLog()
+        {
+            if (!eyeLogHooked) return;
+            eyeLogHooked = false;
+            RenderPipelineManager.beginContextRendering -= LogEyeSize;
         }
 
         static void RequestRefreshRate(int hz)
@@ -327,6 +438,8 @@ namespace HmVr
                 }
 
                 RestoreIntermediate();
+                RestoreHeadCameraFlags();
+                StopEyeSizeLog();
                 XRSettings.eyeTextureResolutionScale = eyeScale;
                 RestoreHair();
                 if (hairHooked)

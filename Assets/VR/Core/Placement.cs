@@ -6,10 +6,12 @@ namespace HmVr
     /// Where the dance stands in the REAL room (passthrough mixed reality): a rigid map on the floor from the viewer's world (the capture's
     /// floor, y = 0, the couple around the origin) to real floor coordinates (the headset's tracking floor, metres):
     ///     real = Anchor + R(YawDeg) * (world - Pivot)      (x, z only)
-    /// R(a) turns by a degrees about +Y the way Unity does (a bearing grows by a: clockwise seen from above). Always life size and always on the
-    /// floor (owner 2026-11-15: "no scaling ever. no moving the floor in the Y axis ever"): there is no scale and no height in the map. The VR
-    /// rig carries the INVERSE of this map (the user moves instead of the dance), so nothing in the viewer needs a transform of its own:
-    /// rig.rotation = R(-Yaw), rig.localScale = 1, rig.position = Pivot - rig.rotation * Anchor (y = 0).
+    /// R(a) turns by a degrees about +Y the way Unity does (a bearing grows by a: clockwise seen from above). Always life size (owner
+    /// 2026-11-15: "no scaling ever"): there is no scale in the map. Its height, Lift, is 0 (the capture's floor on the real floor) except in
+    /// the god's eye view (owner 2026-11-16: "a pinch point in the sky above the dancers to get a god's eye view"), where the dance floor
+    /// lies below the real floor so the user looks down on the couple. The VR rig carries the INVERSE of this map (the user moves instead of
+    /// the dance), so nothing in the viewer needs a transform of its own:
+    /// rig.rotation = R(-Yaw), rig.localScale = 1, rig.position = Pivot - rig.rotation * Anchor - Lift * up.
     /// </summary>
     public sealed class DancePlacement
     {
@@ -19,8 +21,10 @@ namespace HmVr
         public float YawDeg;
         /// <summary>always 1: the dance is life size, never scaled</summary>
         public float Scale => 1f;
-        /// <summary>the world point the dance turns about: the couple's start (floor-projected)</summary>
+        /// <summary>the world point the dance turns about and that stands at Anchor: the dance's footprint centre, floor-projected</summary>
         public Vector3 Pivot;
+        /// <summary>the height of the capture's floor in the real room, metres: 0 on the ground, negative in the god's eye view</summary>
+        public float Lift;
 
         public DancePlacement Clone() => (DancePlacement)MemberwiseClone();
 
@@ -29,7 +33,7 @@ namespace HmVr
         {
             rigScale = 1f;
             rotation = Quaternion.Euler(0f, -YawDeg, 0f);
-            position = new Vector3(Pivot.x, 0f, Pivot.z) - rotation * new Vector3(Anchor.x, 0f, Anchor.y);
+            position = new Vector3(Pivot.x, -Lift, Pivot.z) - rotation * new Vector3(Anchor.x, 0f, Anchor.y);
         }
 
         /// <summary>a world point (x, z) to real floor coordinates</summary>
@@ -68,32 +72,41 @@ namespace HmVr
         }
 
         /// <summary>
-        /// ONE hand pinches and drags the floor: the dance slides with the pinch point on the floor (x, z only) and never turns. hand0 is the
-        /// pinch point when the pinch began, p0 the placement then.
-        /// </summary>
-        public static DancePlacement OneHand(DancePlacement p0, Vector2 hand0, Vector2 hand) => Slide(p0, hand - hand0);
-
-        /// <summary>
-        /// TWO hands pinch: the floor turns with the line between the pinch points, about the midpoint where the two-hand hold began. Nothing
-        /// else: no scaling (the spread of the hands is ignored) and no slide (owner 2026-11-15).
+        /// TWO hands pinch and drag (owner 2026-11-16: "two drag points should allow floor translation and rotation at fixed scale always"):
+        /// the floor turns with the line between the pinch points, about the midpoint where the hold began, and slides with the midpoint. Never
+        /// scaled (the spread of the hands is ignored), never lifted. a0, b0: the pinch points when the hold began; p0: the placement then.
         /// </summary>
         public static DancePlacement TwoHands(DancePlacement p0, Vector2 a0, Vector2 b0, Vector2 a, Vector2 b)
         {
             Vector2 v0 = b0 - a0, v = b - a;
-            if (v0.magnitude < 0.02f || v.magnitude < 0.02f) return p0.Clone();
-            float d = Wrap(Bearing(v) - Bearing(v0));
-            Vector2 m0 = (a0 + b0) * 0.5f;
+            float d = v0.magnitude < 0.02f || v.magnitude < 0.02f ? 0f : Wrap(Bearing(v) - Bearing(v0));
+            Vector2 m0 = (a0 + b0) * 0.5f, m = (a + b) * 0.5f;
             DancePlacement p = p0.Clone();
-            p.Anchor = m0 + Rot(p0.Anchor - m0, d);
+            p.Anchor = m + Rot(p0.Anchor - m0, d);
             p.YawDeg = Wrap(p0.YawDeg + d);
             return p;
         }
 
-        /// <summary>turn the dance about the pivot's real position (a button)</summary>
-        public static DancePlacement TurnAboutPivot(DancePlacement p0, float deg)
+        /// <summary>
+        /// The god's eye view: the dance's centre (its pivot) straight below the user, `ahead` metres along the gaze (so it sits low in the view, not
+        /// under the chin), the dance floor `eyeAbove` metres below the eyes. Turned as before.
+        /// </summary>
+        public static DancePlacement GodsEye(DancePlacement p0, Vector3 headReal, float headYawDeg, float eyeAbove, float ahead = 0.35f)
         {
+            Vector2 fwd = new(Mathf.Sin(headYawDeg * Mathf.Deg2Rad), Mathf.Cos(headYawDeg * Mathf.Deg2Rad));
             DancePlacement p = p0.Clone();
-            p.YawDeg = Wrap(p0.YawDeg + deg);
+            p.Anchor = new Vector2(headReal.x, headReal.z) + fwd * ahead;
+            p.Lift = headReal.y - eyeAbove;
+            return p;
+        }
+
+        /// <summary>a placement part of the way from a to b (anchor and lift linear, yaw the short way round); u in 0..1</summary>
+        public static DancePlacement Lerp(DancePlacement a, DancePlacement b, float u)
+        {
+            DancePlacement p = b.Clone();
+            p.Anchor = Vector2.Lerp(a.Anchor, b.Anchor, u);
+            p.Lift = Mathf.Lerp(a.Lift, b.Lift, u);
+            p.YawDeg = Wrap(a.YawDeg + Wrap(b.YawDeg - a.YawDeg) * u);
             return p;
         }
 

@@ -56,7 +56,9 @@ Other layers:
 | `H` | HUD |
 
 VR controller: button one play/pause, button two loop measure, up/down previous/next measure, left/right speed. On Quest the
-hands work too: the menu rides on the left wrist (palm up), a faint chapter ring 3.5 m above the dance shows where you are and seeks on a pinch, and in passthrough pinch-drag slides the floor and two pinches turn it: see [docs/QUEST.md](docs/QUEST.md).
+hands work too, always in passthrough: the menu rides on the left wrist (palm up); the dance floor stays fixed where it was placed and moves only
+with a two-hand pinch-drag (slide and turn, never scaled); an invisible button about 10 ft above the dancers lights up under the pointing ray
+and gives a god's eye view (a pinch at the floor comes back down): see [docs/QUEST.md](docs/QUEST.md).
 
 ## Data
 

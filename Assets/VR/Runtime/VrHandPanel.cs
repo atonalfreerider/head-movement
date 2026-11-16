@@ -160,6 +160,8 @@ namespace HmVr
         bool open, posed;
         float lastFacing = -10f;
         Vector3 poseVel;
+        Vector3 poseLocal;
+        Quaternion poseRotLocal = Quaternion.identity;
         int ticksFor = -1;
         const float PanelW = 480f, PanelH = 350f, Scale = 0.5f, MmToM = 0.001f * Scale;
         /// <summary>the panel's centre: this far out of the palm (toward the eyes) and this far from the wrist toward the elbow</summary>
@@ -250,7 +252,7 @@ namespace HmVr
             float tw = 82f, tg = 16f, tx = -(tw * 5 + tg * 4) * 0.5f;
             tabChapters = main.AddButton("tab chapters", "Chapters", VrPanel.R(tx + tw * 0.5f, y, tw, 58f), () => ToggleList(true), 17f);
             tabViews = main.AddButton("tab views", "Views", VrPanel.R(tx + tw * 1.5f + tg, y, tw, 58f), () => ToggleList(false), 20f);
-            tabViews.Enabled = () => !PassthroughNow; // in passthrough the user walks around the dancers: no directed viewpoints
+            tabViews.Enabled = () => !PassthroughNow; // in passthrough the floor stays fixed (only two hands move it): the user walks round the dancers
             cc = main.AddButton("captions", "CC", VrPanel.R(tx + tw * 2.5f + 2f * tg, y, tw, 58f), CycleCaptions, 24f);
             skeletonBtn = main.AddButton("skeleton mode", "Rhythm", VrPanel.R(tx + tw * 3.5f + 3f * tg, y, tw, 58f), VrSkeletonPref.Toggle, 20f);
             library = main.AddButton("library", "Library", VrPanel.R(tx + tw * 4.5f + 4f * tg, y, tw, 58f), () => OnLibrary(), 18f);
@@ -365,17 +367,25 @@ namespace HmVr
             // out of the PALM side (the panel shows while the palm faces the eyes), a little toward the elbow
             WristPose.WristPanelPose(h.Wrist, h.Forward, -h.PalmNormal, input.Frame.HeadPosition, WristUpM * HandState.WorldScale,
                 WristAlongM * HandState.WorldScale, out Vector3 pos, out Quaternion rot);
+            // smoothed in the rig's own space (the room): when the rig moves to follow the dancers, the hand moves with it and the panel must
+            // not lag behind in world space
+            Transform rig = VrRig.Instance != null ? VrRig.Instance.transform : null;
+            Vector3 targetLocal = rig != null ? rig.InverseTransformPoint(pos) : pos;
+            Quaternion targetRotLocal = rig != null ? Quaternion.Inverse(rig.rotation) * rot : rot;
             if (!posed)
             {
                 posed = true;
                 poseVel = Vector3.zero;
-                anchor.SetPositionAndRotation(pos, rot);
+                poseLocal = targetLocal;
+                poseRotLocal = targetRotLocal;
             }
             else
             {
-                anchor.SetPositionAndRotation(Vector3.SmoothDamp(anchor.position, pos, ref poseVel, 0.045f, Mathf.Infinity, dt),
-                    Quaternion.Slerp(anchor.rotation, rot, 1f - Mathf.Exp(-dt / 0.06f)));
+                poseLocal = Vector3.SmoothDamp(poseLocal, targetLocal, ref poseVel, 0.045f, Mathf.Infinity, dt);
+                poseRotLocal = Quaternion.Slerp(poseRotLocal, targetRotLocal, 1f - Mathf.Exp(-dt / 0.06f));
             }
+
+            anchor.SetPositionAndRotation(rig != null ? rig.TransformPoint(poseLocal) : poseLocal, rig != null ? rig.rotation * poseRotLocal : poseRotLocal);
 
             main.transform.localPosition = Vector3.zero;
             main.transform.localRotation = Quaternion.identity;

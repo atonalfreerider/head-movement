@@ -106,6 +106,10 @@ Shader "Hidden/HmSplats/Composite"
         {
             UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(i);
             float2 uv = SplatLinearToRasterUV(i.uv) * _BlitScaleBias.xy + _BlitScaleBias.zw;
+            // the colour first (2026-11 GPU audit): most of the screen has no splat, and there the four depth taps were wasted -
+            // the same pixels are discarded either way (both tests must pass), only the order changed
+            half4 col = ResolveSplatColor(UNITY_SAMPLE_SCREENSPACE_TEXTURE(_BlitTexture, uv));
+            if (col.a <= 0.0) discard;
             float2 h = 0.5 * _HmSplatLowResDepth_TexelSize.xy;
             float d = UNITY_SAMPLE_SCREENSPACE_TEXTURE(_HmSplatLowResDepth, uv + float2(-h.x, -h.y)).r;
             d = NearerDepth(d, UNITY_SAMPLE_SCREENSPACE_TEXTURE(_HmSplatLowResDepth, uv + float2(h.x, -h.y)).r);
@@ -116,8 +120,6 @@ Shader "Hidden/HmSplats/Composite"
         #else
             if (d >= 1.0) discard;
         #endif
-            half4 col = ResolveSplatColor(UNITY_SAMPLE_SCREENSPACE_TEXTURE(_BlitTexture, uv));
-            if (col.a <= 0.0) discard;
             depth = d;
             return col;
         }

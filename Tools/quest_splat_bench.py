@@ -275,6 +275,7 @@ def main():
     ap.add_argument("--serial", default="2G0YC1ZF8F063B")
     ap.add_argument("--out", default="Builds/quest_bench")
     ap.add_argument("--only", default="")
+    ap.add_argument("--display", default="immersive", choices=("immersive", "passthrough"))
     ap.add_argument("--min-battery", dest="min_battery", type=int, default=12)
     a = ap.parse_args()
     if a.cmd == "table":
@@ -288,7 +289,7 @@ def main():
             print(f"battery {b} %: stopping (charge the headset, then run again)")
             return 3
         rs = run_cycle(adb, label, film, seek, a.views.split(","), [x for x in a.scales.split(",") if x], a.x, a.reps, a.dwell, a.settle,
-                       a.shots, out=a.out)
+                       a.shots, out=a.out, display=a.display)
         with open(os.path.join(a.out, "results.jsonl"), "a", encoding="utf-8") as fh:
             for r in rs:
                 fh.write(json.dumps(r) + "\n")
@@ -312,7 +313,7 @@ def main():
         if 0 <= b < a.min_battery:
             print(f"battery {b} %: stopping (charge the headset, then run again)")
             return 3
-        r = run(adb, label, film, seek, view, extra, a.shots, a.window, out=a.out)
+        r = run(adb, label, film, seek, view, extra, a.shots, a.window, out=a.out, display=a.display)
         with open(os.path.join(a.out, "results.jsonl"), "a", encoding="utf-8") as fh:
             fh.write(json.dumps(r) + "\n")
         print(json.dumps({k: r.get(k) for k in ("label", "error", "fps_med", "fps_min", "stale_sum", "app_gpu_ms_med", "cpu_gpu_lvl", "battery")}))

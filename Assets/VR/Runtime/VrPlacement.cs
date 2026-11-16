@@ -4,50 +4,74 @@ using UnityEngine;
 namespace HmVr
 {
     /// <summary>
-    /// Where the dance stands in the user's real room (passthrough mixed reality). Placed once at the start, then moved only by the user's
-    /// pinches (owner 2026-11-15): ONE pinch and drag slides the floor (x, z), TWO pinches turn it about the hands' midpoint; never a scale,
-    /// never a height change (DancePlacement has neither). A pinch that starts over a panel or with the palm menu up is not a grab.
-    /// The start placement (owner 2026-11-15: the dance centre in the centre-front of the user):
-    ///   - Once, when the lesson starts and the head is tracked, the centre of the WHOLE dance (its floor footprint, VrStage) is put straight
-    ///     ahead of the user's gaze at FootprintMath.ViewDistance (outside the 3.5 m chapter ring and the dancers' travel, at most 6 m), the
-    ///     capture's floor (y = 0) on the real floor, scale exactly 1.0, turned so the dancers' front (the start vantage's side) faces the user.
-    ///   - Nothing but the user's pinches moves it afterwards: it never drifts, re-centres or follows anything. The dancers keep their own
-    ///     captured motion and travel across the floor around that centre (nothing cancels or re-centres their root motion).
-    /// The dance itself is not moved: the VR rig carries the inverse of the placement (VrRig.ApplyPlacement), so every object of the viewer
-    /// stays where the capture put it. When the headset recentres its tracking space the dance recentres with it (docs/QUEST.md).
+    /// Where the dance stands in the user's real room (passthrough mixed reality, always on). Owner 2026-11-16: "once the position is determined
+    /// where the user is standing, the floor should not move at all. The dancers are going to move around in the room, and the origin point
+    /// needs to stay completely fixed ... two pinch only to do floor motion so that we avoid accidental pinch motions":
+    ///   - The start: once, when a lesson starts and the head is tracked, the centre of the WHOLE dance (its floor footprint, VrStage) stands
+    ///     straight ahead of the user's gaze, just outside the dancers' travel (FootprintMath.ViewDistance, at least MinStartDistance), the
+    ///     dancers' front (the start vantage's side) toward the user, life size, the capture's floor on the real floor.
+    ///   - After that the floor and the origin are FIXED. Nothing follows the dancers, drifts or re-centres: the couple dances across the room
+    ///     on their captured paths.
+    ///   - Only TWO hands move the floor: pinch with both (where no panel is, palm menu down) and drag. The floor slides with the hands'
+    ///     midpoint and turns with the line between them, about that midpoint (PlacementMath.TwoHands): never scaled, never lifted. A
+    ///     one-hand pinch never moves anything.
+    ///   - The god's eye: an invisible button about 10 ft above the dancers' heads (VrSkyTarget) lights up when the pointing ray is on it; a
+    ///     pinch on it lifts the user above the centre of the dance, looking down (the dance floor goes below the real floor). A short pinch
+    ///     aimed at the dance floor brings the user back down to exactly the placement they had.
+    /// The dance itself is not moved: the VR rig carries the inverse of the placement (VrRig.ApplyPlacement), so every object of the viewer stays
+    /// where the capture put it; the rig is only touched when the placement changes. It runs before VrInput (-300) reads the hands, so the
+    /// hands, the pointers and the wrist panel see one rig pose per frame; the pinches it reads are the previous frame's.
     /// </summary>
-    [DefaultExecutionOrder(120)]
+    [DefaultExecutionOrder(-320)]
     [AddComponentMenu("")]
     public sealed class VrPlacement : MonoBehaviour
     {
         public static VrPlacement Instance { get; private set; }
 
-        /// <summary>the fixed mapping (null when not in a passthrough lesson)</summary>
+        public const float MinStartDistance = 2.5f, FallbackDistance = 2.9f;
+        public const float TransitionS = 0.7f, TapS = 0.6f, TapTravelM = 0.03f;
+
+        /// <summary>the mapping in force (null when not in a passthrough lesson)</summary>
         public DancePlacement Current { get; private set; }
         public bool Active { get; private set; }
-        /// <summary>the static offset: the capture-world point (x, z) that stands at the tracking floor origin</summary>
-        public Vector2 StaticOffset { get; private set; }
-        public string OffsetSource { get; private set; } = "none";
-        /// <summary>where the capture's origin stands in the real room right now (tracking floor coordinates of world (0,0,0)); constant while placed</summary>
+        public bool GodsEyeOn { get; private set; }
+        public bool Transitioning => transitionT < 1f;
+        public bool TwoHandHold { get; private set; }
+        /// <summary>where the capture's origin (world 0,0,0) stands in the real room right now (tracking floor x, z)</summary>
         public Vector3 OriginReal
         {
             get
             {
                 if (Current == null) return Vector3.zero;
                 Vector2 o = Current.ToReal(Vector2.zero);
-                return new Vector3(o.x, 0f, o.y);
+                return new Vector3(o.x, Current.Lift, o.y);
             }
         }
 
-        public int Placements { get; private set; }
-        /// <summary>finished one-hand drags and two-hand turns</summary>
-        public int Drags { get; private set; }
-        public int Turns { get; private set; }
+        /// <summary>the dance's footprint centre (world floor x, z): what stands in front of the user at the start</summary>
+        public Vector2 StageCentre { get; private set; }
+        public string OffsetSource { get; private set; } = "none";
+        public float StartDistance { get; private set; }
 
-        readonly bool[] grabbed = new bool[2];
-        int holding = -1;                 // bit mask of the hands holding the floor when the current grab began (-1 = none)
-        DancePlacement grab0;
-        Vector2 grabA, grabB;
+        public int Placements { get; private set; }
+        /// <summary>finished two-hand holds that moved the floor; one-hand pinches that never moved it</summary>
+        public int Moves { get; private set; }
+        public int OneHandPinches { get; private set; }
+        public int GodsEyes { get; private set; }
+        public int Grounds { get; private set; }
+        public int Changes { get; private set; }
+
+        // per hand: did this pinch start where a floor move may start (no panel, no palm menu), where, when
+        readonly bool[] eligible = new bool[2];
+        readonly Vector2[] downAt = new Vector2[2];
+        readonly float[] downTime = new float[2];
+        readonly float[] travel = new float[2];
+        readonly bool[] wasHeld = new bool[2];
+        bool usedInTwoHands;
+        DancePlacement hold0, from, to, beforeGodsEye;
+        Vector2 holdA, holdB;
+        float transitionT = 1f;
+        bool dirty;
 
         VrDisplay display;
         VrRig rig;
@@ -68,13 +92,16 @@ namespace HmVr
             if (Instance == this) Instance = null;
         }
 
-        /// <summary>the lesson ended or the display left passthrough: the rig goes back to the floor origin</summary>
+        /// <summary>the lesson ended or passthrough failed: the rig goes back to the floor origin</summary>
         public void Release()
         {
             Active = false;
-            holding = -1;
-            grabbed[0] = grabbed[1] = false;
+            GodsEyeOn = false;
+            TwoHandHold = false;
+            transitionT = 1f;
             Current = null;
+            beforeGodsEye = null;
+            for (int i = 0; i < 2; i++) eligible[i] = wasHeld[i] = false;
             if (rig != null) rig.ClearPlacement();
         }
 
@@ -96,7 +123,20 @@ namespace HmVr
                 PlaceOnce();
             }
 
-            UpdateGrab(input);
+            UpdateHands(input);
+            if (transitionT < 1f)
+            {
+                transitionT = Mathf.Min(1f, transitionT + Time.unscaledDeltaTime / TransitionS);
+                Current = PlacementMath.Lerp(from, to, Mathf.SmoothStep(0f, 1f, transitionT));
+                dirty = true;
+            }
+
+            if (dirty)
+            {
+                rig.ApplyPlacement(Current);
+                Changes++;
+                dirty = false;
+            }
         }
 
         /// <summary>a hand's pinch point on the real floor (x, z of the tracking space)</summary>
@@ -106,89 +146,138 @@ namespace HmVr
             return new Vector2(r.x, r.z);
         }
 
-        void UpdateGrab(VrInput input)
+        void UpdateHands(VrInput input)
         {
             VrPointers ptrs = VrPointers.Instance;
             bool menu = VrMenu.Instance != null && VrMenu.Instance.IsOpen;
-            int mask = 0;
             VrHand[] hands = { input.Left, input.Right };
             for (int i = 0; i < 2; i++)
             {
                 VrHand h = hands[i];
-                if (!h.Tracked || !h.Pinch.Held || menu)
+                bool held = h.Tracked && h.Pinch.Held && !menu;
+                if (held && h.Pinch.Down)
                 {
-                    grabbed[i] = false;
-                    continue;
+                    // decided when the pinch closes: a pinch that began on a panel, on the god's eye button or with the palm menu up never moves the floor
+                    eligible[i] = !h.Palm.Facing && (ptrs == null || !ptrs.OverUi(h.Side));
+                    downAt[i] = Point(h);
+                    downTime[i] = Time.unscaledTime;
+                    travel[i] = 0f;
                 }
 
-                if (h.Pinch.Down) grabbed[i] = !h.Palm.Facing && (ptrs == null || !ptrs.OverUi(h.Side));
-                if (grabbed[i]) mask |= 1 << i;
+                if (held && eligible[i]) travel[i] = Mathf.Max(travel[i], (Point(h) - downAt[i]).magnitude);
+                if (!held && wasHeld[i]) OnRelease(h, i);
+                if (!held) eligible[i] = false;
+                wasHeld[i] = held;
             }
 
-            if (mask != holding)
+            bool both = eligible[0] && eligible[1] && wasHeld[0] && wasHeld[1] && !Transitioning;
+            if (both && !TwoHandHold)
             {
-                if (holding == 3) Turns++;
-                else if (holding > 0) Drags++;
-                holding = mask == 0 ? -1 : mask;
-                grab0 = Current.Clone();
-                if (mask == 3)
-                {
-                    grabA = Point(input.Left);
-                    grabB = Point(input.Right);
-                }
-                else if (mask != 0)
-                {
-                    grabA = Point(mask == 1 ? input.Left : input.Right);
-                }
-
-                return;
+                TwoHandHold = true;
+                usedInTwoHands = true;
+                hold0 = Current.Clone();
+                holdA = Point(input.Left);
+                holdB = Point(input.Right);
+            }
+            else if (!both && TwoHandHold)
+            {
+                TwoHandHold = false;
+                Moves++;
+                Debug.Log($"VrPlacement: floor moved with two hands: origin now at ({OriginReal.x:0.000}, {OriginReal.z:0.000}) in the room, turned {Current.YawDeg:0.0} deg");
             }
 
-            if (mask == 0) return;
-            DancePlacement p = mask == 3
-                ? PlacementMath.TwoHands(grab0, grabA, grabB, Point(input.Left), Point(input.Right))
-                : PlacementMath.OneHand(grab0, grabA, Point(mask == 1 ? input.Left : input.Right));
-            Current = p;
-            rig.ApplyPlacement(p);
+            if (TwoHandHold)
+            {
+                Current = PlacementMath.TwoHands(hold0, holdA, holdB, Point(input.Left), Point(input.Right));
+                dirty = true;
+            }
+
+            if (!wasHeld[0] && !wasHeld[1]) usedInTwoHands = false;
         }
 
-        /// <summary>the dancers' mean floor position over the whole take (world, after the capture's own origin shift), computed once</summary>
-        static bool MeanFloorPosition(HeadMovement hm, out Vector2 mean)
+        void OnRelease(VrHand h, int i)
         {
-            mean = Vector2.zero;
-            Dancer lead = hm != null ? hm.LeadDancer : null, follow = hm != null ? hm.FollowDancer : null;
-            if (lead == null || follow == null) return false;
-            int n = Mathf.Min(lead.FrameCount, follow.FrameCount);
-            double sx = 0, sz = 0;
-            int count = 0;
-            for (int f = 0; f < n; f += 3)
+            if (usedInTwoHands || !eligible[i]) return;
+            OneHandPinches++;
+            // a short pinch aimed at the dance floor brings the user down from the god's eye; on the ground a one-hand pinch does nothing
+            if (GodsEyeOn && Time.unscaledTime - downTime[i] <= TapS && travel[i] < TapTravelM && AimsAtFloor(h)) ReturnToGround();
+        }
+
+        static bool AimsAtFloor(VrHand h)
+        {
+            if (!h.Aim.Valid) return false;
+            Vector3 o = h.Aim.Origin, d = h.Aim.Direction;
+            if (d.y > -0.1f || o.y <= 0f) return false;
+            return -o.y / d.y < 60f; // the dance floor is world y = 0
+        }
+
+        void StartTransition(DancePlacement target)
+        {
+            from = Current.Clone();
+            to = target;
+            transitionT = 0f;
+            TwoHandHold = false;
+        }
+
+        /// <summary>up above the centre of the dance, looking down: the eyes at the god's eye button's height above the dance floor</summary>
+        public void EnterGodsEye()
+        {
+            if (!Active || GodsEyeOn) return;
+            beforeGodsEye = Current.Clone();
+            GodsEyeOn = true;
+            GodsEyes++;
+            float eye = VrSkyTarget.EyeAboveFloorM;
+            StartTransition(PlacementMath.GodsEye(Current, rig.HeadReal, rig.HeadRealYawDeg, eye));
+            VrAudio.Whoosh(rig.Head.position);
+            Debug.Log($"VrPlacement: god's eye, {eye:0.00} m above the dance floor over the centre of the dance");
+        }
+
+        /// <summary>back on the ground, exactly where the floor was before going up</summary>
+        public void ReturnToGround()
+        {
+            if (!Active || !GodsEyeOn) return;
+            GodsEyeOn = false;
+            Grounds++;
+            DancePlacement back = beforeGodsEye ?? Current.Clone();
+            back.Lift = 0f;
+            StartTransition(back);
+            VrAudio.Whoosh(rig.Head.position);
+            Debug.Log("VrPlacement: back on the ground, the floor where it was");
+        }
+
+        /// <summary>
+        /// A named vantage, for the bench (-hmview) and the CLI only (the wrist menu has no viewpoints in passthrough: the floor moves only with
+        /// two hands): the dance turned so the user sees it from the viewpoint's side at its distance; "overhead" is the god's eye.
+        /// </summary>
+        public bool GoTo(Viewpoint vp)
+        {
+            if (!Active) return false;
+            float bearing = vp.YawDeg + 180f; // the viewpoint faces the dance: the dance sees it from the opposite bearing
+            float d = Mathf.Clamp(new Vector2(vp.Head.x - StageCentre.x, vp.Head.z - StageCentre.y).magnitude, 1.2f, 8f);
+            Vector3 head = rig.HeadReal;
+            DancePlacement p = PlacementMath.Default(head, rig.HeadRealYawDeg, Current.Pivot, bearing, d);
+            bool overhead = vp.Kind == "overhead" || vp.Id == "overhead";
+            if (overhead)
             {
-                foreach (Dancer d in new[] { lead, follow })
-                {
-                    Vector3 p = d.Joint(f, SmplJoint.Pelvis);
-                    if (float.IsNaN(p.x) || float.IsNaN(p.z)) continue;
-                    sx += p.x;
-                    sz += p.z;
-                    count++;
-                }
+                beforeGodsEye = p.Clone();
+                p = PlacementMath.GodsEye(p, head, rig.HeadRealYawDeg, VrSkyTarget.EyeAboveFloorM);
+                if (!GodsEyeOn) GodsEyes++;
             }
 
-            if (count == 0) return false;
-            mean = new Vector2((float)(sx / count), (float)(sz / count));
+            GodsEyeOn = overhead;
+            StartTransition(p);
             return true;
         }
 
         void PlaceOnce()
         {
             HeadMovement hm = HeadMovement.Instance;
-            // the centre of the WHOLE dance (its floor footprint) goes straight ahead of the user's gaze, far enough that the user stands
-            // outside the 3.5 m chapter ring and the dancers' travel (owner 2026-11-15: "intelligent placement of the origin in the center
-            // front of the user")
             DanceFootprint fp = VrStage.Footprint(hm);
-            Vector2 centre = fp.Samples > 0 ? fp.Centre : MeanFloorPosition(hm, out Vector2 mean) ? mean : Vector2.zero;
-            float distance = fp.Samples > 0 ? FootprintMath.ViewDistance(fp) : 2.2f;
-            StaticOffset = centre;
-            OffsetSource = fp.Samples > 0 ? $"footprint centre of the whole dance, {distance:0.00} m ahead of the user" : "mean floor position (no footprint)";
+            Vector2 centre = fp.Samples > 0 ? fp.Centre : Vector2.zero;
+            float distance = fp.Samples > 0 ? Mathf.Max(MinStartDistance, FootprintMath.ViewDistance(fp, 0f)) : FallbackDistance;
+            StageCentre = centre;
+            StartDistance = distance;
+            OffsetSource = fp.Samples > 0 ? $"footprint centre of the whole dance, {distance:0.00} m ahead of the user" : "no footprint: the capture origin";
             Vector3 pivot = new(centre.x, 0f, centre.y);
             // the front: the side the start vantage looks from; that side faces the user
             float front = 180f;
@@ -206,27 +295,32 @@ namespace HmVr
             }
 
             Vector3 head = rig.HeadReal;
-            DancePlacement p = PlacementMath.Default(head, rig.HeadRealYawDeg, pivot, front, distance);
-            Current = p;
-            rig.ApplyPlacement(p);
+            Current = PlacementMath.Default(head, rig.HeadRealYawDeg, pivot, front, distance);
+            GodsEyeOn = false;
+            transitionT = 1f;
+            rig.ApplyPlacement(Current);
             Placements++;
-            Vector2 c = p.Anchor;
+            Vector2 c = Current.Anchor;
             Debug.Log($"VrPlacement: lesson '{VrFilm.Entry?.Id}' placed: the dance's centre ({centre.x:0.000}, {centre.y:0.000}) [{OffsetSource}] stands at ({c.x:0.000}, 0, {c.y:0.000}) "
-                + $"in the room, straight ahead of the user at ({head.x:0.00}, {head.z:0.00}) looking {rig.HeadRealYawDeg:0.0} deg; footprint radius {fp.Radius:0.00} m (p98 {fp.RadiusP98:0.00}), "
-                + $"chapter ring {VrChapterRing.Radius:0.0} m; turned {p.YawDeg:0.0} deg; scale {p.Scale:0.000} {(Mathf.Approximately(p.Scale, 1f) && Mathf.Approximately(rig.RigScale, 1f) ? "OK (exactly 1:1)" : "NOT 1:1")}; floor y {rig.FloorY:0.000}");
+                + $"in the room, straight ahead of the user at ({head.x:0.00}, {head.z:0.00}) looking {rig.HeadRealYawDeg:0.0} deg; footprint radius {fp.Radius:0.00} m (p98 {fp.RadiusP98:0.00}); "
+                + $"turned {Current.YawDeg:0.0} deg; scale {Current.Scale:0.000} {(Mathf.Approximately(Current.Scale, 1f) && Mathf.Approximately(rig.RigScale, 1f) ? "OK (exactly 1:1)" : "NOT 1:1")}; "
+                + $"floor y {rig.FloorY:0.000}; fixed from now on (two-hand pinch-drag moves it)");
         }
 
         public Dictionary<string, object> State()
         {
             Dictionary<string, object> s = new()
             {
-                ["active"] = Active, ["placements"] = Placements, ["drags"] = Drags, ["turns"] = Turns, ["holding"] = holding, ["rigScale"] = rig != null ? rig.RigScale : 1f, ["offsetSource"] = OffsetSource,
-                ["staticOffset"] = new[] { StaticOffset.x, StaticOffset.y }
+                ["active"] = Active, ["placements"] = Placements, ["moves"] = Moves, ["oneHandPinches"] = OneHandPinches, ["twoHandHold"] = TwoHandHold,
+                ["godsEye"] = GodsEyeOn, ["godsEyes"] = GodsEyes, ["grounds"] = Grounds, ["transitioning"] = Transitioning, ["changes"] = Changes,
+                ["rigScale"] = rig != null ? rig.RigScale : 1f, ["offsetSource"] = OffsetSource, ["startDistance"] = StartDistance,
+                ["stageCentre"] = new[] { StageCentre.x, StageCentre.y }
             };
             if (Current != null)
             {
                 s["yawDeg"] = Current.YawDeg;
-                s["scale"] = Current.Scale;
+                s["lift"] = Current.Lift;
+                s["anchor"] = new[] { Current.Anchor.x, Current.Anchor.y };
                 s["originReal"] = new[] { OriginReal.x, OriginReal.z };
             }
 

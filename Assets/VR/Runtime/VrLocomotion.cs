@@ -161,7 +161,7 @@ namespace HmVr
         {
             VrHand hand = input.OffHand;
             // decided when the pinch closes (as teleport and the floor grab are): a pinch that began on a panel, the wrist menu or the
-            // chapter ring and then drifted off it never becomes a turn
+            // god's eye target and then drifted off it never becomes a turn
             if (hand.Pinch.Down) snapLatched = !hand.Palm.Facing && !ptrs.OverUi(hand.Side) && !TeleportAiming;
             if (!hand.Pinch.Held) snapLatched = false;
             bool gate = hand.Tracked && hand.Pinch.Held && snapLatched && !hand.Palm.Facing && !TeleportAiming;
@@ -189,6 +189,16 @@ namespace HmVr
             foreach (Viewpoint vp in Viewpoints)
             {
                 if (!string.Equals(vp.Id, id, System.StringComparison.OrdinalIgnoreCase)) continue;
+                // passthrough (the bench's -hmview, the CLI; the menu has no viewpoints there): the placement turns the dance to that vantage
+                VrPlacement pl = VrPlacement.Instance;
+                if (pl != null && pl.Active)
+                {
+                    if (!pl.GoTo(vp)) return false;
+                    CurrentViewpoint = vp.Id;
+                    VrAudio.Whoosh(rig.Head.position);
+                    return true;
+                }
+
                 rig.PlaceAt(vp, blink);
                 CurrentViewpoint = vp.Id;
                 VrAudio.Whoosh(vp.Head);
@@ -202,6 +212,8 @@ namespace HmVr
         {
             VrRig rig = VrRig.Instance;
             if (rig == null) return;
+            VrPlacement pl = VrPlacement.Instance;
+            if (pl != null && pl.Active) return; // passthrough: the floor stays fixed (only two hands move it)
             rig.SnapTurn(degrees);
             Turns++;
         }

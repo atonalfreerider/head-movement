@@ -40,9 +40,11 @@ namespace HmVr
     ///     "splat_scale": 0.0,          // the splat layer's resolution, a fraction of the eye buffer (0 = the Quest default; 1 = the package's full-res
     ///                                  // composite; below 1 = SplatLowResFeature: own 1x-MSAA layer, bilinear composite, its own low-res splat depth)
     ///     "splat_alpha_cutoff": 0.0,   // the renderer's alpha cutoff (0 = the Quest default; the package's is 1/255): larger = smaller quads, less fill
-    ///     "splat_sort_every": 0 }      // sort the Gaussians every N rendered frames (0 = the Quest default, 1 = every frame)
+    ///     "splat_sort_every": 0,       // sort the Gaussians every N rendered frames (0 = the Quest default, 1 = every frame)
+    ///     "splat_split": true }        // the low-res splat layer is accumulated before the prepasses (the eye buffer's render pass stays
+    ///                                  // whole) and only composited before the transparents; false = all three steps there (A/B)
     /// Command line (adb ... -e unity "..."): -hmhair full|light|off, -hmadaptive on|off, -hmsplats on|off, -hmsplatmax N, -hmsplatsigma M, -hmsplatpath composite|direct, -hmsplatdepth on|off,
-    /// -hmsplatset NAME|full, -hmsplatscale S, -hmsplatcutoff A, -hmsplatsort N, -hmmsaa 1|2|4, -hmeyescale E.
+    /// -hmsplatset NAME|full, -hmsplatscale S, -hmsplatcutoff A, -hmsplatsort N, -hmsplatsplit 0|1, -hmmsaa 1|2|4, -hmeyescale E.
     /// </summary>
     public sealed class VrSettings
     {
@@ -74,6 +76,8 @@ namespace HmVr
         public float SplatScale, SplatAlphaCutoff;
         /// <summary>"splat_sort_every" / -hmsplatsort (0 = the Quest default)</summary>
         public int SplatSortEvery;
+        /// <summary>"splat_split" / -hmsplatsplit 0|1 (SplatUrpFeature.LowResSplit; default on)</summary>
+        public bool SplatSplit = true;
         /// <summary>"splats" was named by the settings file or the -hmsplats switch (logged in the HM-SPLATS tier line only: a capture with splat data is drawn as splats whatever it says)</summary>
         public bool SplatsGiven;
         /// <summary>Load() made this (the file and the command line were read)</summary>
@@ -123,6 +127,7 @@ namespace HmVr
                     if (j["splat_scale"] != null) s.SplatScale = j.Value<float>("splat_scale");
                     if (j["splat_alpha_cutoff"] != null) s.SplatAlphaCutoff = j.Value<float>("splat_alpha_cutoff");
                     if (j["splat_sort_every"] != null) s.SplatSortEvery = j.Value<int>("splat_sort_every");
+                    if (j["splat_split"] != null) s.SplatSplit = j.Value<bool>("splat_split");
                 }
             }
             catch (Exception e)
@@ -157,6 +162,8 @@ namespace HmVr
             if (float.TryParse(VrArgs.Get("-hmsplatscale"), System.Globalization.NumberStyles.Float, inv, out float sscale)) s.SplatScale = sscale;
             if (float.TryParse(VrArgs.Get("-hmsplatcutoff"), System.Globalization.NumberStyles.Float, inv, out float scut)) s.SplatAlphaCutoff = scut;
             if (int.TryParse(VrArgs.Get("-hmsplatsort"), out int ssort)) s.SplatSortEvery = ssort;
+            string ssplit = VrArgs.Get("-hmsplatsplit");
+            if (ssplit != null) s.SplatSplit = ssplit.Trim() != "0" && !string.Equals(ssplit.Trim(), "false", StringComparison.OrdinalIgnoreCase) && !string.Equals(ssplit.Trim(), "off", StringComparison.OrdinalIgnoreCase);
             if (int.TryParse(VrArgs.Get("-hmmsaa"), out int msaa) && (msaa == 1 || msaa == 2 || msaa == 4)) s.Msaa = msaa;
             if (float.TryParse(VrArgs.Get("-hmeyescale"), System.Globalization.NumberStyles.Float, inv, out float eye) && eye > 0.4f && eye <= 1.2f) s.EyeScale = eye;
             s.Loaded = true;

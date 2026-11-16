@@ -99,11 +99,11 @@ namespace HmVr
             List<Viewpoint> list = new();
             Vector3 centre = CoupleCentre(hm);
             string[] cams = FilmCameraVideo.Cameras;
-            // the start vantage looks at the centre of the WHOLE dance (its floor footprint) from outside the 3.5 m chapter ring and the
-            // dancers' travel (owner 2026-11-15: the dance centre in the centre-front of the user), not at where the couple is right now
+            // the start vantage looks at the centre of the WHOLE dance (its floor footprint) from outside the dancers' travel (owner
+            // 2026-11-15: the dance centre in the centre-front of the user), not at where the couple is right now
             bool staged = hm != null && hm.LeadDancer != null;
             Vector3 stage = staged ? VrStage.Centre(hm) : centre;
-            float startDistance = staged ? FootprintMath.ViewDistance(VrStage.Footprint(hm)) : EdgeDistance;
+            float startDistance = staged ? FootprintMath.ViewDistance(VrStage.Footprint(hm), 0f) : EdgeDistance;
 
             // ---- the start vantage
             Viewpoint start;
@@ -135,7 +135,7 @@ namespace HmVr
                 float yawOffset = hm != null ? hm.FloorYawDeg : 0f;
                 if (found)
                 {
-                    // outside the ring on that phone's side of the floor, facing the centre of the dance
+                    // outside the travel on that phone's side of the floor, facing the centre of the dance
                     float bearing = ViewpointMath.Bearing(stage, best);
                     start = ViewpointMath.Facing("start", "Floor edge", "start", stage, bearing, startDistance);
                 }

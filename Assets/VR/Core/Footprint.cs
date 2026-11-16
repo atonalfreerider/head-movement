@@ -80,7 +80,7 @@ namespace HmVr
         }
 
         /// <summary>
-        /// how far from the dance centre to stand to see all of it: outside the ring (ringRadius) and outside the dancers' 98% circle (plus
+        /// how far from the dance centre to stand to see all of it: outside a ring of ringRadius (0 = none) and outside the dancers' 98% circle (plus
         /// 0.3 m of body), plus clearance; never closer than ringRadius + clearance, never farther than max
         /// </summary>
         public static float ViewDistance(DanceFootprint fp, float ringRadius = 3.5f, float clearance = 0.6f, float max = 6f) =>

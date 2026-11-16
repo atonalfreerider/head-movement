@@ -438,6 +438,7 @@ public sealed class SplatDancers : MonoBehaviour
         renderPath = st.SplatPath == "direct" ? Paths.Direct : st.SplatPath == "composite" ? Paths.Composite : QuestDefaultPath;
         questDepth = st.SplatDepth == "off" ? false : st.SplatDepth == "on" ? true : QuestDefaultDepth;
         SplatUrpFeature.LowResDepth = questDepth; // the low-res layer's own splat depth + depth-tested composite (SplatLowResFeature)
+        SplatUrpFeature.LowResSplit = st.SplatSplit; // accumulate before the prepasses, composite before the transparents ("splat_split")
         // the splat depth BEFORE the transparents is for the composite path (overlays depth-test against the dancers); on the direct
         // path the splats are transparents themselves and would test against their own depth: the package's order (after) then
         SplatUrpFeature.DepthBeforeTransparents = renderPath == Paths.Composite;
@@ -451,7 +452,7 @@ public sealed class SplatDancers : MonoBehaviour
         string why = $" ({d.Why})";
         QuestTier = $"{who}: splats {(on ? "on" : "off")}{why}{noPath}, max {(reduceMax > 0 ? reduceMax.ToString() : "all")} per dancer, " +
                     $"sigma clamp {(reduceSigma > 0f ? $"{reduceSigma * 100f:0.##} cm" : "none")}, path {renderPath}, depth {(questDepth ? "on" : "off")}, " +
-                    $"set '{(splatSet.Length > 0 ? splatSet : "full")}', layer scale {SplatUrpFeature.LowResScale:0.##}{(SplatUrpFeature.LowResScale < 0.999f ? $" (low-res layer, {(questDepth ? "low-res splat depth" : "no splat depth")})" : "")}, " +
+                    $"set '{(splatSet.Length > 0 ? splatSet : "full")}', layer scale {SplatUrpFeature.LowResScale:0.##}{(SplatUrpFeature.LowResScale < 0.999f ? $" (low-res layer, {(questDepth ? "low-res splat depth" : "no splat depth")}, {(SplatUrpFeature.LowResSplit ? "split passes" : "one pass")})" : "")}, " +
                     $"alpha cutoff {(alphaCutoff > 0f ? alphaCutoff.ToString("0.###") : "package")}, sort every {sortEvery}, api {api}, settings {st.Source}";
         Debug.Log($"HM-SPLATS tier: {QuestTier} (capture {Path.GetFileName(viewer.Manifest?.Folder ?? "?")})");
     }

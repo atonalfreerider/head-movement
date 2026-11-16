@@ -5,7 +5,7 @@ using UnityEngine;
 namespace HmVr
 {
     /// <summary>
-    /// A world-space target the far ray can point at besides the panels (the chapter ring): its own hit test, and the pinch's press /
+    /// A world-space target the far ray can point at besides the panels (the god's eye target, VrSkyTarget): its own hit test, and the pinch's press /
     /// release on it. A pinch that starts on a target is the target's (VrPointers.OverUi), never a floor grab, a teleport or a turn.
     /// </summary>
     public interface IRayTarget
@@ -28,7 +28,7 @@ namespace HmVr
     ///    still on it (move away to cancel); a slider follows the ray while pinched.
     /// A hand that is near a panel (within poking distance) shows no ray. Hover is lit on the widget, clicks and hover changes play a
     /// sound. The pointers read hit-testing straight from the panels' geometry: no colliders, no event system. The far ray also reaches the
-    /// world targets (IRayTarget: the chapter ring) when no panel is under it, up to WorldRayMaxDistance.
+    /// world targets (IRayTarget: the god's eye target) when no panel is under it, up to WorldRayMaxDistance.
     /// </summary>
     [DefaultExecutionOrder(-250)]
     [AddComponentMenu("")]
@@ -342,7 +342,7 @@ namespace HmVr
             if (p.RayHit)
             {
                 p.Reticle.position = p.HitPoint;
-                // a world target is metres away: the reticle keeps about 0.4 degrees of the view so it stays visible on the ring
+                // a world target is metres away: the reticle keeps about 0.4 degrees of the view so it stays visible on a far target
                 float s = p.WorldHover != null ? 0.007f * p.HitDistance : 0.012f + 0.004f * p.HitDistance * 0.3f;
                 p.Reticle.localScale = Vector3.one * (hand.Pinch.Held ? s * 0.7f : s);
             }

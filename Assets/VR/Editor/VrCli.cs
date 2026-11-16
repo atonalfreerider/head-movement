@@ -112,16 +112,20 @@ namespace HmVr.Editor
                 case "handat":
                     Sim().HandAtHead(h, new Vector3(x, y, z), yaw, pinch);
                     break;
-                case "display": // --widget passthrough | immersive | toggle
+                case "display": // passthrough is always on: this (re)starts it; immersive is refused
                 {
                     VrDisplay d = Need(mode).Session?.Display ?? throw new InvalidOperationException("no VR session");
-                    string want = (widget ?? "toggle").ToLowerInvariant();
-                    if (want == "toggle") d.Toggle();
-                    else d.Set(want == "passthrough" ? DisplayMode.Passthrough : DisplayMode.Immersive, false);
+                    d.Set(DisplayMode.Passthrough, false);
                     break;
                 }
-                case "place": // state of the fixed placement (the origin is locked; there is nothing to set)
-                    return Json(Need(mode).Session?.Placement?.State());
+                case "place": // state of the placement (pinch gestures move it; --widget godseye | ground switches the god's eye)
+                {
+                    VrPlacement pl = Need(mode).Session?.Placement;
+                    string want = (widget ?? "").ToLowerInvariant();
+                    if (want == "godseye") pl?.EnterGodsEye();
+                    else if (want == "ground") pl?.ReturnToGround();
+                    return Json(pl?.State());
+                }
                 case "hair": // --widget full | light | off
                     VrQuality.SetHair(VrSettings.ParseLevel(widget, HairLevel.Full), false);
                     break;

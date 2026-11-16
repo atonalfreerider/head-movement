@@ -322,6 +322,38 @@ namespace HmSplats
 
         void OnDisable() => Live.Remove(this);
 
+        /// <summary>
+        /// World box around the posed joints of every live, drawn splat dancer (the joints of this frame's skin matrices, through the
+        /// renderer's transform: the matrix its draws use), grown by <paramref name="pad"/> metres on every side for the Gaussians
+        /// around the joints (hands, head, hair, skirts). SplatLowResFeature scissors the low-res layer to its screen rect. Every frame
+        /// (55 joints per dancer), unlike LastPosedBounds (every 16th skinned frame, too late for a spin). False when no dancer is
+        /// live or skinned yet: the caller then draws the whole screen.
+        /// </summary>
+        public static bool TryLiveJointBounds(float pad, out Bounds bounds)
+        {
+            bounds = default;
+            bool any = false;
+            foreach (SkinnedSplatAvatar a in Live)
+            {
+                if (a == null || !a.isActiveAndEnabled || a.Data == null || a.Renderer == null || !a.Renderer.enabled || a.skinnedAtFrame < 0) continue;
+                Matrix4x4 l2w = a.Renderer.transform.localToWorldMatrix;
+                int n = Mathf.Min(a.skin.Length, a.Data.RestJoints.Length);
+                for (int j = 0; j < n; j++)
+                {
+                    Vector3 p = l2w.MultiplyPoint3x4(a.skin[j].MultiplyPoint3x4((Vector3)a.Data.RestJoints[j]));
+                    if (!any)
+                    {
+                        bounds = new Bounds(p, Vector3.zero);
+                        any = true;
+                    }
+                    else bounds.Encapsulate(p);
+                }
+            }
+
+            if (any) bounds.Expand(2f * pad);
+            return any;
+        }
+
         static void SkinAll(ScriptableRenderContext context, List<Camera> cameras)
         {
             for (int i = Live.Count - 1; i >= 0; i--)

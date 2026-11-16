@@ -30,6 +30,12 @@ namespace HmSplats
         /// tier's splat depth ("splat_depth", -hmsplatdepth; on by default). false = no splat depth (the floor marks draw over the feet).</summary>
         public static bool LowResDepth = true;
 
+        /// <summary>the low-res layer is drawn in two passes: prepare + accumulate before the prepasses (into its own targets), the composite
+        /// alone before the transparents, so the eye buffer's opaque render pass is not ended, stored and reloaded around the splat targets
+        /// (2026-11 GPU audit, ~73 MB of eye colour + depth traffic per frame on a Quest). false = the three steps together before the
+        /// transparents (as before; A/B). SplatDancers sets it from "splat_split" / -hmsplatsplit; read at every frame's record.</summary>
+        public static bool LowResSplit = true;
+
         /// <summary>the low-res layer is the one in the renderer now</summary>
         public static bool LowResActive => lowRes != null && Targets.Count > 0;
         static readonly List<ScriptableRendererData> Targets = new();

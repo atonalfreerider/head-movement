@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.Rendering.Universal;
 using UnityEngine.XR;
 using UnityEngine.XR.Management;
 
@@ -172,6 +173,7 @@ namespace HmVr
             }
 
             if (Active && FilmLibrary.RecordingActive) Exit("a recording started");
+            if (phase == Phase.Vr && Time.unscaledTime < sweepUntil) SweepCameras(false);
             Keyboard kb = Keyboard.current;
             if (kb != null && kb.f9Key.wasPressedThisFrame && !FilmLibrary.RecordingActive) Toggle();
         }
@@ -314,6 +316,98 @@ namespace HmVr
             FilmDirector.HeadIsCamera = true;
             phase = xr ? Phase.Vr : Phase.Simulated;
             Note(xr ? "VR mode on (headset)" : "VR mode on (simulated hands)");
+            if (xr)
+            {
+                // the headset only: the simulated mode keeps the desktop cameras the editor scenarios rely on
+                HookSdkManager();
+                SweepCameras(true);
+            }
+        }
+
+        // ------------------------------------------------------------------ one camera in VR
+
+        /// <summary>cameras this mode switched off (their Camera component only), switched back on at Exit</summary>
+        readonly List<Camera> disabledCameras = new();
+        float sweepUntil = -1f;
+        bool sweepLogged;
+        VRTKLite.SDK.SDKManager sdkManager;
+
+        /// <summary>
+        /// In VR the head camera (VrRig's "VR Head") must be the only camera that renders to the screen / the eye buffers. VRTKLite's
+        /// SDKManager.Start loads the "OpenXR Display" setup and activates its GenericXR "head" camera (tracked, enabled): a second
+        /// base camera that rendered both eyes every frame, splat passes included (2026-11 GPU audit, 0.5-5 ms). Every other enabled
+        /// camera without a target texture is switched off here (the Camera component, never the GameObject: its tracking and children
+        /// keep working) - right after the rig is built, every frame for 2 s after it and after each SDKManager setup change (its Start
+        /// may run later). Cameras rendering into a texture, cameras under the rig and the head camera's overlay stack are left alone.
+        /// </summary>
+        void SweepCameras(bool restartWindow)
+        {
+            if (restartWindow) sweepUntil = Time.unscaledTime + 2f;
+            VrRig rig = VrRig.Instance;
+            Camera head = rig != null ? rig.Cam : null;
+            if (head == null) return;
+            List<Camera> stack = head.GetUniversalAdditionalCameraData()?.cameraStack;
+            List<string> names = null;
+            foreach (Camera c in Camera.allCameras) // enabled, active cameras only
+            {
+                if (c == head || c.targetTexture != null || c.transform.IsChildOf(rig.transform)) continue;
+                if (stack != null && stack.Contains(c)) continue;
+                c.enabled = false;
+                if (!disabledCameras.Contains(c)) disabledCameras.Add(c);
+                (names ??= new List<string>()).Add(PathOf(c.transform));
+            }
+
+            if (names != null)
+            {
+                string line = $"HM-PERF cameras: disabled {string.Join(", ", names)} (only VR Head renders)";
+                if (!sweepLogged) Debug.Log(line);
+                else Note(line);
+                sweepLogged = true;
+            }
+        }
+
+        static string PathOf(Transform t) => t.parent != null ? t.parent.name + "/" + t.name : t.name;
+
+        void HookSdkManager()
+        {
+            if (sdkManager != null) return;
+            sdkManager = FindAnyObjectByType<VRTKLite.SDK.SDKManager>();
+            if (sdkManager != null) sdkManager.LoadedVRSetupChanged += OnSdkSetupChanged; // catches up with a loaded setup at once
+        }
+
+        void UnhookSdkManager()
+        {
+            if (sdkManager != null) sdkManager.LoadedVRSetupChanged -= OnSdkSetupChanged;
+            sdkManager = null;
+        }
+
+        void OnSdkSetupChanged(GameObject setup)
+        {
+            if (phase == Phase.Vr) SweepCameras(true);
+        }
+
+        void RestoreCameras()
+        {
+            foreach (Camera c in disabledCameras)
+            {
+                if (c != null) c.enabled = true;
+            }
+
+            disabledCameras.Clear();
+            sweepUntil = -1f;
+            sweepLogged = false;
+        }
+
+        /// <summary>enabled cameras rendering to the screen / XR now (the HM-PERF line: 1 in VR)</summary>
+        public static int ScreenCameraCount()
+        {
+            int n = 0;
+            foreach (Camera c in Camera.allCameras)
+            {
+                if (c.targetTexture == null) n++;
+            }
+
+            return n;
         }
 
         public void Exit(string why = null)
@@ -324,6 +418,8 @@ namespace HmVr
             FilmLibrary lib = FilmLibrary.Instance;
             if (lib != null) lib.Show(); // a lesson stops; the flat library comes back
             VrQuality.Restore();
+            UnhookSdkManager();
+            RestoreCameras();
             if (Session != null)
             {
                 Session.Teardown();

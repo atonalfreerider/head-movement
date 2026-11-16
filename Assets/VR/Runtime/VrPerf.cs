@@ -155,6 +155,7 @@ namespace HmVr
             }
 
             TrackLesson();
+            BenchNoSplat();
             if (Time.unscaledTime >= nextFloorCheck)
             {
                 nextFloorCheck = Time.unscaledTime + 1f;
@@ -163,6 +164,29 @@ namespace HmVr
 
             Adapt(dt);
             if (Time.unscaledTime - windowStart >= 5f) Flush();
+        }
+
+        static int benchNoSplat = -1;
+        bool benchNoSplatLogged;
+
+        /// <summary>
+        /// -hmbenchnosplat 1 (BENCH ONLY: the frame cost without the splat dancers). The settings key "splats" / -hmsplats off cannot do
+        /// it: a capture with splat data is always drawn as splats (SplatDancers.RefuseOff, owner rule), so the earlier no-splat bench
+        /// measured the splats. This switches the SplatDancers component and its splat objects off after they are built (its OnDisable
+        /// removes the URP features and brings the skeleton lines back; the mesh avatars stay hidden) and keeps them off for the run.
+        /// </summary>
+        void BenchNoSplat()
+        {
+            if (benchNoSplat < 0) benchNoSplat = VrArgs.Get("-hmbenchnosplat")?.Trim() == "1" ? 1 : 0;
+            if (benchNoSplat == 0) return;
+#if UNITY_EDITOR || UNITY_STANDALONE_WIN || UNITY_ANDROID
+            SplatDancers s = SplatDancers.Instance;
+            if (s == null || (!s.enabled && !s.gameObject.activeSelf)) return;
+            s.enabled = false;
+            s.gameObject.SetActive(false); // the splat avatars are its children: their skinning and sorting stop too
+            if (!benchNoSplatLogged) Debug.Log("HM-PERF bench override: splats hidden");
+            benchNoSplatLogged = true;
+#endif
         }
 
         void TrackLesson()
@@ -596,6 +620,7 @@ namespace HmVr
             string splatHair = SplatHairNow();
             if (splatHair != "-") sb.Append(" splatHair=").Append(splatHair.Replace(' ', '_'));
 
+            sb.Append(" cams=").Append(VrMode.ScreenCameraCount()); // enabled cameras rendering to the screen / XR (1 in VR: the head)
             sb.Append(" mem=").Append((UnityEngine.Profiling.Profiler.GetTotalAllocatedMemoryLong() / 1048576L).ToString()).Append("MB");
             Debug.Log(sb.ToString());
         }

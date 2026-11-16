@@ -94,8 +94,10 @@ namespace HmVr
             float x0 = -(bw + gap);
             resumeBtn = footer.AddButton("resume", "Resume lesson", VrPanel.R(x0, rowA, bw, 58f), () => Close(), 25f);
             libraryBtn = footer.AddButton("back to library", "Back to library", VrPanel.R(x0 + bw + gap, rowA, bw, 58f), () => VrFilm.BackToLibrary(), 25f);
-            viewBtn = footer.AddButton("view mode", "", VrPanel.R(x0 + 2f * (bw + gap), rowA, bw, 58f), () => VrDisplay.Instance?.Toggle(), 23f);
+            // passthrough is always on (owner 2026-11-16): the view button only reports it
+            viewBtn = footer.AddButton("view mode", "", VrPanel.R(x0 + 2f * (bw + gap), rowA, bw, 58f), () => { }, 23f);
             viewBtn.LabelFunc = ViewLabel;
+            viewBtn.Enabled = () => false;
             hairBtn = footer.AddButton("hair level", "", VrPanel.R(x0, rowB, bw, 58f), () => VrQuality.SetHair(VrQuality.NextHairLevel(VrQuality.Hair)), 23f);
             hairBtn.LabelFunc = () => VrQuality.Current == VrQuality.Tier.Quest ? "Hair: " + VrQuality.Hair : "Hair: PC";
             hairBtn.Enabled = () => VrQuality.Current == VrQuality.Tier.Quest;
@@ -109,8 +111,8 @@ namespace HmVr
         {
             VrDisplay d = VrDisplay.Instance;
             if (d == null) return "View";
-            if (d.Current == VrDisplay.State.Failed) return "View: Immersive";
-            return d.Wanted == DisplayMode.Passthrough ? (d.Current == VrDisplay.State.Starting ? "View: Passthrough..." : "View: Passthrough") : "View: Immersive";
+            if (d.Current == VrDisplay.State.Failed) return "No passthrough";
+            return d.Current == VrDisplay.State.Starting ? "Passthrough..." : "Passthrough";
         }
 
         // ------------------------------------------------------------------ open / close

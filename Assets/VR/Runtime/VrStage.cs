@@ -6,8 +6,8 @@ namespace HmVr
     /// <summary>
     /// Where the dance happens, once per loaded capture: the floor footprint of both dancers over the whole take (pelvis and ankles every
     /// third frame, world x/z after the capture's origin shift; parked and missing samples skipped), its centre (the minimum enclosing circle
-    /// of the kept points, FootprintMath) and radius. The start placement (passthrough), the start vantage (immersive) and the chapter ring
-    /// are all centred on it.
+    /// of the kept points, FootprintMath) and radius. The start vantage (whose side of the dance faces the user at the start) is set from it;
+    /// the passthrough placement itself follows the couple's live centre (VrPlacement).
     /// </summary>
     public static class VrStage
     {
@@ -69,7 +69,7 @@ namespace HmVr
             return new Dictionary<string, object>
             {
                 ["centre"] = new[] { fp.Centre.x, fp.Centre.y }, ["radius"] = fp.Radius, ["radiusP98"] = fp.RadiusP98, ["samples"] = fp.Samples,
-                ["viewDistance"] = FootprintMath.ViewDistance(fp)
+                ["viewDistance"] = FootprintMath.ViewDistance(fp, 0f)
             };
         }
     }

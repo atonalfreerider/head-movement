@@ -95,7 +95,7 @@ namespace HmVr
             if (discMat != null) Destroy(discMat);
         }
 
-        /// <summary>build for a rig; decides the starting mode (the remembered choice, else the settings file, else passthrough on a headset)</summary>
+        /// <summary>build for a rig: always passthrough (owner 2026-11-16: "passthrough should always be on"); immersive only as the fallback</summary>
         public void Init(VrRig r, bool xr)
         {
             rig = r;
@@ -105,7 +105,16 @@ namespace HmVr
             Apply(Wanted);
         }
 
+        /// <summary>always passthrough (owner 2026-11-16); the old switches (-hmvr-display, HM_VR_DISPLAY, the remembered choice, the settings
+        /// file) are read only to log that they are ignored</summary>
         static DisplayMode ReadWanted(bool xr)
+        {
+            string old = ReadOldWish(xr);
+            if (old != "passthrough" && old != "auto" && old != "") Debug.Log($"VrDisplay: '{old}' asked for; passthrough is always on");
+            return DisplayMode.Passthrough;
+        }
+
+        static string ReadOldWish(bool xr)
         {
             string want = Environment.GetEnvironmentVariable("HM_VR_DISPLAY");
             string[] args = Environment.GetCommandLineArgs();
@@ -127,17 +136,18 @@ namespace HmVr
             }
 
             if (string.IsNullOrEmpty(want) || want == "auto") want = VrSettings.Load().Display;
-            want = (want ?? "auto").Trim().ToLowerInvariant();
-            if (want == "passthrough") return DisplayMode.Passthrough;
-            if (want == "immersive") return DisplayMode.Immersive;
-            return xr ? DisplayMode.Passthrough : DisplayMode.Immersive; // the headset starts in the room; the desktop simulation in the studio
+            return (want ?? "auto").Trim().ToLowerInvariant();
         }
 
-        public void Toggle() => Set(Wanted == DisplayMode.Passthrough ? DisplayMode.Immersive : DisplayMode.Passthrough);
-
-        /// <summary>switch (and remember the choice)</summary>
+        /// <summary>(re)start passthrough; immersive is refused (passthrough is always on, owner 2026-11-16)</summary>
         public void Set(DisplayMode mode, bool remember = true)
         {
+            if (mode != DisplayMode.Passthrough)
+            {
+                Debug.Log("VrDisplay: immersive refused, passthrough is always on");
+                mode = DisplayMode.Passthrough;
+            }
+
             Wanted = mode;
             if (remember)
             {
