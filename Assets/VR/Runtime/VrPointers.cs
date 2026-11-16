@@ -5,13 +5,30 @@ using UnityEngine;
 namespace HmVr
 {
     /// <summary>
+    /// A world-space target the far ray can point at besides the panels (the chapter ring): its own hit test, and the pinch's press /
+    /// release on it. A pinch that starts on a target is the target's (VrPointers.OverUi), never a floor grab, a teleport or a turn.
+    /// </summary>
+    public interface IRayTarget
+    {
+        bool RayLive { get; }
+        /// <summary>the nearest hit of the ray (origin, unit direction) within maxDistance: distance t and point</summary>
+        bool RayHit(Vector3 origin, Vector3 direction, float maxDistance, out float t, out Vector3 point);
+        void RayHover(Hand side, Vector3 point);
+        void RayPress(Hand side, Vector3 point);
+        /// <summary>the pinch opened: stillOver = the ray is still on the target</summary>
+        void RayRelease(Hand side, Vector3 point, bool stillOver);
+        void RayCancel(Hand side);
+    }
+
+    /// <summary>
     /// Hands acting on panels, two ways, with the same widgets:
     ///  - POKE: the index fingertip pushes into a widget (PokeDetector: a press on the frame the tip reaches the surface); a slider is
     ///    dragged by keeping the tip pressed in.
     ///  - FAR RAY + PINCH: the pointing ray (AimRay) hovers a widget; a pinch presses it; a button clicks when the pinch opens with the ray
     ///    still on it (move away to cancel); a slider follows the ray while pinched.
     /// A hand that is near a panel (within poking distance) shows no ray. Hover is lit on the widget, clicks and hover changes play a
-    /// sound. The pointers read hit-testing straight from the panels' geometry: no colliders, no event system.
+    /// sound. The pointers read hit-testing straight from the panels' geometry: no colliders, no event system. The far ray also reaches the
+    /// world targets (IRayTarget: the chapter ring) when no panel is under it, up to WorldRayMaxDistance.
     /// </summary>
     [DefaultExecutionOrder(-250)]
     [AddComponentMenu("")]
@@ -20,6 +37,11 @@ namespace HmVr
         public static VrPointers Instance { get; private set; }
 
         public const float PokeNear = 0.10f, RayMaxDistance = 8f, RayMarginM = 0.025f, PokeMarginM = 0.008f, WidgetMarginMm = 7f;
+        /// <summary>the world targets are farther than the panels: the far side of a 3.5 m ring seen from outside it</summary>
+        public const float WorldRayMaxDistance = 16f;
+
+        /// <summary>the world targets the far ray tests after the panels (registered by their owners)</summary>
+        public static readonly List<IRayTarget> Targets = new();
 
         public sealed class Ptr
         {
@@ -36,6 +58,9 @@ namespace HmVr
             public string LastClick;
             public float LastPokePress = -10f;
             public bool PressedFar;
+            /// <summary>the world target under the ray this frame, and the one a pinch started on (held until the pinch opens)</summary>
+            public IRayTarget WorldHover, WorldPressed;
+            public Vector3 WorldPoint;
         }
 
         public readonly Ptr[] Pointers = new Ptr[2];
@@ -86,7 +111,7 @@ namespace HmVr
         public bool OverUi(Hand h)
         {
             Ptr p = Pointers[(int)h];
-            return p.HitPanel != null || p.NearPanel || p.Drag != null || p.Pressed != null;
+            return p.HitPanel != null || p.NearPanel || p.Drag != null || p.Pressed != null || p.WorldHover != null || p.WorldPressed != null;
         }
 
         void Update()
@@ -122,6 +147,7 @@ namespace HmVr
             p.RayHit = false;
             p.HitPanel = null;
             p.NearPanel = false;
+            p.WorldHover = null;
             VrWidget prevHover = p.Hover;
             p.Hover = null;
 
@@ -234,6 +260,16 @@ namespace HmVr
                     p.Hover = w;
                     if (w != null) w.Hovered = true;
                 }
+                else if (WorldTarget(o, dir, out IRayTarget target, out float wt, out Vector3 wp))
+                {
+                    p.WorldHover = target;
+                    p.WorldPoint = wp;
+                    p.HitPoint = wp;
+                    p.HitDistance = wt;
+                    p.RayHit = true;
+                    end = wp;
+                    target.RayHover(side, wp);
+                }
                 else
                 {
                     end = o + dir * 1.2f;
@@ -244,6 +280,18 @@ namespace HmVr
                 {
                     BeginPress(p, p.Hover, false);
                     p.PressedFar = true;
+                }
+                else if (hand.Pinch.Down && p.WorldHover != null && p.Pressed == null)
+                {
+                    p.WorldPressed = p.WorldHover;
+                    p.WorldPressed.RayPress(side, p.WorldPoint);
+                }
+
+                if (p.WorldPressed != null && (hand.Pinch.Up || !hand.Pinch.Held))
+                {
+                    IRayTarget wpr = p.WorldPressed;
+                    p.WorldPressed = null;
+                    wpr.RayRelease(side, p.WorldPoint, p.WorldHover == wpr);
                 }
 
                 if (p.Pressed != null && !p.PokePressed)
@@ -269,6 +317,13 @@ namespace HmVr
                 p.PressedFar = false;
             }
 
+            if (!rayOn && p.WorldPressed != null)
+            {
+                IRayTarget wpr = p.WorldPressed;
+                p.WorldPressed = null;
+                wpr.RayCancel(side);
+            }
+
             if (p.Hover != prevHover && p.Hover != null) VrAudio.Tick(p.Hover.WorldCentre);
             DrawRay(p, rayOn, end, hand);
         }
@@ -287,7 +342,8 @@ namespace HmVr
             if (p.RayHit)
             {
                 p.Reticle.position = p.HitPoint;
-                float s = 0.012f + 0.004f * p.HitDistance * 0.3f;
+                // a world target is metres away: the reticle keeps about 0.4 degrees of the view so it stays visible on the ring
+                float s = p.WorldHover != null ? 0.007f * p.HitDistance : 0.012f + 0.004f * p.HitDistance * 0.3f;
                 p.Reticle.localScale = Vector3.one * (hand.Pinch.Held ? s * 0.7f : s);
             }
 
@@ -363,6 +419,24 @@ namespace HmVr
             }
         }
 
+        /// <summary>the nearest live world target the ray hits</summary>
+        static bool WorldTarget(Vector3 o, Vector3 dir, out IRayTarget best, out float bestT, out Vector3 bestPoint)
+        {
+            best = null;
+            bestT = WorldRayMaxDistance;
+            bestPoint = default;
+            for (int i = 0; i < Targets.Count; i++)
+            {
+                IRayTarget t = Targets[i];
+                if (t == null || !t.RayLive || !t.RayHit(o, dir, bestT, out float d, out Vector3 pt) || d >= bestT) continue;
+                best = t;
+                bestT = d;
+                bestPoint = pt;
+            }
+
+            return best != null;
+        }
+
         static VrWidget WidgetAt(VrPanel panel, Vector2 localMm, float marginMm)
         {
             VrWidget best = null;
@@ -392,6 +466,7 @@ namespace HmVr
                 s[p.Hand.Side.ToString().ToLowerInvariant()] = new Dictionary<string, object>
                 {
                     ["hover"] = p.Hover?.Id, ["pressed"] = p.Pressed?.Id, ["drag"] = p.Drag?.Id, ["near"] = p.NearPanel, ["rayHit"] = p.RayHit,
+                    ["world"] = p.WorldHover != null ? p.WorldHover.GetType().Name : null, ["worldPressed"] = p.WorldPressed != null,
                     ["panel"] = p.HitPanel != null ? p.HitPanel.name : null, ["pinch"] = p.Hand.Pinch.Held, ["tracked"] = p.Hand.Tracked, ["aimValid"] = p.Hand.Aim.Valid,
                     ["aimDir"] = new[] { Mathf.Round(p.Hand.Aim.Direction.x * 100f) / 100f, Mathf.Round(p.Hand.Aim.Direction.y * 100f) / 100f, Mathf.Round(p.Hand.Aim.Direction.z * 100f) / 100f },
                     ["tip"] = p.Hand.Tracked ? new[] { Mathf.Round(p.Hand.IndexTip.x * 100f) / 100f, Mathf.Round(p.Hand.IndexTip.y * 100f) / 100f, Mathf.Round(p.Hand.IndexTip.z * 100f) / 100f } : null

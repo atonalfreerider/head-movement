@@ -99,6 +99,11 @@ namespace HmVr
             List<Viewpoint> list = new();
             Vector3 centre = CoupleCentre(hm);
             string[] cams = FilmCameraVideo.Cameras;
+            // the start vantage looks at the centre of the WHOLE dance (its floor footprint) from outside the 3.5 m chapter ring and the
+            // dancers' travel (owner 2026-11-15: the dance centre in the centre-front of the user), not at where the couple is right now
+            bool staged = hm != null && hm.LeadDancer != null;
+            Vector3 stage = staged ? VrStage.Centre(hm) : centre;
+            float startDistance = staged ? FootprintMath.ViewDistance(VrStage.Footprint(hm)) : EdgeDistance;
 
             // ---- the start vantage
             Viewpoint start;
@@ -116,7 +121,7 @@ namespace HmVr
                 foreach (string cam in cams)
                 {
                     if (!TypicalPosition(cam, hm, out Vector3 p)) continue;
-                    float d = new Vector2(p.x - centre.x, p.z - centre.z).magnitude;
+                    float d = new Vector2(p.x - stage.x, p.z - stage.z).magnitude;
                     if (d < 2f || d > 6f) continue;
                     float score = Mathf.Abs(d - EdgeDistance);
                     if (score < bestD)
@@ -130,13 +135,13 @@ namespace HmVr
                 float yawOffset = hm != null ? hm.FloorYawDeg : 0f;
                 if (found)
                 {
-                    // 3 m out on that phone's side of the floor, facing the couple
-                    float bearing = ViewpointMath.Bearing(centre, best);
-                    start = ViewpointMath.Facing("start", "Floor edge", "start", centre, bearing, EdgeDistance);
+                    // outside the ring on that phone's side of the floor, facing the centre of the dance
+                    float bearing = ViewpointMath.Bearing(stage, best);
+                    start = ViewpointMath.Facing("start", "Floor edge", "start", stage, bearing, startDistance);
                 }
                 else
                 {
-                    start = ViewpointMath.Facing("start", "Floor edge", "start", centre, 180f - yawOffset, EdgeDistance);
+                    start = ViewpointMath.Facing("start", "Floor edge", "start", stage, 180f - yawOffset, startDistance);
                 }
             }
 

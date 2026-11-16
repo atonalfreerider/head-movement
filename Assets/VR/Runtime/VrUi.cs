@@ -128,6 +128,8 @@ namespace HmVr
         public bool Interactive = true;
         /// <summary>a panel attached to a hand is never poked or pointed at by that same hand</summary>
         public Hand? AttachedTo;
+        /// <summary>a panel that belongs to the dance world (the chapter ring's controls): it stays with the dance when the rig moves</summary>
+        public bool WorldFixed;
         public readonly List<VrWidget> Widgets = new();
         public RectTransform Content { get; private set; }
         public Image Background { get; private set; }

@@ -29,6 +29,7 @@ namespace HmVr
         public VrPerf Perf { get; private set; }
         public VrHud Hud { get; private set; }
         public VrSplash Splash { get; private set; }
+        public VrChapterRing Ring { get; private set; }
         public bool Xr { get; private set; }
         public int LessonStarts, LessonEnds;
         public string LastLesson;
@@ -66,6 +67,7 @@ namespace HmVr
             Perf = root.AddComponent<VrPerf>();
             Hud = root.AddComponent<VrHud>();
             Splash = root.AddComponent<VrSplash>();
+            Ring = root.AddComponent<VrChapterRing>();
             HeadMovement.AsyncLoad = true; // a lesson loads in slices behind the splash (the main thread keeps rendering)
 
             Menu.OnExitVr = () =>
@@ -77,7 +79,9 @@ namespace HmVr
             Menu.ToggleHanded = () => Input.Dominant = Input.Dominant.Other();
             HandPanel.MenuOpen = () => Menu.IsOpen;
             HandPanel.OnLibrary = () => VrFilm.BackToLibrary();
-            Wrist.Available = () => VrFilm.InLesson;
+            // owner 2026-11-15: in a lesson the menu lives ONLY on the left wrist (VrHandPanel); the back-of-wrist button that opened the
+            // menu arc in front of the user is retired, the arc is the lobby's library only
+            Wrist.Available = () => false;
             Wrist.OnPressed = () =>
             {
                 if (!Menu.IsOpen)
@@ -182,6 +186,22 @@ namespace HmVr
             else Rig.ClearPlacement();
             HandPanel.ShowChapters = HandPanel.ShowViews = false;
             Menu.Close();
+            VrSkeletonPref.Apply(); // the viewer's permanent physics / rhythm choice, held for the whole lesson
+            Debug.Log($"VrSession: lesson '{LastLesson}' starts in {(VrSkeletonPref.Physics ? "physics" : "rhythm")} mode; dance footprint "
+                      + MiniJsonish(VrStage.State(HeadMovement.Instance)));
+        }
+
+        static string MiniJsonish(Dictionary<string, object> d)
+        {
+            System.Text.StringBuilder b = new();
+            foreach (KeyValuePair<string, object> kv in d)
+            {
+                b.Append(kv.Key).Append('=');
+                b.Append(kv.Value is float[] a ? "(" + string.Join(", ", System.Array.ConvertAll(a, x => x.ToString("0.00"))) + ")" : kv.Value is float f ? f.ToString("0.00") : kv.Value?.ToString());
+                b.Append(' ');
+            }
+
+            return b.ToString().TrimEnd();
         }
 
         void OnLessonEnd()
@@ -217,6 +237,7 @@ namespace HmVr
         public void Teardown()
         {
             tornDown = true;
+            VrSkeletonPref.Release();
             SmplxAvatar.SkeletonsOverBodies = skeletonsWere;
             Dancer.SetSolidSkeleton(false);
             HeadMovement.AsyncLoad = false;
@@ -244,7 +265,8 @@ namespace HmVr
                 ["pointers"] = Pointers?.State(), ["menu"] = Menu?.State(), ["handPanel"] = HandPanel?.State(),
                 ["captions"] = new Dictionary<string, object>
                     { ["enabled"] = Captions != null && Captions.Enabled, ["hasTranscript"] = Captions != null && Captions.HasTranscript, ["alpha"] = Captions?.Alpha ?? 0f, ["text"] = Captions?.CurrentText, ["word"] = Captions?.CurrentWord },
-                ["display"] = Display?.State_(), ["placement"] = Placement?.State(), ["perf"] = Perf?.Summary(), ["hud"] = Hud?.State(), ["splash"] = Splash?.State(), ["skeletonsOverBodies"] = SmplxAvatar.SkeletonsOverBodies,
+                ["display"] = Display?.State_(), ["placement"] = Placement?.State(), ["ring"] = Ring?.State(), ["skeleton"] = VrSkeletonPref.Physics ? "physics" : "rhythm",
+                ["footprint"] = VrFilm.InLesson ? VrStage.State(HeadMovement.Instance) : null, ["perf"] = Perf?.Summary(), ["hud"] = Hud?.State(), ["splash"] = Splash?.State(), ["skeletonsOverBodies"] = SmplxAvatar.SkeletonsOverBodies,
                 ["wristButtonAlpha"] = Wrist?.Alpha ?? 0f, ["suppressedCanvases"] = suppressed.Count, ["quality"] = VrQuality.State(), ["hands"] = (Input?.Source as XrInputSource)?.HandsStatus
             };
             if (VrFilm.InLesson)

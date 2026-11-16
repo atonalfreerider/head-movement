@@ -72,13 +72,28 @@ namespace HmVr
 
         public static void NextChapter()
         {
+            VrPerf.NoteSeek();
             if (Bar != null) Bar.NextChapter();
         }
 
         public static void PreviousChapter()
         {
+            VrPerf.NoteSeek();
             if (Bar != null) Bar.PreviousChapter();
         }
+
+        /// <summary>the speed button's next rate: 1 -> 0.5 -> 0.25 -> 0.1 -> 1 (any other rate goes to 0.5)</summary>
+        public static float NextSlowRate(float rate)
+        {
+            for (int i = 0; i < SlowRates.Length; i++)
+            {
+                if (Mathf.Abs(rate - SlowRates[i]) < 0.001f) return SlowRates[(i + 1) % SlowRates.Length];
+            }
+
+            return SlowRates[1];
+        }
+
+        public static void CycleRate() => SetRate(NextSlowRate(Rate));
 
         public static void GoToChapter(int i)
         {
@@ -101,6 +116,7 @@ namespace HmVr
         public static void ScrubTo(float u)
         {
             if (Director == null) return;
+            VrPerf.NoteSeek();
             Director.Seek(Mathf.Clamp01(u) * Director.FilmDuration);
         }
 

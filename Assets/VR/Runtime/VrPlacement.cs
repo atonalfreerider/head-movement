@@ -7,18 +7,12 @@ namespace HmVr
     /// Where the dance stands in the user's real room (passthrough mixed reality). Placed once at the start, then moved only by the user's
     /// pinches (owner 2026-11-15): ONE pinch and drag slides the floor (x, z), TWO pinches turn it about the hands' midpoint; never a scale,
     /// never a height change (DancePlacement has neither). A pinch that starts over a panel or with the palm menu up is not a grab.
-    /// The start placement:
-    ///   - The capture's world origin is mapped ONCE, when the lesson starts, to the origin (0, 0, 0) of the headset's tracking floor
-    ///     (the Floor tracking origin: the centre of the Meta world floor), the capture's floor (y = 0) on the real floor, scale exactly 1.0.
-    ///   - Nothing but the user's pinches moves it: it never drifts, re-centres or follows anything. The dancers keep their own
-    ///     captured motion and travel across the floor around that origin (nothing cancels or re-centres their root motion).
-    ///   - The one static offset allowed: a constant per lesson that puts the dance around the floor centre - the dancers' mean floor position
-    ///     over the whole take (computed once at load) for a capture without its own origin, zero for a capture whose own origin (capture.json
-    ///     "origin") already is that mean (the newer takes).
-    ///   - A constant turn about the vertical axis is applied with it so the dancers' front (the start vantage's side) faces where the user
-    ///     stands at the start.
-    ///   - Only a teleport moves the origin relative to the user (immersive mode); in passthrough teleport is OFF (the user walks), so the
-    ///     origin never moves at all.
+    /// The start placement (owner 2026-11-15: the dance centre in the centre-front of the user):
+    ///   - Once, when the lesson starts and the head is tracked, the centre of the WHOLE dance (its floor footprint, VrStage) is put straight
+    ///     ahead of the user's gaze at FootprintMath.ViewDistance (outside the 3.5 m chapter ring and the dancers' travel, at most 6 m), the
+    ///     capture's floor (y = 0) on the real floor, scale exactly 1.0, turned so the dancers' front (the start vantage's side) faces the user.
+    ///   - Nothing but the user's pinches moves it afterwards: it never drifts, re-centres or follows anything. The dancers keep their own
+    ///     captured motion and travel across the floor around that centre (nothing cancels or re-centres their root motion).
     /// The dance itself is not moved: the VR rig carries the inverse of the placement (VrRig.ApplyPlacement), so every object of the viewer
     /// stays where the capture put it. When the headset recentres its tracking space the dance recentres with it (docs/QUEST.md).
     /// </summary>
@@ -96,6 +90,8 @@ namespace HmVr
 
             if (!Active)
             {
+                // wait for a real head pose: before the first one the head is the default (0, 1.6, 0) looking along +Z
+                if (!input.Source.IsSimulated && rig.HeadStatus != "tracked") return;
                 Active = true;
                 PlaceOnce();
             }
@@ -185,22 +181,16 @@ namespace HmVr
         void PlaceOnce()
         {
             HeadMovement hm = HeadMovement.Instance;
-            Vector2 offset = Vector2.zero;
-            string source = "none";
-            if (string.Equals(DanceOrigin.Source, "capture.json origin"))
-            {
-                source = "the capture's own origin is the dancers' mean floor position";
-            }
-            else if (MeanFloorPosition(hm, out Vector2 mean))
-            {
-                offset = mean;
-                source = "mean floor position of the dancers over the whole take";
-            }
-
-            StaticOffset = offset;
-            OffsetSource = source;
-            // the front: the side the start vantage looks from; the dance is turned once so that side faces where the user stands now
-            Vector3 pivot = new(offset.x, 0f, offset.y);
+            // the centre of the WHOLE dance (its floor footprint) goes straight ahead of the user's gaze, far enough that the user stands
+            // outside the 3.5 m chapter ring and the dancers' travel (owner 2026-11-15: "intelligent placement of the origin in the center
+            // front of the user")
+            DanceFootprint fp = VrStage.Footprint(hm);
+            Vector2 centre = fp.Samples > 0 ? fp.Centre : MeanFloorPosition(hm, out Vector2 mean) ? mean : Vector2.zero;
+            float distance = fp.Samples > 0 ? FootprintMath.ViewDistance(fp) : 2.2f;
+            StaticOffset = centre;
+            OffsetSource = fp.Samples > 0 ? $"footprint centre of the whole dance, {distance:0.00} m ahead of the user" : "mean floor position (no footprint)";
+            Vector3 pivot = new(centre.x, 0f, centre.y);
+            // the front: the side the start vantage looks from; that side faces the user
             float front = 180f;
             VrLocomotion loc = VrLocomotion.Instance;
             if (loc != null)
@@ -216,16 +206,14 @@ namespace HmVr
             }
 
             Vector3 head = rig.HeadReal;
-            Vector2 toUser = new(head.x, head.z);
-            float userBearing = toUser.magnitude > 0.7f ? PlacementMath.Bearing(toUser) : PlacementMath.Wrap(rig.HeadRealYawDeg + 180f);
-            DancePlacement p = new() { Anchor = Vector2.zero, Pivot = pivot, YawDeg = PlacementMath.Wrap(userBearing - front) };
+            DancePlacement p = PlacementMath.Default(head, rig.HeadRealYawDeg, pivot, front, distance);
             Current = p;
             rig.ApplyPlacement(p);
             Placements++;
-            Vector2 o = p.ToReal(Vector2.zero);
-            Debug.Log($"VrPlacement: lesson '{VrFilm.Entry?.Id}' origin LOCKED: static offset ({offset.x:0.000}, {offset.y:0.000}) m [{source}] stands at the tracking floor origin (0, 0, 0); "
-                + $"the capture's world origin (0,0,0) stands at ({o.x:0.000}, 0, {o.y:0.000}) in the room; turned {p.YawDeg:0.0} deg (front faces the user at {head.x:0.00}, {head.z:0.00}); "
-                + $"scale {p.Scale:0.000} {(Mathf.Approximately(p.Scale, 1f) && Mathf.Approximately(rig.RigScale, 1f) ? "OK (exactly 1:1)" : "NOT 1:1")}; floor y {rig.FloorY:0.000}");
+            Vector2 c = p.Anchor;
+            Debug.Log($"VrPlacement: lesson '{VrFilm.Entry?.Id}' placed: the dance's centre ({centre.x:0.000}, {centre.y:0.000}) [{OffsetSource}] stands at ({c.x:0.000}, 0, {c.y:0.000}) "
+                + $"in the room, straight ahead of the user at ({head.x:0.00}, {head.z:0.00}) looking {rig.HeadRealYawDeg:0.0} deg; footprint radius {fp.Radius:0.00} m (p98 {fp.RadiusP98:0.00}), "
+                + $"chapter ring {VrChapterRing.Radius:0.0} m; turned {p.YawDeg:0.0} deg; scale {p.Scale:0.000} {(Mathf.Approximately(p.Scale, 1f) && Mathf.Approximately(rig.RigScale, 1f) ? "OK (exactly 1:1)" : "NOT 1:1")}; floor y {rig.FloorY:0.000}");
         }
 
         public Dictionary<string, object> State()

@@ -258,6 +258,8 @@ namespace HmVr
             if ((headBefore - headAfter).sqrMagnitude < 1e-10f && Quaternion.Angle(turn, Quaternion.identity) < 1e-3f) return;
             foreach (VrPanel panel in VrPanel.All)
             {
+                // a hand's panel follows its hand, a world panel stays with the dance: neither is carried with the head
+                if (panel.AttachedTo.HasValue || panel.WorldFixed) continue;
                 Transform t = panel.transform;
                 t.SetPositionAndRotation(headAfter + turn * (t.position - headBefore), turn * t.rotation);
             }

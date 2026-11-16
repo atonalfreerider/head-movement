@@ -31,6 +31,7 @@ namespace HmVr
         public bool Cancelled;
 
         readonly SnapTurnGesture snap = new();
+        bool snapLatched;
         readonly Vector3[] arc = new Vector3[80];
         LineRenderer arcLine;
         Transform marker;
@@ -159,7 +160,11 @@ namespace HmVr
         void UpdateSnapTurn(VrInput input, VrRig rig, VrPointers ptrs, float dt)
         {
             VrHand hand = input.OffHand;
-            bool gate = hand.Tracked && hand.Pinch.Held && !hand.Palm.Facing && !ptrs.OverUi(hand.Side) && !TeleportAiming;
+            // decided when the pinch closes (as teleport and the floor grab are): a pinch that began on a panel, the wrist menu or the
+            // chapter ring and then drifted off it never becomes a turn
+            if (hand.Pinch.Down) snapLatched = !hand.Palm.Facing && !ptrs.OverUi(hand.Side) && !TeleportAiming;
+            if (!hand.Pinch.Held) snapLatched = false;
+            bool gate = hand.Tracked && hand.Pinch.Held && snapLatched && !hand.Palm.Facing && !TeleportAiming;
             Vector3 local = Quaternion.Inverse(input.Frame.HeadYaw) * (hand.PinchPoint - input.Frame.HeadPosition);
             int step = snap.Update(gate, local.x, dt);
             if (step == 0) return;

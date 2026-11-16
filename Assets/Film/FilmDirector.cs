@@ -38,8 +38,12 @@ public class FilmDirector : MonoBehaviour
     public const float LayerBlendSeconds = 0.8f;
 
     /// <summary>VR mode (Assets/VR): the viewer's head is the camera. The film then never moves, re-lenses or parks any camera, and shows no phone video over the view
-    /// (the POV shots become the 3D scene seen from where the user stands); layers, call-outs, captions and the clock run as always.</summary>
+    /// (the POV shots become the 3D scene seen from where the user stands); layers, captions and the clock run as always, the 3D step call-outs
+    /// (annotations) do not (owner 2026-11-15: VR plays the dance itself, with no direction to steps).</summary>
     public static bool HeadIsCamera;
+
+    /// <summary>the viewer's own physics / rhythm choice (the VR wrist toggle): when set, no segment's skeleton_mode / physics layer overrides it</summary>
+    public static bool? PhysicsOverride;
 
     FilmDirection direction;
     FilmClock clock;
@@ -521,7 +525,7 @@ public class FilmDirector : MonoBehaviour
         if (stopped || !Loaded || appliedFrames == 0) return;
         Camera c = cam != null ? cam : DanceText.ViewCamera;
         overlay.Tick(filmTime, DanceTime);
-        annotations.Tick(filmTime, DanceTime, c);
+        if (!HeadIsCamera) annotations.Tick(filmTime, DanceTime, c); // VR plays the dance itself: no step call-outs (owner 2026-11-15)
     }
 
     void Apply(float film)
@@ -934,7 +938,7 @@ public class FilmDirector : MonoBehaviour
             SetHead("grid", l.Grid);
             if (l.Room.HasValue) SetHead("room", l.Room.Value);
             SetHead("timing", l.Timing);
-            SetHead("physics", l.Physics);
+            SetHead("physics", PhysicsOverride ?? l.Physics);
             SetHead("tension", l.Tension);
             SetHead("avatars", true);
             SetHead("hud", false);

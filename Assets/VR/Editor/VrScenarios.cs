@@ -257,8 +257,9 @@ namespace HmVr.Editor
             foreach (float w in Until(() => S.HandPanel.Shown, 3f, "the hand panel shows when the left palm is raised")) yield return w;
             yield return 0.6f;
             Vector3 panelPos = S.HandPanel.Main.transform.position;
-            Vector3 headP = VrRig.Instance.Head.position;
-            Add("the hand panel opens in front of the user (anchored), not on the hand", new Vector2(panelPos.x - headP.x, panelPos.z - headP.z).magnitude > 0.6f && panelPos.y < headP.y + 0.05f, $"{new Vector2(panelPos.x - headP.x, panelPos.z - headP.z).magnitude:0.00} m ahead, {panelPos.y - headP.y:0.00} m from eye height");
+            Vector3 wristP = S.Input.Left.State.Wrist;
+            Add("the hand panel rides on the LEFT wrist (not in front of the user)", Vector3.Distance(panelPos, wristP) < 0.25f, $"{Vector3.Distance(panelPos, wristP):0.00} m from the left wrist");
+            Add("it faces the eyes", Vector3.Angle(S.HandPanel.Main.transform.forward, panelPos - VrRig.Instance.Head.position) < 35f, $"{Vector3.Angle(S.HandPanel.Main.transform.forward, panelPos - VrRig.Instance.Head.position):0.0} deg");
 
             // play / pause by poke
             bool pausedBefore = VrFilm.Paused;
@@ -407,24 +408,13 @@ namespace HmVr.Editor
             foreach (float w in PokeClick("tab views")) yield return w;
             Sim.PalmUp(Hand.Left, false);
             yield return 1.5f;
-            Add("the hand panel stays when the palm is lowered (anchored)", S.HandPanel.Shown, $"alpha {S.HandPanel.Alpha:0.00}");
-            foreach (float w in PokeClickStable("close")) yield return w;
-            yield return 0.6f;
-            Add("the Close button hides the panel", !S.HandPanel.Shown, $"alpha {S.HandPanel.Alpha:0.00}");
+            Add("the wrist panel goes when the palm is lowered (it appears nowhere but on the wrist)", !S.HandPanel.Shown, $"alpha {S.HandPanel.Alpha:0.00}");
 
             // the anchored panel: from a step back it is out of arm's reach and works with the pointing ray and a pinch
-            Stage("anchored panel, far ray and pinch");
+            Stage("wrist panel: poke and poke-drag");
             Sim.PalmUp(Hand.Left, true);
             yield return 1.2f;
-            Add("the panel is anchored", S.HandPanel.Anchored);
-            Sim.PalmUp(Hand.Left, false);
-            yield return 1.5f;
-            Add("an anchored panel stays when the palm is lowered", S.HandPanel.Shown, $"alpha {S.HandPanel.Alpha:0.00}");
-            Sim.Rest(Hand.Right);
-            Vector3 stepBack = -VrRig.Instance.Head.forward;
-            stepBack.y = 0f;
-            VrRig.Instance.transform.position += stepBack.normalized * 1.0f; // the user walks back a metre
-            yield return 0.8f;
+            Add("the panel is on the wrist, never anchored in the room", !S.HandPanel.Anchored && S.HandPanel.Shown);
             if (VrFilm.Time > VrFilm.Duration - 14f)
             {
                 VrFilm.SeekTo(VrFilm.Duration * 0.3f); // a short film may have played to its end by now: +5 s needs room
@@ -432,34 +422,34 @@ namespace HmVr.Editor
             }
 
             float tFar = VrFilm.Time;
-            foreach (float w in FarClick("forward 5")) yield return w;
-            Add("far ray + pinch on +5 s", VrFilm.Time - tFar > 4.5f && VrFilm.Time - tFar < 9f, $"{tFar:0.0} -> {VrFilm.Time:0.0}");
-            VrWidget fs = W("scrubber");
-            Vector3 AtU(float u) => fs.Panel.Content.TransformPoint(new Vector3(fs.RectMm.xMin + u * fs.RectMm.width, fs.RectMm.center.y, 0f));
+            foreach (float w in PokeClick("forward 5")) yield return w;
+            Add("poke on +5 s (the wrist panel is within reach)", VrFilm.Time - tFar > 4.5f && VrFilm.Time - tFar < 9f, $"{tFar:0.0} -> {VrFilm.Time:0.0}");
+            // the scrubber: press the fingertip in and slide it along (a slider follows a pressed fingertip)
             float durFar = VrFilm.Duration;
-            Sim.AimAt(Hand.Right, AtU(0.7f), 0f);
-            yield return 0.7f;
-            Sim.SetPinch(Hand.Right, 1f);
+            Vector3 AtU(float u)
+            {
+                VrWidget fs = W("scrubber");
+                return fs.Panel.Content.TransformPoint(new Vector3(fs.RectMm.xMin + u * fs.RectMm.width, fs.RectMm.center.y, 0f));
+            }
+
+            Vector3 Nrm() => W("scrubber").Panel.Plane.Normal;
+            Sim.PokeAt(Hand.Right, AtU(0.7f), Nrm(), 0.07f);
+            yield return 0.45f;
+            Sim.PokeAt(Hand.Right, AtU(0.7f), Nrm(), -0.01f);
             yield return 0.35f;
-            Add("a pinch on the scrubber holds the film", FilmDirector.Instance.Scrubbing, "scrubbing=" + FilmDirector.Instance.Scrubbing);
+            Add("pressing the scrubber holds the film", FilmDirector.Instance.Scrubbing, "scrubbing=" + FilmDirector.Instance.Scrubbing);
             for (int i = 1; i <= 8; i++)
             {
-                fs = W("scrubber");
-                Sim.AimAt(Hand.Right, AtU(Mathf.Lerp(0.7f, 0.3f, i / 8f)), 1f);
+                Sim.PokeAt(Hand.Right, AtU(Mathf.Lerp(0.7f, 0.3f, i / 8f)), Nrm(), -0.01f);
                 yield return 0.15f;
             }
 
             yield return 0.3f;
-            Add("pinch-dragging the scrubber to 30 %", Mathf.Abs(VrFilm.Time - 0.3f * durFar) < 0.05f * durFar, $"time {VrFilm.Time:0.0} of {durFar:0.0}");
-            Sim.SetPinch(Hand.Right, 0f);
+            Add("sliding the fingertip drags the scrubber to 30 %", Mathf.Abs(VrFilm.Time - 0.3f * durFar) < 0.05f * durFar, $"time {VrFilm.Time:0.0} of {durFar:0.0}");
+            Sim.PokeAt(Hand.Right, AtU(0.3f), Nrm(), 0.12f);
             yield return 0.6f;
-            Add("opening the pinch ends the scrub", !FilmDirector.Instance.Scrubbing, "scrubbing=" + FilmDirector.Instance.Scrubbing);
+            Add("lifting the fingertip ends the scrub", !FilmDirector.Instance.Scrubbing, "scrubbing=" + FilmDirector.Instance.Scrubbing);
             Sim.Rest(Hand.Right);
-            VrRig.Instance.transform.position -= stepBack.normalized * 1.0f;
-            Sim.PalmUp(Hand.Left, true);
-            yield return 1.2f;
-            Vector3 hpBack = VrRig.Instance.Head.position;
-            Add("raising the palm after walking back recalls the panel in front of the user", new Vector2(S.HandPanel.AnchorPosition.x - hpBack.x, S.HandPanel.AnchorPosition.z - hpBack.z).magnitude < 1.2f, $"{new Vector2(S.HandPanel.AnchorPosition.x - hpBack.x, S.HandPanel.AnchorPosition.z - hpBack.z).magnitude:0.00} m from the head");
             Sim.PalmUp(Hand.Left, false);
             yield return 1.5f;
 
@@ -504,37 +494,19 @@ namespace HmVr.Editor
 
             foreach (float w in PassthroughStage()) yield return w;
 
-            // wrist button
-            Stage("wrist menu button and back to the library");
+            // the menu lives only on the left wrist: no back-of-wrist button, no menu arc over the lesson
+            Stage("menu only on the left wrist, back to the library");
             Sim.Rest(Hand.Left);
             Sim.HoldOut(Hand.Left, -0.05f, 0f);
             yield return 1.0f;
-            Add("the wrist menu button is shown on the back of the left hand", S.Wrist.Alpha > 0.5f, $"alpha {S.Wrist.Alpha:0.00}");
-            if (S.Wrist.Alpha > 0.5f)
-            {
-                bool wasPlaying = VrFilm.Playing;
-                foreach (float w in PokeClick("menu")) yield return w;
-                Add("poking the wrist button opens the menu over the lesson", S.Menu.IsOpen && S.Menu.OverLesson, $"open={S.Menu.IsOpen} over={S.Menu.OverLesson}");
-                Add("the lesson pauses behind the menu", VrFilm.Paused || !wasPlaying, $"paused={VrFilm.Paused}");
-                yield return 0.8f;
-                yield return 0.6f;
-                foreach (float w in FarClick("resume")) yield return w;
-                Add("Resume closes the menu and plays on", !S.Menu.IsOpen && (VrFilm.Playing || !wasPlaying), $"open={S.Menu.IsOpen} playing={VrFilm.Playing}");
-                foreach (float w in PokeClick("menu")) yield return w;
-                yield return 0.8f;
-            }
-
-            if (S.Menu.IsOpen)
-            {
-                foreach (float w in FarClick("back to library")) yield return w;
-            }
-            else
-            {
-                Sim.PalmUp(Hand.Left, true);
-                yield return 1.0f;
-                foreach (float w in PokeClick("library")) yield return w;
-            }
-
+            Add("no back-of-wrist menu button in a lesson (the menu is the wrist panel)", S.Wrist.Alpha < 0.05f, $"alpha {S.Wrist.Alpha:0.00}");
+            Add("no menu over the lesson", !S.Menu.IsOpen, $"open={S.Menu.IsOpen}");
+            Sim.Rest(Hand.Left);
+            yield return 0.6f;
+            Sim.PalmUp(Hand.Left, true);
+            foreach (float w in Until(() => S.HandPanel.Shown, 4f, "the wrist panel shows for Back to library")) yield return w;
+            yield return 0.4f;
+            foreach (float w in PokeClickStable("library")) yield return w; // the click ends the lesson: the panel goes with it
             foreach (float w in Until(() => lib.State == FilmLibrary.Mode.Library, 6f, "Back to library returns to the library")) yield return w;
             yield return 1.0f;
             Add("the lesson is stopped cleanly", FilmDirector.Instance == null && FilmPlaybackBar.Instance == null, $"director={(FilmDirector.Instance != null)} bar={(FilmPlaybackBar.Instance != null)}");
@@ -546,7 +518,7 @@ namespace HmVr.Editor
             Stage("exit VR");
             Sim.Rest(Hand.Left);
             Sim.Rest(Hand.Right);
-            yield return 0.5f;
+            yield return 1.5f; // the right hand comes back from poking the wrist panel: its pointing ray settles before it aims
             foreach (float w in FarClick("exit vr")) yield return w;
             foreach (float w in Until(() => !VrMode.Active, 5f, "Exit VR leaves VR mode")) yield return w;
             yield return 1.0f;
@@ -608,9 +580,14 @@ namespace HmVr.Editor
             Add("the real floor is the capture's floor (rig on y = 0)", Mathf.Abs(rig.FloorY) < 1e-4f, $"rig floor y {rig.FloorY:0.0000}");
             Add("scale is exactly 1.0", pl.Current.Scale == 1f && rig.RigScale == 1f && rig.transform.lossyScale == Vector3.one, $"placement {pl.Current.Scale:0.000000} rig {rig.RigScale:0.000000}");
 
-            // the origin: the capture's static offset stands at the tracking floor (0,0,0), locked
+            // the start placement: the dance's footprint centre stands straight ahead of the user's gaze, outside the chapter ring
             Vector2 stand = pl.Current.ToReal(pl.StaticOffset);
-            Add("the static offset stands at the tracking floor origin (0,0,0)", stand.magnitude < 1e-3f, $"offset ({pl.StaticOffset.x:0.00},{pl.StaticOffset.y:0.00}) [{pl.OffsetSource}] stands at ({stand.x:0.0000},{stand.y:0.0000})");
+            Vector3 headReal = rig.HeadReal;
+            Vector2 toCentre = stand - new Vector2(headReal.x, headReal.z);
+            float yawReal = rig.HeadRealYawDeg;
+            Vector2 gazeReal = new(Mathf.Sin(yawReal * Mathf.Deg2Rad), Mathf.Cos(yawReal * Mathf.Deg2Rad));
+            Add("the dance's centre stands straight ahead of the user (centre-front)", Vector2.Angle(gazeReal, toCentre) < 5f, $"{Vector2.Angle(gazeReal, toCentre):0.0} deg off the gaze [{pl.OffsetSource}]");
+            Add("the user starts outside the 3.5 m chapter ring", toCentre.magnitude >= VrChapterRing.Radius + 0.3f && toCentre.magnitude <= 6.05f, $"{toCentre.magnitude:0.00} m from the centre");
             Vector3 origin0 = pl.OriginReal;
             Vector3 rigPos0 = rig.transform.position;
             Quaternion rigRot0 = rig.transform.rotation;
@@ -656,81 +633,81 @@ namespace HmVr.Editor
             foreach (SmplxAvatar a in hm.Avatars.Values) Add($"{a.DancerRole}: the body is translucent ({a.Opacity:0.00}) and the skeleton does not depend on it", Dancer.SolidSkeletonOn && !SmplxAvatar.SkeletonsOverBodies, $"opacity {a.Opacity:0.00}");
             Add("the HUD, floor craft and overlays keep their own opacity (no global alpha)", true);
 
-            // anchored panels: opened once in front, fixed while the head turns for 10 s
-            Stage("anchored panels");
-            Sim.PalmUp(Hand.Left, false);
-            yield return 1.0f;
-            S.HandPanel.Close();
-            yield return 0.8f;
+            // the wrist panel tracks the left wrist: it moves with the hand, not with the head
+            Stage("wrist panel tracks the left wrist");
             Sim.HeadYawLocalDeg = 0f;
+            Sim.PalmUp(Hand.Left, true);
+            foreach (float w in Until(() => S.HandPanel.Shown, 3f, "raising the left palm shows the wrist panel")) yield return w;
+            yield return 0.8f;
+            Vector3 wr0 = S.Input.Left.State.Wrist, hp0 = S.HandPanel.AnchorPosition;
+            Sim.HeadYawLocalDeg = 25f;
+            yield return 1.2f;
+            Vector3 wr1 = S.Input.Left.State.Wrist, hp1 = S.HandPanel.AnchorPosition;
+            Add("the panel keeps its place on the wrist while the head turns", Vector3.Distance(hp1 - wr1, hp0 - wr0) < 0.06f, $"offset changed {Vector3.Distance(hp1 - wr1, hp0 - wr0):0.000} m");
+            Add("the panel stays within reach of the wrist", Vector3.Distance(hp1, wr1) < 0.25f, $"{Vector3.Distance(hp1, wr1):0.00} m");
+            Sim.HeadYawLocalDeg = 0f;
+            Sim.PalmUp(Hand.Left, false);
+            yield return 1.6f;
+            Add("and it is gone with the palm down", !S.HandPanel.Shown, $"alpha {S.HandPanel.Alpha:0.00}");
+
+            // physics / rhythm: a permanent toggle on the wrist that no lesson segment overrides
+            Stage("physics / rhythm toggle (permanent)");
+            bool phys0 = VrSkeletonPref.Physics;
+            Sim.PalmUp(Hand.Left, true);
+            yield return 1.0f;
+            foreach (float w in PokeClick("skeleton mode")) yield return w;
             yield return 0.4f;
-            Sim.PalmUp(Hand.Left, true);
-            foreach (float w in Until(() => S.HandPanel.Shown, 3f, "raising the palm opens the panel")) yield return w;
-            yield return 0.8f;
-            Vector3 head = rig.Head.position;
-            Vector3 hp0 = S.HandPanel.AnchorPosition;
-            Vector2 flat = new(hp0.x - head.x, hp0.z - head.z);
-            Vector3 cc = VrViewpoints.CoupleCentre(hm);
-            Vector3 gazeNow = rig.Head.forward;
-            gazeNow.y = 0f;
-            Vector3 plainSpot = head + gazeNow.normalized * 0.9f;
-            bool amongDancers = VrAnchor.WouldMove(plainSpot, head);
-            Add("the panel opens about 0.9 m ahead of the head (or, among the dancers, out at their edge)", amongDancers ? flat.magnitude > 0.7f : flat.magnitude > 0.7f && flat.magnitude < 1.2f, $"{flat.magnitude:0.00} m{(amongDancers ? " (pushed out of the dancers)" : "")}");
-            Add("at chest-to-eye height", hp0.y < head.y + 0.05f && hp0.y > head.y - 0.55f, $"panel y {hp0.y:0.00} head y {head.y:0.00}");
-            Vector3 toPanel = hp0 - head;
-            toPanel.y = 0f;
-            Vector3 gaze = rig.Head.forward;
-            gaze.y = 0f;
-            if (!amongDancers) Add("straight ahead of the gaze", Vector3.Angle(gaze, toPanel) < 15f, $"{Vector3.Angle(gaze, toPanel):0.0} deg off");
-            Vector3 fwdP = S.HandPanel.Main.transform.forward;
-            Add("facing the user", Vector3.Angle(fwdP, hp0 - head) < 30f, $"{Vector3.Angle(fwdP, hp0 - head):0.0} deg");
-            Add("not inside the dancers (unless the user stands among them)", new Vector2(hp0.x - cc.x, hp0.z - cc.z).magnitude >= VrAnchor.DancerRadius - 0.02f || new Vector2(head.x - cc.x, head.z - cc.z).magnitude < VrAnchor.DancerRadius + 0.7f, $"{new Vector2(hp0.x - cc.x, hp0.z - cc.z).magnitude:0.00} m from the couple");
+            Add("the wrist toggle switches the mode", VrSkeletonPref.Physics != phys0 && hm.SkeletonMode == (VrSkeletonPref.Physics ? SkeletonStyle.Mode.Physics : SkeletonStyle.Mode.Rhythm), $"pref {VrSkeletonPref.Physics}, viewer {hm.SkeletonMode}");
+            Add("it is remembered", PlayerPrefs.GetString(VrSkeletonPref.PrefKey, "rhythm") == (VrSkeletonPref.Physics ? "physics" : "rhythm"));
+            VrFilm.SeekTo(VrFilm.Duration * 0.6f);
+            yield return 1.5f;
+            VrFilm.SeekTo(VrFilm.Duration * 0.15f);
+            yield return 1.5f;
+            Add("no lesson segment overrides it", hm.SkeletonMode == (VrSkeletonPref.Physics ? SkeletonStyle.Mode.Physics : SkeletonStyle.Mode.Rhythm), $"viewer {hm.SkeletonMode}");
+            foreach (float w in PokeClick("skeleton mode")) yield return w;
+            yield return 0.4f;
+            Add("toggling again restores it", VrSkeletonPref.Physics == phys0, $"pref {VrSkeletonPref.Physics}");
             Sim.PalmUp(Hand.Left, false);
             yield return 0.8f;
-            for (int i = 0; i < 4; i++)
+
+            // the chapter ring: 3.5 m around the dance, 3.5 m up, the marker opposite the user, pinch to seek
+            Stage("chapter ring");
+            VrChapterRing ring = VrChapterRing.Instance;
+            Add("the chapter ring is shown in the lesson", ring != null && ring.Visible);
+            if (ring != null && ring.Visible)
             {
-                Sim.HeadYawLocalDeg = (i % 2 == 0 ? 75f : -75f);
-                yield return 2.5f;
+                Vector3 hc = rig.Head.position;
+                float opp = Mathf.Abs(Mathf.DeltaAngle(ring.MarkerBearingDeg, ViewpointMath.Bearing(hc, ring.Centre)));
+                Add("the marker is opposite the user across the dance centre", opp < 6f, $"{opp:0.0} deg off");
+                float ahead = Mathf.DeltaAngle(0f, 30f);
+                float tNow = VrFilm.Time;
+                Vector3 target = new Vector3(ring.Centre.x, VrChapterRing.Height, ring.Centre.z) + ViewpointMath.Dir(ring.MarkerBearingDeg + ahead) * VrChapterRing.Radius;
+                int seeks0 = ring.Seeks, drags0 = pl.Drags;
+                Sim.AimAt(Hand.Right, target, 0f);
+                yield return 0.7f;
+                Add("the ray finds the ring", ReferenceEquals(S.Pointers.Get(Hand.Right).WorldHover, ring), "world=" + (S.Pointers.Get(Hand.Right).WorldHover != null));
+                Sim.SetPinch(Hand.Right, 1f);
+                yield return 0.3f;
+                Sim.SetPinch(Hand.Right, 0f);
+                yield return 0.8f;
+                Add("a pinch on the ring seeks there", ring.Seeks == seeks0 + 1 && Mathf.Abs(VrFilm.Time - ring.LastSeekTo) < 1.5f, $"seeks {seeks0}->{ring.Seeks}, now {VrFilm.Time:0.0} target {ring.LastSeekTo:0.0} (was {tNow:0.0})");
+                Add("a ring pinch is not a floor drag", pl.Drags == drags0, $"drags {drags0}->{pl.Drags}");
+                Sim.Rest(Hand.Right);
+                yield return 0.5f;
+                float r0 = VrFilm.Rate;
+                foreach (float w in FarClick("ring speed")) yield return w;
+                Add("the ring's speed button steps the speed down", Mathf.Abs(VrFilm.Rate - VrFilm.NextSlowRate(r0)) < 0.001f, $"{r0} -> {VrFilm.Rate}");
+                foreach (float w in FarClick("ring speed")) yield return w;
+                foreach (float w in FarClick("ring speed")) yield return w;
+                foreach (float w in FarClick("ring speed")) yield return w;
+                Add("and back to 100 % after 1/2, 1/4, 1/10", Mathf.Abs(VrFilm.Rate - r0) < 0.001f, $"rate {VrFilm.Rate}");
+                bool pausedR = VrFilm.Paused;
+                foreach (float w in FarClick("ring pause")) yield return w;
+                Add("the ring's pause button pauses / plays", VrFilm.Paused != pausedR, $"paused {pausedR} -> {VrFilm.Paused}");
+                foreach (float w in FarClick("ring pause")) yield return w;
+                Sim.Rest(Hand.Right);
+                yield return 0.5f;
             }
-
-            Add("the panel did not move while the head turned for 10 s (no follow, no drift)", Vector3.Distance(S.HandPanel.AnchorPosition, hp0) < 1e-4f, $"moved {Vector3.Distance(S.HandPanel.AnchorPosition, hp0):0.000000} m");
-            Add("and it is still open with the palm down", S.HandPanel.Shown);
-            Sim.HeadYawLocalDeg = 60f;
-            yield return 0.6f;
-            Sim.PalmUp(Hand.Left, true);
-            yield return 1.2f;
-            Vector3 hp1 = S.HandPanel.AnchorPosition;
-            Vector3 toNew = hp1 - rig.Head.position;
-            toNew.y = 0f;
-            Vector3 gaze2 = rig.Head.forward;
-            gaze2.y = 0f;
-            Vector3 gazeFlat2 = rig.Head.forward;
-            gazeFlat2.y = 0f;
-            Vector3 plain2 = rig.Head.position + gazeFlat2.normalized * 0.9f;
-            bool among2 = VrAnchor.WouldMove(plain2, rig.Head.position);
-            Add("raising the palm again recalls it in front of the user", S.HandPanel.Recalls >= 1 && (among2 ? new Vector2(hp1.x - cc.x, hp1.z - cc.z).magnitude >= VrAnchor.DancerRadius - 0.02f : Vector3.Distance(hp1, hp0) > 0.3f && Vector3.Angle(gaze2, toNew) < 15f), $"moved {Vector3.Distance(hp1, hp0):0.00} m, recalls {S.HandPanel.Recalls}, {Vector3.Angle(gaze2, toNew):0.0} deg off the gaze{(among2 ? " (pushed out of the dancers)" : "")}");
-            Sim.PalmUp(Hand.Left, false);
-            Sim.HeadYawLocalDeg = 0f;
-            yield return 0.8f;
-            foreach (float w in PokeClickStable("close")) yield return w;
-            yield return 0.6f;
-            Add("the Close button closes it", !S.HandPanel.Shown, $"alpha {S.HandPanel.Alpha:0.00}");
-            Sim.Rest(Hand.Right);
-            yield return 0.6f;
-
-            // the menu over the lesson: anchored too
-            S.Menu.Open(true);
-            yield return 1.0f;
-            Vector3 mp0 = S.Menu.AnchorPosition;
-            Sim.HeadYawLocalDeg = 90f;
-            yield return 5f;
-            Add("the menu did not move while the head turned (anchored)", Vector3.Distance(S.Menu.AnchorPosition, mp0) < 1e-4f, $"moved {Vector3.Distance(S.Menu.AnchorPosition, mp0):0.000000} m");
-            Sim.PalmUp(Hand.Left, true);
-            yield return 1.2f;
-            Add("the palm recalls the menu in front of the user", S.Menu.Recalls >= 2 && Vector3.Distance(S.Menu.AnchorPosition, mp0) > 0.05f, $"moved {Vector3.Distance(S.Menu.AnchorPosition, mp0):0.00} m, recalls {S.Menu.Recalls}");
-            Sim.PalmUp(Hand.Left, false);
-            Sim.HeadYawLocalDeg = 0f;
-            yield return 0.6f;
 
             // captions: off by default, remembered, anchored
             Stage("captions off by default");
@@ -783,7 +760,10 @@ namespace HmVr.Editor
                 Add("Light: cheaper levels sooner, no tip glow", hair.enabled && hair.LodScale > 1.2f && hair.MinLod >= 1 && hair.TipGlow == 0f, $"lodScale {hair.LodScale} minLod {hair.MinLod} tips {hair.TipGlow}");
                 VrQuality.SetHair(HairLevel.Off, false);
                 yield return 0.3f;
-                Add("Off: nothing simulated or drawn", !hair.enabled && !hair.RendererVisible && !hair.GlowVisible, $"enabled={hair.enabled} drawn={hair.RendererVisible}");
+                if (VrQuality.SplatHairNeedsSimulation(hair))
+                    Add("Off: a splat dancer's bound hair keeps its simulation (the splats swing with it)", hair.enabled, $"enabled={hair.enabled}");
+                else
+                    Add("Off: nothing simulated or drawn", !hair.enabled && !hair.RendererVisible && !hair.GlowVisible, $"enabled={hair.enabled} drawn={hair.RendererVisible}");
                 VrQuality.SetHair(HairLevel.Full, false);
                 yield return 0.5f;
                 Add("Full again: hair back", hair.enabled && hair.Visible, $"enabled={hair.enabled}");

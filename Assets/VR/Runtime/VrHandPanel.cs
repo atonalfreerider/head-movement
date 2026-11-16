@@ -21,10 +21,10 @@ namespace HmVr
         VrWidget up, down, pageLabel;
         const float W = 420f, Row = 54f, Gap = 8f, Margin = 18f;
 
-        public VrListPanel(string name, string title, Transform parent)
+        public VrListPanel(string name, string title, Transform parent, float scale = 0.78f)
         {
             Title = title;
-            Panel = VrPanel.Create(name, new Vector2(W, 200f), parent, true, 0.78f);
+            Panel = VrPanel.Create(name, new Vector2(W, 200f), parent, true, scale);
             Panel.gameObject.SetActive(false);
         }
 
@@ -122,13 +122,13 @@ namespace HmVr
     }
 
     /// <summary>
-    /// The in-lesson controls, all hand input. A panel floats above the palm of the non-dominant hand while it is raised palm-up in view
-    /// (PalmDetector), and fades away when it is not; the other hand pokes it or points at it and pinches. It carries: play / pause,
-    /// slow motion (1x, 0.5x, 0.25x, 0.1x), 5 s back / forward, previous / next chapter, a pinch-drag scrubber with the chapter ticks, the
-    /// chapter's name and the time, and tabs for the chapter list, the viewpoint presets (with 45 degree turns), captions on / off and
-    /// Back to library. The panel is ANCHORED (VrAnchor): raising the off hand's palm opens it once in front of the user, at chest-to-eye
-    /// height, and it then stays exactly where it is until "Close" (or the lesson ends); raising the palm again recalls it (closes it and opens
-    /// it again in front of the user).
+    /// The in-lesson controls on the LEFT WRIST (owner 2026-11-15: the menu tracks the left wrist and appears nowhere else). While the left
+    /// hand is tracked and turned palm-up toward the face (PalmDetector) the panel rides on the wrist - posed from the wrist joints every frame
+    /// (WristPose, lightly smoothed against tracking jitter), facing the eyes - and it fades away as soon as the hand is lowered or lost; the
+    /// right hand pokes it or points at it and pinches (the left hand cannot press its own panel). It carries: play / pause, slow motion (1x,
+    /// 0.5x, 0.25x, 0.1x), 5 s back / forward, previous / next chapter, a pinch-drag scrubber with the chapter ticks, the chapter's name and
+    /// the time, and tabs for the chapter list, the viewpoint presets (with 45 degree turns), captions, the PHYSICS / RHYTHM mode (a permanent
+    /// setting, VrSkeletonPref) and Back to library.
     /// </summary>
     [DefaultExecutionOrder(150)]
     [AddComponentMenu("")]
@@ -136,8 +136,8 @@ namespace HmVr
     {
         public static VrHandPanel Instance { get; private set; }
 
-        /// <summary>the panel is open and stays where it was put (anchored)</summary>
-        public bool Anchored => open;
+        /// <summary>never anchored in the room any more: the panel lives on the left wrist</summary>
+        public bool Anchored => false;
         public int Recalls { get; private set; }
         public Vector3 AnchorPosition => anchor != null ? anchor.position : Vector3.zero;
         public bool Shown => alpha > 0.5f;
@@ -153,13 +153,19 @@ namespace HmVr
 
         VrPanel main;
         Transform anchor;
-        VrWidget playBtn, closeBtn, scrub, chapterLabel, timeLabel, cc, tabChapters, tabViews, library, slowNote;
+        VrWidget playBtn, skeletonBtn, scrub, chapterLabel, timeLabel, cc, tabChapters, tabViews, library, slowNote;
         VrWidget[] rateBtns = new VrWidget[4];
         Image pauseA, pauseB, playTri;
         float alpha;
-        bool open, needPlace, wasFacing;
+        bool open, posed;
+        float lastFacing = -10f;
+        Vector3 poseVel;
         int ticksFor = -1;
-        const float PanelW = 480f, PanelH = 350f, Scale = 0.78f, MmToM = 0.001f * Scale;
+        const float PanelW = 480f, PanelH = 350f, Scale = 0.5f, MmToM = 0.001f * Scale;
+        /// <summary>the panel's centre: this far out of the palm (toward the eyes) and this far from the wrist toward the elbow</summary>
+        public const float WristUpM = 0.11f, WristAlongM = 0.04f;
+        /// <summary>it stays this long after the palm stops facing (a glance away while poking does not drop it)</summary>
+        const float FacingGraceS = 0.6f;
 
         void Awake()
         {
@@ -168,13 +174,13 @@ namespace HmVr
             anchor.SetParent(transform, false);
             main = VrPanel.Create("Hand panel", new Vector2(PanelW, PanelH), anchor, true, Scale);
             Build();
-            ChaptersList = new VrListPanel("Chapters panel", "Chapters", anchor);
+            ChaptersList = new VrListPanel("Chapters panel", "Chapters", anchor, Scale);
             ChaptersList.IsSelected = id => int.TryParse(id, out int i) && i == VrFilm.ChapterIndex;
             ChaptersList.OnPick = id =>
             {
                 if (int.TryParse(id, out int i)) VrFilm.GoToChapter(i);
             };
-            ViewsList = new VrListPanel("Viewpoints panel", "Viewpoints", anchor);
+            ViewsList = new VrListPanel("Viewpoints panel", "Viewpoints", anchor, Scale);
             ViewsList.IsSelected = id => VrLocomotion.Instance != null && VrLocomotion.Instance.CurrentViewpoint == id;
             ViewsList.OnPick = id => VrLocomotion.Instance?.GoTo(id);
             main.Alpha = 0f;
@@ -246,7 +252,7 @@ namespace HmVr
             tabViews = main.AddButton("tab views", "Views", VrPanel.R(tx + tw * 1.5f + tg, y, tw, 58f), () => ToggleList(false), 20f);
             tabViews.Enabled = () => !PassthroughNow; // in passthrough the user walks around the dancers: no directed viewpoints
             cc = main.AddButton("captions", "CC", VrPanel.R(tx + tw * 2.5f + 2f * tg, y, tw, 58f), CycleCaptions, 24f);
-            closeBtn = main.AddButton("close", "Close", VrPanel.R(tx + tw * 3.5f + 3f * tg, y, tw, 58f), () => open = false, 21f);
+            skeletonBtn = main.AddButton("skeleton mode", "Rhythm", VrPanel.R(tx + tw * 3.5f + 3f * tg, y, tw, 58f), VrSkeletonPref.Toggle, 20f);
             library = main.AddButton("library", "Library", VrPanel.R(tx + tw * 4.5f + 4f * tg, y, tw, 58f), () => OnLibrary(), 18f);
         }
 
@@ -272,7 +278,7 @@ namespace HmVr
                 c.High = false;
             }
 
-            c.Recall(); // anchored: the new height is applied by placing it again
+            c.Recall(); // the captions are anchored: the new height is applied by placing them again
         }
 
         void ToggleList(bool chapters)
@@ -319,14 +325,23 @@ namespace HmVr
             VrInput input = VrInput.Instance;
             bool lesson = VrFilm.InLesson;
             bool canShow = lesson && input != null && input.Source != null && !MenuOpen();
-            bool facing = canShow && input.OffHand.Tracked && input.OffHand.Palm.Facing;
-            if (facing && !wasFacing) Recall(); // palm raised: open in front of the user, or recall an open panel
-            wasFacing = facing;
-            if (!canShow) open = false;
+            VrHand left = canShow ? input.Left : null;
+            bool tracked = left != null && left.Tracked;
+            if (tracked && left.Palm.Facing) lastFacing = Time.unscaledTime;
+            bool wasOpen = open;
+            open = tracked && Time.unscaledTime - lastFacing <= FacingGraceS;
+            if (open && !wasOpen)
+            {
+                Recalls++;
+                posed = false;
+            }
+
             float dt = Time.unscaledDeltaTime;
-            alpha = Mathf.MoveTowards(alpha, open ? 1f : 0f, dt * (open ? 7f : 4f));
+            alpha = Mathf.MoveTowards(alpha, open ? 1f : 0f, dt * (open ? 7f : 6f));
+            if (!tracked) alpha = 0f; // never left hanging where the hand was
             main.Alpha = alpha;
-            main.AttachedTo = null; // anchored in the world: either hand may poke it
+            main.AttachedTo = Hand.Left; // the right hand presses it; the hand that wears it cannot
+            ChaptersList.Panel.AttachedTo = ViewsList.Panel.AttachedTo = Hand.Left;
             bool visible = alpha > 0.002f;
             if (!visible)
             {
@@ -335,26 +350,45 @@ namespace HmVr
             }
 
             if (!lesson) return;
-            if (needPlace) PlaceInFront(input);
+            FollowWrist(input, dt);
             PlaceListsAndSelection(input);
             UpdateContents();
             bool vc = ShowChapters && alpha > 0.5f, vv = ShowViews && !PassthroughNow && alpha > 0.5f;
             SetListsVisible(vc, vv);
         }
 
-        /// <summary>close and open again in front of the user (palm raised, or called from outside)</summary>
-        public void Recall()
+        /// <summary>the panel rides on the left wrist: posed from the wrist joints every frame, facing the eyes, lightly smoothed</summary>
+        void FollowWrist(VrInput input, float dt)
         {
-            if (open) Recalls++;
-            open = true;
-            needPlace = true;
-            VrCaptions.Instance?.Recall();
-            VrHud.Instance?.Recall();
-            alpha = 0f; // it fades in again at its new place
-            main.Alpha = 0f;
+            HandState h = input.Left.State;
+            if (h == null) return;
+            // out of the PALM side (the panel shows while the palm faces the eyes), a little toward the elbow
+            WristPose.WristPanelPose(h.Wrist, h.Forward, -h.PalmNormal, input.Frame.HeadPosition, WristUpM * HandState.WorldScale,
+                WristAlongM * HandState.WorldScale, out Vector3 pos, out Quaternion rot);
+            if (!posed)
+            {
+                posed = true;
+                poseVel = Vector3.zero;
+                anchor.SetPositionAndRotation(pos, rot);
+            }
+            else
+            {
+                anchor.SetPositionAndRotation(Vector3.SmoothDamp(anchor.position, pos, ref poseVel, 0.045f, Mathf.Infinity, dt),
+                    Quaternion.Slerp(anchor.rotation, rot, 1f - Mathf.Exp(-dt / 0.06f)));
+            }
+
+            main.transform.localPosition = Vector3.zero;
+            main.transform.localRotation = Quaternion.identity;
         }
 
-        public void Close() => open = false;
+        /// <summary>kept for callers that used to re-place the panel: it lives on the wrist now, so only the captions and the HUD are recalled</summary>
+        public void Recall()
+        {
+            VrCaptions.Instance?.Recall();
+            VrHud.Instance?.Recall();
+        }
+
+        public void Close() => lastFacing = -10f;
 
         void SetListsVisible(bool chapters, bool views)
         {
@@ -362,19 +396,6 @@ namespace HmVr
             if (ViewsList.Panel.gameObject.activeSelf != views) ViewsList.Panel.gameObject.SetActive(views);
             ChaptersList.Panel.Alpha = chapters ? alpha : 0f;
             ViewsList.Panel.Alpha = views ? alpha : 0f;
-        }
-
-        /// <summary>placed ONCE: 0.9 m ahead along the horizontal gaze, 0.2 m below the eyes (chest to eye height), facing the user, kept out of the dancers</summary>
-        void PlaceInFront(VrInput input)
-        {
-            needPlace = false;
-            InputFrame f = VrAnchor.Now(input.Frame);
-            Vector3 spot = VrAnchor.Spot(f, 0.9f, 0.2f);
-            main.FaceFrom(spot, f.HeadPosition, 0.55f);
-            VrAnchor.Log("hand panel", spot, f);
-            anchor.SetPositionAndRotation(main.transform.position, main.transform.rotation);
-            main.transform.localPosition = Vector3.zero;
-            main.transform.localRotation = Quaternion.identity;
         }
 
         void PlaceListsAndSelection(VrInput input)
@@ -438,6 +459,10 @@ namespace HmVr
             for (int i = 0; i < rateBtns.Length; i++) rateBtns[i].Toggled = Mathf.Abs(VrFilm.Rate - VrFilm.SlowRates[i]) < 0.001f;
             string slowHint = VrFilm.SlowAudioHint;
             if (slowNote.Label.text != slowHint) slowNote.Label.text = slowHint;
+            bool physics = VrSkeletonPref.Physics;
+            string sk = physics ? "Physics" : "Rhythm";
+            if (skeletonBtn.Label.text != sk) skeletonBtn.Label.text = sk;
+            skeletonBtn.Toggled = physics;
             tabChapters.Toggled = ShowChapters;
             tabViews.Toggled = ShowViews;
             VrCaptions caps = VrCaptions.Instance;
@@ -476,7 +501,8 @@ namespace HmVr
 
         public Dictionary<string, object> State() => new()
         {
-            ["shown"] = Shown, ["alpha"] = Math.Round(alpha, 3), ["anchored"] = open, ["recalls"] = Recalls, ["chapters"] = ShowChapters, ["views"] = ShowViews,
+            ["shown"] = Shown, ["alpha"] = Math.Round(alpha, 3), ["open"] = open, ["onWrist"] = "left", ["recalls"] = Recalls, ["chapters"] = ShowChapters,
+            ["views"] = ShowViews, ["skeleton"] = VrSkeletonPref.Physics ? "physics" : "rhythm",
             ["position"] = main != null ? new[] { main.transform.position.x, main.transform.position.y, main.transform.position.z } : null
         };
     }
