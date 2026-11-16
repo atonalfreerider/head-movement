@@ -38,11 +38,11 @@ namespace HmVr
     ///     "splat_set": "",             // a Quest-only splat file set: splats/&lt;set&gt;/&lt;role&gt;.json (e.g. "quest_25k", dancecap quest_distill); "full" or
     ///                                  // empty = the Quest default (SplatDancers.QuestDefaultSet); a capture without that set uses splats/&lt;role&gt;.json
     ///     "splat_scale": 0.0,          // the splat layer's resolution, a fraction of the eye buffer (0 = the Quest default; 1 = the package's full-res
-    ///                                  // composite; below 1 = SplatLowResFeature: own 1x-MSAA layer, bilinear composite, no splat depth)
+    ///                                  // composite; below 1 = SplatLowResFeature: own 1x-MSAA layer, bilinear composite, its own low-res splat depth)
     ///     "splat_alpha_cutoff": 0.0,   // the renderer's alpha cutoff (0 = the Quest default; the package's is 1/255): larger = smaller quads, less fill
     ///     "splat_sort_every": 0 }      // sort the Gaussians every N rendered frames (0 = the Quest default, 1 = every frame)
     /// Command line (adb ... -e unity "..."): -hmhair full|light|off, -hmadaptive on|off, -hmsplats on|off, -hmsplatmax N, -hmsplatsigma M, -hmsplatpath composite|direct, -hmsplatdepth on|off,
-    /// -hmsplatset NAME|full, -hmsplatscale S, -hmsplatcutoff A, -hmsplatsort N.
+    /// -hmsplatset NAME|full, -hmsplatscale S, -hmsplatcutoff A, -hmsplatsort N, -hmmsaa 1|2|4, -hmeyescale E.
     /// </summary>
     public sealed class VrSettings
     {
@@ -157,6 +157,8 @@ namespace HmVr
             if (float.TryParse(VrArgs.Get("-hmsplatscale"), System.Globalization.NumberStyles.Float, inv, out float sscale)) s.SplatScale = sscale;
             if (float.TryParse(VrArgs.Get("-hmsplatcutoff"), System.Globalization.NumberStyles.Float, inv, out float scut)) s.SplatAlphaCutoff = scut;
             if (int.TryParse(VrArgs.Get("-hmsplatsort"), out int ssort)) s.SplatSortEvery = ssort;
+            if (int.TryParse(VrArgs.Get("-hmmsaa"), out int msaa) && (msaa == 1 || msaa == 2 || msaa == 4)) s.Msaa = msaa;
+            if (float.TryParse(VrArgs.Get("-hmeyescale"), System.Globalization.NumberStyles.Float, inv, out float eye) && eye > 0.4f && eye <= 1.2f) s.EyeScale = eye;
             s.Loaded = true;
             Current = s;
             return s;

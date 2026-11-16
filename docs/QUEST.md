@@ -30,23 +30,37 @@ arrows, beat count and rhythm score where the lesson turns them on, captions whe
   (`PlayerPrefs hm_vr_display`; `-hmvr-display immersive|passthrough`, `HM_VR_DISPLAY`, `quest_settings.json` "display"). If passthrough does not start
   within 6 s the app falls back to immersive and says so in the menu's note line and in the log (`VrDisplay: passthrough failed: ...`).
 
-**Where the dance stands.** The capture's world origin is mapped once, when a lesson starts, to the origin (0, 0, 0) of the headset's Floor
-tracking space (the centre of the Meta world floor), the capture's floor on the real floor, scale exactly 1.0 (`VrPlacement`; the log line
-`VrPlacement: lesson '...' origin LOCKED: static offset (...) ... scale 1.000 OK (exactly 1:1)` states it). Afterwards only your pinches move it
-(passthrough, 2026-11-15): **pinch and drag** with one hand slides the floor, **pinch with both hands** and turn the line between them to rotate it
-about their midpoint. It is never scaled and never moved up or down; a pinch that starts on a panel or with the palm menu up is not a grab. Nothing
-else moves, drifts or re-centres it; the dancers keep their captured motion and travel across the floor around it (nothing cancels their root motion). The one
-static offset per lesson: the dancers' mean floor position over the whole take for a capture without an origin of its own (the demo and the class
-recap), zero for a capture whose own `origin` already is that mean (Carlos + Aline, John + Lula). A constant turn about the vertical axis, applied
-with it, makes the dancers' front (the start vantage's side) face where the user stands at the start. Only a teleport moves the origin relative to
-the user (immersive mode); in passthrough teleport and snap turn are off (the user walks), so the pinches are free for the floor. If the headset recentres its tracking space the dance recentres with it (a Meta anchor would pin it; not done).
+**Where the dance stands** (2026-11-16, owner: "an intelligent placement of the origin in the center front of the user"). The centre of the WHOLE
+dance - its floor footprint, the minimum enclosing circle of both dancers' pelvis and ankles over the take (`VrStage`, `FootprintMath`) - is put once,
+when a lesson starts and the head is tracked, straight ahead of the user's gaze, far enough that the user stands outside the 3.5 m chapter ring and
+the dancers' travel (`FootprintMath.ViewDistance`: the footprint's 98th-percentile radius + 0.3 m or the ring, + 0.6 m clearance, at most 6 m), the
+capture's floor on the real floor, scale exactly 1.0, turned so the dancers' front (the start vantage's side) faces the user (`VrPlacement`; the log
+line `VrPlacement: lesson '...' placed: the dance's centre ... stands at ... straight ahead of the user ...` states it). Afterwards only your pinches
+move it (passthrough): **pinch and drag** with one hand slides the floor, **pinch with both hands** and turn the line between them to rotate it about
+their midpoint. It is never scaled and never moved up or down; a pinch that starts on a panel, the chapter ring or with the palm menu up is not a grab.
+Nothing else moves, drifts or re-centres it; the dancers keep their captured motion. In immersive mode the start vantage looks at the same centre
+from the same distance. If the headset recentres its tracking space the dance recentres with it (a Meta anchor would pin it; not done).
 
-**Menus are anchored.** Every panel (library menu, the in-lesson hand panel, captions, the beat / rhythm HUD, the loading splash) is placed ONCE when
-it opens - 0.8 to 1.0 m ahead of the head along the horizontal gaze, at chest-to-eye height, facing the user with a slight tilt - and then stays
-exactly there: no follow, no easing, no drift (`VrAnchor`). It never opens inside the dancers (it is moved out, to the user's side, unless the
-user stands among them). Recall = close and open again in front of the user: raise the LEFT palm (the hand panel and the open library menu), or the
-wrist button (an open menu that is out of view); a teleport or a viewpoint also brings the open panels along, once. The hand panel's *Close* button
-closes it. Captions are OFF by default (the panel's CC button turns them on, and the choice is remembered).
+**The chapter ring** (`VrChapterRing`, 2026-11-16). The lesson's chapters as a ring around the whole dance: radius 3.5 m about the footprint centre,
+3.5 m above the floor, a very faded grey, one arc per chapter with a small gap between them. The current-position marker (a short, brighter vertical
+tick) stands on the ring directly opposite you across the dancers' centre - it follows you as you walk round, smoothed - and the timeline turns
+through it as the lesson plays. Point at the ring (the far ray reaches 16 m; the arc within 115 degrees of the marker): the chapter under the ray
+lights up and the label under the marker says "Pinch to go to <chapter> <time>"; pinching seeks there (snapped to a chapter start within about 1.5 s).
+Under the marker hang the chapter and the time and two buttons: **pause / play** and **speed** (1x -> 1/2 -> 1/4 -> 1/10 -> 1x). The ring belongs to
+the dance's world, so it moves with the floor when you drag or turn it.
+
+**The menu is on the left wrist** (`VrHandPanel`, 2026-11-16: the menu tracks the left wrist and appears nowhere else). Turn the LEFT palm up toward
+your face: the panel rides on the wrist, posed from the wrist joints every frame and facing your eyes; lower the hand and it goes. Poke it with the
+right index finger (or point and pinch). It carries play / pause, slow motion, +-5 s, previous / next chapter, the scrubber, the chapter and viewpoint
+lists, CC, **Physics / Rhythm** - a permanent setting (`PlayerPrefs hm_vr_skeleton`, applied at every lesson start; no lesson segment overrides it) -
+and Library. In a lesson there is no back-of-wrist button and no menu in front of you; the library menu (the lobby) and the captions / HUD panels
+are still placed once in front of the gaze (`VrAnchor`). Captions are OFF by default.
+
+**The demo plays the dance itself** (2026-11-16): the demo lesson is a pure-dance film (`dancecap film_pure`): the song only, 1x throughout, no
+narration, no programmed slow motion, no step call-outs, 8 dance chapters. In VR no lesson draws the 3D step call-outs (`FilmDirector.HeadIsCamera`).
+
+**Sounds**: a soft wooden pluck when a pinch selects, a rising two-note pluck when the ring seeks, a quiet tick on hover, a band-passed whoosh
+for teleport and turns (all synthesised, `VrAudio`).
 
 **Loading does not freeze.** A lesson builds over many frames behind the splash (`HeadMovement.AsyncLoad`): the JSON of the poses, physics, rhythm,
 counterbalance, floor craft and graph, the avatars' binaries, the jerk series, the phones' tracks are read on worker threads (`LoadPrefetch`), the
@@ -189,7 +203,9 @@ The lesson starts; you stand about 3 m from the dancers at the floor's edge, fac
 | You want | Do |
 |---|---|
 | Press a button | poke it with the index finger, or point at it and pinch (thumb and index together); opening the pinch on the same button clicks |
-| Hand panel (play, slow motion, chapters, scrubber, viewpoints, library) | raise your **left** palm, facing up (or toward your face), in front of you; the panel floats above your hand. **Pin** keeps it in the air |
+| Wrist menu (play, slow motion, chapters, scrubber, viewpoints, Physics / Rhythm, library) | turn your **left** palm up toward your face: the panel rides on your left wrist; poke it with the right index finger; lower the hand and it goes |
+| Jump in the lesson | point at the chapter ring (3.5 m up around the dance) and pinch; the marker opposite you is now |
+| Pause / speed | the two buttons under the ring's marker (speed: 1x, 1/2, 1/4, 1/10, 1x), or the wrist menu |
 | Seek | the scrubber on the hand panel: pinch and drag it (it sticks to chapter ticks); or +5 s / -5 s, previous / next chapter, **Chapters** list |
 | Slow motion | 1x, 0.5x, 0.25x, 0.1x on the panel (captions and 3D layers follow; music slows with the picture, a lesson with speech is silent in slow motion, the panel says "dialogue paused", and it is back at 1x) |
 | Teleport | with the **right** hand, pinch where no panel is, hold (an arc and a landing disc appear), open the pinch to go |
